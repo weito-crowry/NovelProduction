@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+*.db
+*.db-shm
+*.db-wal
+
+.env
+.env.*
+
+.DS_Store
+Thumbs.db
+
+# Keep the repository-wide story database directory, but never commit a database file.
+!data/.gitkeep
