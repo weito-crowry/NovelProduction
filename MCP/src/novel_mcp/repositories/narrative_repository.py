@@ -133,6 +133,26 @@ class NarrativeRepository:
         ).fetchone()
         return None if row is None else SceneRecord(*row)
 
+    def get_episode_work_id(self, episode_id: int) -> int | None:
+        row = self._connection.execute(
+            "SELECT work_id FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()
+        return None if row is None else int(row[0])
+
+    def get_episode_narrative_order(
+        self, *, work_id: int, episode_id: int
+    ) -> tuple[int, int] | None:
+        row = self._connection.execute(
+            """
+            SELECT c.position, e.position
+            FROM episodes AS e
+            JOIN chapters AS c ON c.work_id = e.work_id AND c.id = e.chapter_id
+            WHERE e.work_id = ? AND e.id = ?
+            """,
+            (work_id, episode_id),
+        ).fetchone()
+        return None if row is None else (int(row[0]), int(row[1]))
+
     def list_chapters(self, *, work_id: int) -> tuple[ChapterRecord, ...]:
         rows = self._connection.execute(
             f"SELECT {_CHAPTER_COLUMNS} FROM chapters "

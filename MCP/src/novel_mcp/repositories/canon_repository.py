@@ -93,6 +93,8 @@ _ENTITY_COLUMNS = {
             "relationship_type",
             "description",
             "canon_status",
+            "valid_from_episode_id",
+            "valid_to_episode_id",
             "version",
         ),
     ),

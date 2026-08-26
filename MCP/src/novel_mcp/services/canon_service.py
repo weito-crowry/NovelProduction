@@ -119,6 +119,7 @@ class CanonService:
         expected_version: int,
         reason: str | None = None,
         after_update: Callable[[], None] | None = None,
+        before_update: Callable[[], None] | None = None,
         allow_empty: bool = False,
     ) -> CanonDecisionRecord | None:
         self._validate_entity_type(entity_type)
@@ -141,6 +142,8 @@ class CanonService:
             change = CanonChange(
                 entity_type, entity_id, "content_changed", before, after
             )
+            if before_update is not None:
+                before_update()
             updated = self._repository.update_content(
                 work_id=work_id,
                 entity_type=entity_type,

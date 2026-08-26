@@ -10,11 +10,13 @@ from novel_mcp.database import open_database
 from novel_mcp.errors import (
     CanonReasonRequired,
     CharacterNotFoundError,
+    ValidationError,
     VersionConflictError,
     WorkScopeError,
 )
 from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.character_service import CharacterService
+from novel_mcp.services.narrative_service import NarrativeService
 from novel_mcp.services.relationship_service import RelationshipService
 
 
@@ -47,6 +49,7 @@ def service(tmp_path: Path):
             {
                 "connection": connection,
                 "character": CharacterService(connection),
+                "narrative": NarrativeService(connection),
                 "relationship": RelationshipService(connection),
             },
         )()
@@ -151,3 +154,62 @@ def test_relationship_search_is_deterministic_and_isolated(service) -> None:
     assert service.relationship.search(None, 10) == (first_relation, second_relation)
     assert service.relationship.search(second.id, 1) == (first_relation,)
     assert service.relationship.search(None, 0) == ()
+
+
+def test_temporal_relationships_use_inclusive_start_and_exclusive_end(service) -> None:
+    source = service.character.create("A")
+    target = service.character.create("B")
+    chapter = service.narrative.create_chapter("章")
+    episodes = [
+        service.narrative.create_episode(chapter.id, f"話{i}") for i in range(1, 4)
+    ]
+
+    relation = service.relationship.create(
+        source.id,
+        target.id,
+        "ally",
+        valid_from_episode_id=episodes[0].id,
+        valid_to_episode_id=episodes[2].id,
+    )
+
+    assert (relation.valid_from_episode_id, relation.valid_to_episode_id) == (
+        episodes[0].id,
+        episodes[2].id,
+    )
+    assert service.relationship.effective_at(episodes[0].id) == (relation,)
+    assert service.relationship.effective_at(episodes[1].id) == (relation,)
+    assert service.relationship.effective_at(episodes[2].id) == ()
+
+
+def test_temporal_relationships_allow_adjacent_ranges_and_reject_overlap(
+    service,
+) -> None:
+    source = service.character.create("A")
+    target = service.character.create("B")
+    chapter = service.narrative.create_chapter("章")
+    episodes = [
+        service.narrative.create_episode(chapter.id, f"話{i}") for i in range(1, 4)
+    ]
+    service.relationship.create(
+        source.id,
+        target.id,
+        "ally",
+        valid_from_episode_id=episodes[0].id,
+        valid_to_episode_id=episodes[1].id,
+    )
+    adjacent = service.relationship.create(
+        source.id,
+        target.id,
+        "ally",
+        valid_from_episode_id=episodes[1].id,
+        valid_to_episode_id=episodes[2].id,
+    )
+    assert adjacent.valid_from_episode_id == episodes[1].id
+    with pytest.raises(ValidationError, match="RELATION_INTEGRITY_ERROR"):
+        service.relationship.create(
+            source.id,
+            target.id,
+            "ally",
+            valid_from_episode_id=episodes[0].id,
+            valid_to_episode_id=episodes[2].id,
+        )

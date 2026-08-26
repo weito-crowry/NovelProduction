@@ -13,6 +13,8 @@ class RelationshipRecord:
     relationship_type: str
     description: str
     canon_status: str
+    valid_from_episode_id: int | None
+    valid_to_episode_id: int | None
     version: int
     created_at: str
     updated_at: str
@@ -47,13 +49,16 @@ class RelationshipRepository:
         target_character_id: int,
         relationship_type: str,
         description: str,
+        valid_from_episode_id: int | None,
+        valid_to_episode_id: int | None,
     ) -> int:
         cursor = self._connection.execute(
             """
             INSERT INTO relationships
                 (work_id, source_character_id, target_character_id,
-                 relationship_type, description, canon_status)
-            VALUES (?, ?, ?, ?, ?, 'draft')
+                relationship_type, description, canon_status,
+                valid_from_episode_id, valid_to_episode_id)
+            VALUES (?, ?, ?, ?, ?, 'draft', ?, ?)
             """,
             (
                 work_id,
@@ -61,6 +66,8 @@ class RelationshipRepository:
                 target_character_id,
                 relationship_type,
                 description,
+                valid_from_episode_id,
+                valid_to_episode_id,
             ),
         )
         if cursor.lastrowid is None:
@@ -71,7 +78,8 @@ class RelationshipRepository:
         row = self._connection.execute(
             """
             SELECT id, work_id, source_character_id, target_character_id,
-                   relationship_type, description, canon_status, version,
+                   relationship_type, description, canon_status,
+                   valid_from_episode_id, valid_to_episode_id, version,
                    created_at, updated_at
             FROM relationships WHERE work_id = ? AND id = ?
             """,
@@ -90,10 +98,58 @@ class RelationshipRepository:
         rows = self._connection.execute(
             f"""
             SELECT id, work_id, source_character_id, target_character_id,
-                   relationship_type, description, canon_status, version,
+                   relationship_type, description, canon_status,
+                   valid_from_episode_id, valid_to_episode_id, version,
                    created_at, updated_at
             FROM relationships WHERE {condition} ORDER BY id LIMIT ?
             """,
             (*params, limit),
+        ).fetchall()
+        return tuple(RelationshipRecord(*row) for row in rows)
+
+    def find_same_definition(
+        self,
+        *,
+        work_id: int,
+        source_character_id: int,
+        target_character_id: int,
+        relationship_type: str,
+        exclude_id: int | None = None,
+    ) -> tuple[RelationshipRecord, ...]:
+        condition = (
+            "work_id = ? AND source_character_id = ? AND "
+            "target_character_id = ? AND relationship_type = ?"
+        )
+        params: list[object] = [
+            work_id,
+            source_character_id,
+            target_character_id,
+            relationship_type,
+        ]
+        if exclude_id is not None:
+            condition += " AND id != ?"
+            params.append(exclude_id)
+        rows = self._connection.execute(
+            f"""
+            SELECT id, work_id, source_character_id, target_character_id,
+                   relationship_type, description, canon_status,
+                   valid_from_episode_id, valid_to_episode_id, version,
+                   created_at, updated_at
+            FROM relationships WHERE {condition} ORDER BY id
+            """,
+            params,
+        ).fetchall()
+        return tuple(RelationshipRecord(*row) for row in rows)
+
+    def list_all(self, *, work_id: int) -> tuple[RelationshipRecord, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT id, work_id, source_character_id, target_character_id,
+                   relationship_type, description, canon_status,
+                   valid_from_episode_id, valid_to_episode_id, version,
+                   created_at, updated_at
+            FROM relationships WHERE work_id = ? ORDER BY id
+            """,
+            (work_id,),
         ).fetchall()
         return tuple(RelationshipRecord(*row) for row in rows)

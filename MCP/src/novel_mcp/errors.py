@@ -74,6 +74,17 @@ class ValidationError(ValueError, NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class RelationshipIntegrityError(ValidationError):
+    """Raised when relationship temporal ranges are ambiguous."""
+
+    code = "RELATION_INTEGRITY_ERROR"
+
+    def __init__(self, message: str = "relationship interval overlaps") -> None:
+        super().__init__(message)
+        self.code = type(self).code
+        self.args = (f"{self.code}: {message}",)
+
+
 class CanonReasonRequired(NovelMcpError):
     """Raised when a protected canon mutation has no reason."""
 
