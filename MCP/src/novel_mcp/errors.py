@@ -37,6 +37,15 @@ class RelationshipNotFoundError(NovelMcpError):
     """Raised when a requested relationship does not exist in the work."""
 
 
+class NarrativeNotFoundError(NovelMcpError):
+    """Raised when a narrative entity does not exist in the work."""
+
+    code = "NOT_FOUND"
+
+    def __init__(self, message: str = "NOT_FOUND") -> None:
+        super().__init__(message)
+
+
 class WorkScopeError(NovelMcpError):
     """Raised when an entity belongs to another configured work."""
 
