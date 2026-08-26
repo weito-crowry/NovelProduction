@@ -65,9 +65,7 @@ async def _run_stdio_smoke(db_path: Path) -> str:
                 )
             )
             character = _data(
-                await session.call_tool(
-                    "character_create", {"display_name": "主人公"}
-                )
+                await session.call_tool("character_create", {"display_name": "主人公"})
             )
             _data(
                 await session.call_tool(
