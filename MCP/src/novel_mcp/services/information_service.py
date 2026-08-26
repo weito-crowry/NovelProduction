@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
+from typing import Any, cast
 
 from novel_mcp.errors import (
+    CanonEntityNotFoundError,
     NarrativeNotFoundError,
     ValidationError,
-    VersionConflictError,
     WorkNotFoundError,
     WorkScopeError,
 )
@@ -16,6 +16,7 @@ from novel_mcp.repositories.information_repository import (
     InformationRepository,
 )
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.canon_service import CanonService
 
 TRUTH_STATUSES = frozenset(("true", "false", "uncertain", "subjective"))
 CANON_STATUSES = frozenset(("idea", "draft", "canon", "deprecated"))
@@ -26,10 +27,12 @@ class InformationService:
     def __init__(
         self, connection: sqlite3.Connection, *, force_fallback: bool = False
     ) -> None:
+        self._connection = connection
         self._repository = InformationRepository(
             connection, force_fallback=force_fallback
         )
         self._work_repository = WorkRepository(connection)
+        self._canon_service = CanonService(connection)
 
     @property
     def last_search_strategy(self) -> str:
@@ -87,6 +90,7 @@ class InformationService:
         notes_json: Any = None,
         importance: int | None = None,
         canon_status: str | None = None,
+        reason: str | None = None,
     ) -> InformationItemRecord:
         self._validate_version(expected_version)
         self.get_information(item_id)
@@ -108,20 +112,19 @@ class InformationService:
             fields["canon_status"] = canon_status
         if not fields:
             raise ValidationError("at least one information field is required")
-        work_id = self._work_id()
-        self._repository.begin_write()
         try:
-            if not self._repository.update(
-                work_id=work_id,
-                item_id=item_id,
+            normalized = dict(fields)
+            target_status = cast(str | None, normalized.pop("canon_status", None))
+            self._canon_service.update_content(
+                "information_item",
+                item_id,
+                normalized,
                 expected_version=expected_version,
-                fields=fields,
-            ):
-                raise VersionConflictError("VERSION_CONFLICT")
-            self._repository.commit()
-        except Exception:
-            self._repository.rollback()
-            raise
+                reason=reason,
+                target_status=target_status,
+            )
+        except CanonEntityNotFoundError as exc:
+            raise NarrativeNotFoundError() from exc
         return self.get_information(item_id)
 
     def search_information(

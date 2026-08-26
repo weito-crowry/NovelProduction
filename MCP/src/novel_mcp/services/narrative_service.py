@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Mapping
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from novel_mcp.errors import (
+    CanonEntityNotFoundError,
     NarrativeNotFoundError,
     OrderConflictError,
     ValidationError,
@@ -19,6 +20,7 @@ from novel_mcp.repositories.narrative_repository import (
     SceneRecord,
 )
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.canon_service import CanonService
 
 CANON_STATUSES = frozenset(("idea", "draft", "canon", "deprecated"))
 PRODUCTION_STATUSES = frozenset(
@@ -32,6 +34,7 @@ class NarrativeService:
         self._connection = connection
         self._repository = NarrativeRepository(connection)
         self._work_repository = WorkRepository(connection)
+        self._canon_service = CanonService(connection)
 
     def create_chapter(
         self,
@@ -280,6 +283,7 @@ class NarrativeService:
         purpose: str | None = None,
         production_status: str | None = None,
         canon_status: str | None = None,
+        reason: str | None = None,
     ) -> ChapterRecord:
         self._validate_version(expected_version)
         self.get_chapter(chapter_id)
@@ -291,7 +295,13 @@ class NarrativeService:
             canon_status=canon_status,
         )
         return self._update(
-            "chapters", chapter_id, expected_version, fields, self.get_chapter
+            "chapters",
+            "chapter",
+            chapter_id,
+            expected_version,
+            fields,
+            self.get_chapter,
+            reason=reason,
         )
 
     def update_episode(
@@ -305,6 +315,7 @@ class NarrativeService:
         foreshadowing_notes: Any = None,
         production_status: str | None = None,
         canon_status: str | None = None,
+        reason: str | None = None,
     ) -> EpisodeRecord:
         self._validate_version(expected_version)
         self.get_episode(episode_id)
@@ -320,7 +331,13 @@ class NarrativeService:
                 foreshadowing_notes, "foreshadowing_notes"
             )
         return self._update(
-            "episodes", episode_id, expected_version, fields, self.get_episode
+            "episodes",
+            "episode",
+            episode_id,
+            expected_version,
+            fields,
+            self.get_episode,
+            reason=reason,
         )
 
     def update_scene(
@@ -333,6 +350,7 @@ class NarrativeService:
         purpose: str | None = None,
         production_status: str | None = None,
         canon_status: str | None = None,
+        reason: str | None = None,
     ) -> SceneRecord:
         self._validate_version(expected_version)
         self.get_scene(scene_id)
@@ -344,35 +362,41 @@ class NarrativeService:
             canon_status=canon_status,
         )
         return self._update(
-            "scenes", scene_id, expected_version, fields, self.get_scene
+            "scenes",
+            "scene",
+            scene_id,
+            expected_version,
+            fields,
+            self.get_scene,
+            reason=reason,
         )
 
     def _update(
         self,
         table: str,
+        entity_type: str,
         entity_id: int,
         expected_version: int,
         fields: Mapping[str, object],
         getter: Callable[[int], RecordT],
+        *,
+        reason: str | None,
     ) -> RecordT:
-        if not fields:
+        normalized = dict(fields)
+        target_status = cast(str | None, normalized.pop("canon_status", None))
+        if not normalized and target_status is None:
             raise ValidationError("at least one field is required")
-        work_id = self._work_id()
-        self._repository.begin_write()
         try:
-            updated = self._repository.update(
-                table=table,
-                entity_id=entity_id,
-                work_id=work_id,
+            self._canon_service.update_content(
+                entity_type,
+                entity_id,
+                normalized,
                 expected_version=expected_version,
-                fields=fields,
+                reason=reason,
+                target_status=target_status,
             )
-            if not updated:
-                raise VersionConflictError("VERSION_CONFLICT")
-            self._repository.commit()
-        except Exception:
-            self._repository.rollback()
-            raise
+        except CanonEntityNotFoundError as exc:
+            raise NarrativeNotFoundError() from exc
         return getter(entity_id)
 
     def _hierarchy_fields(self, **fields: str) -> dict[str, object]:

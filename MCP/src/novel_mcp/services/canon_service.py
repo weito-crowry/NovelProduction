@@ -25,7 +25,16 @@ from novel_mcp.services.search_service import MAX_SEARCH_LIMIT
 class CanonService:
     _STATUSES = frozenset(("idea", "draft", "canon", "deprecated"))
     _ENTITY_TYPES = frozenset(
-        ("world_fact", "timeline_event", "character", "relationship")
+        (
+            "world_fact",
+            "timeline_event",
+            "character",
+            "relationship",
+            "chapter",
+            "episode",
+            "scene",
+            "information_item",
+        )
     )
     _ALLOWED_TRANSITIONS = frozenset(
         {
@@ -121,8 +130,11 @@ class CanonService:
         after_update: Callable[[], None] | None = None,
         before_update: Callable[[], None] | None = None,
         allow_empty: bool = False,
+        target_status: str | None = None,
     ) -> CanonDecisionRecord | None:
         self._validate_entity_type(entity_type)
+        if target_status is not None:
+            self._validate_status(target_status)
         work_id = self._work_id()
         normalized = dict(fields)
         self._repository.begin_write()
@@ -130,17 +142,44 @@ class CanonService:
             before = self._entity_or_not_found(work_id, entity_type, entity_id)
             if cast(int, before["version"]) != expected_version:
                 raise VersionConflictError("VERSION_CONFLICT")
-            if before["canon_status"] == "canon":
+            current_status = cast(str, before["canon_status"])
+            status_changed = (
+                target_status is not None and target_status != current_status
+            )
+            if target_status is not None and not status_changed and not normalized:
+                raise CanonPolicyError("target status is unchanged")
+            if (
+                status_changed
+                and (
+                    current_status,
+                    target_status,
+                )
+                not in self._ALLOWED_TRANSITIONS
+            ):
+                raise CanonPolicyError(
+                    f"transition {current_status}->{target_status} is not allowed"
+                )
+            if status_changed and (
+                (target_status == "canon") or (target_status == "deprecated")
+            ):
                 self._require_reason(reason)
-            elif before["canon_status"] == "deprecated":
+            if current_status == "canon" and normalized:
+                self._require_reason(reason)
+            elif current_status == "deprecated" and normalized:
                 raise CanonPolicyError("deprecated content cannot be edited")
             after = {
                 **before,
                 **normalized,
                 "version": cast(int, before["version"]) + 1,
             }
+            if target_status is not None:
+                after["canon_status"] = target_status
             change = CanonChange(
-                entity_type, entity_id, "content_changed", before, after
+                entity_type,
+                entity_id,
+                "content_changed" if normalized else "status_changed",
+                before,
+                after,
             )
             if before_update is not None:
                 before_update()
@@ -150,7 +189,8 @@ class CanonService:
                 entity_id=entity_id,
                 expected_version=expected_version,
                 fields=normalized,
-                allow_empty=allow_empty,
+                allow_empty=allow_empty or target_status is not None,
+                target_status=target_status,
             )
             if updated is None:
                 raise CanonPolicyError("invalid content fields")
@@ -159,7 +199,7 @@ class CanonService:
             if after_update is not None:
                 after_update()
             decision_id: int | None = None
-            if before["canon_status"] == "canon":
+            if current_status == "canon" or status_changed:
                 decision_id = self._repository.insert_decision(
                     work_id=work_id,
                     summary=f"Update {entity_type} {entity_id} content",

@@ -98,6 +98,57 @@ _ENTITY_COLUMNS = {
             "version",
         ),
     ),
+    "chapter": (
+        "chapters",
+        (
+            "position",
+            "title",
+            "summary",
+            "purpose",
+            "production_status",
+            "canon_status",
+            "version",
+        ),
+    ),
+    "episode": (
+        "episodes",
+        (
+            "chapter_id",
+            "position",
+            "title",
+            "summary",
+            "purpose",
+            "foreshadowing_notes_json",
+            "production_status",
+            "canon_status",
+            "version",
+        ),
+    ),
+    "scene": (
+        "scenes",
+        (
+            "episode_id",
+            "position",
+            "title",
+            "summary",
+            "purpose",
+            "production_status",
+            "canon_status",
+            "version",
+        ),
+    ),
+    "information_item": (
+        "information_items",
+        (
+            "statement",
+            "truth_status",
+            "authoring_guard",
+            "notes_json",
+            "canon_status",
+            "importance",
+            "version",
+        ),
+    ),
 }
 
 
@@ -158,6 +209,7 @@ class CanonRepository:
         expected_version: int,
         fields: Mapping[str, object],
         allow_empty: bool = False,
+        target_status: str | None = None,
     ) -> bool | None:
         table, columns = _ENTITY_COLUMNS[entity_type]
         allowed = set(columns) - {
@@ -170,6 +222,11 @@ class CanonRepository:
             return None
         assignments = ", ".join(f"{column} = ?" for column in fields)
         values = [fields[column] for column in fields]
+        if target_status is not None:
+            assignments = (
+                f"{assignments}, " if assignments else ""
+            ) + "canon_status = ?"
+            values.append(target_status)
         set_clause = (
             f"{assignments}, " if assignments else ""
         ) + "updated_at = CURRENT_TIMESTAMP, version = version + 1"
