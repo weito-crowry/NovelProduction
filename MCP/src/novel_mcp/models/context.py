@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from novel_mcp.models.outline import (
     ProtectedInformationGuard,
@@ -18,6 +19,7 @@ class EffectiveCharacterState:
     source_episode_id: int
     physical_state: str
     emotional_state: str
+    beliefs: Any
     location_world_fact_id: int | None
 
 
