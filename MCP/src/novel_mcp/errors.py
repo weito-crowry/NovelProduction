@@ -19,3 +19,7 @@ class WorkExistsError(NovelMcpError):
 
 class WorkNotFoundError(NovelMcpError):
     """Raised when a requested work record does not exist."""
+
+
+class WorldFactNotFoundError(NovelMcpError):
+    """Raised when a requested world fact does not exist."""
