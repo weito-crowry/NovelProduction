@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from novel_mcp.errors import NarrativeNotFoundError, ValidationError, WorkNotFoundError
+from novel_mcp.errors import NarrativeNotFoundError, WorkNotFoundError
 from novel_mcp.models.context import (
     ContextParticipant,
     EffectiveCharacterState,
-    EffectiveRelationship,
     EpisodeContext,
     ParticipantKnownInformation,
     PreviousEpisodeSummary,
@@ -19,19 +17,23 @@ from novel_mcp.models.context import (
 from novel_mcp.models.outline import (
     EpisodeOutline,
     ProtectedInformationGuard,
-    RevealBoundary,
     SafeInformationItem,
 )
 from novel_mcp.repositories.context_repository import ContextRepository
 from novel_mcp.repositories.disclosure_repository import ReaderDisclosureRecord
-from novel_mcp.repositories.information_repository import InformationItemRecord
 from novel_mcp.repositories.knowledge_repository import CharacterKnowledgeEventRecord
 from novel_mcp.repositories.narrative_repository import EpisodeRecord
-from novel_mcp.repositories.outline_repository import OutlineRepository
-from novel_mcp.repositories.relationship_repository import RelationshipRecord
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.context_projection import (
+    build_context_meta,
+    guard_for,
+    parse_beliefs,
+    parse_foreshadowing,
+    safe_information,
+    safe_relationship,
+)
 from novel_mcp.services.knowledge_service import KNOWN_STATES
-from novel_mcp.services.outline_service import GENERIC_GUARD, OutlineService
+from novel_mcp.services.outline_service import OutlineService
 from novel_mcp.services.relationship_service import RelationshipService
 
 PREVIOUS_SUMMARIES_MAX = 2
@@ -53,7 +55,6 @@ class ContextService:
         self._repository = ContextRepository(connection)
         self._work_repository = WorkRepository(connection)
         self._outline_service = OutlineService(connection)
-        self._outline_repository = OutlineRepository(connection)
         self._relationship_service = RelationshipService(connection)
 
     def build_episode_context(self, episode_id: int) -> EpisodeContext:
@@ -62,7 +63,7 @@ class ContextService:
             raise WorkNotFoundError("WORK_NOT_FOUND")
         outline = self._outline_service.get_episode_outline(episode_id)
         target_order = self._episode_order(work.id, episode_id)
-        foreshadowing_notes = _parse_foreshadowing(
+        foreshadowing_notes = parse_foreshadowing(
             outline.episode.foreshadowing_notes_json
         )
 
@@ -70,7 +71,11 @@ class ContextService:
             work.id, episode_id, target_order, outline
         )
         reader_context, information_omitted = self._reader_context(
-            work.id, target_order, outline, participant_candidates
+            work.id,
+            episode_id,
+            target_order,
+            outline,
+            participant_candidates,
         )
         participants = self._limit_participant_information(participants, reader_context)
         guards = self._merge_guards(
@@ -91,8 +96,13 @@ class ContextService:
         recent_context, previous_omitted, draft_truncated = self._recent_context(
             work.id, target_order
         )
-        context_meta = self._context_meta(
+        context_meta = build_context_meta(
             target_order=target_order,
+            previous_summaries_max=PREVIOUS_SUMMARIES_MAX,
+            previous_draft_tail_chars_max=PREVIOUS_DRAFT_TAIL_CHARS,
+            world_facts_max=WORLD_FACTS_MAX,
+            timeline_events_max=TIMELINE_EVENTS_MAX,
+            information_items_max=INFORMATION_ITEMS_MAX,
             world_facts_returned=len(world_facts),
             world_facts_total=len(outline.references.world_facts),
             timeline_events_returned=len(timeline_events),
@@ -147,7 +157,7 @@ class ContextService:
             character_id = participant.profile.id
             state = self._repository.effective_state(work_id, character_id, episode_id)
             relationships = tuple(
-                _safe_relationship(record, character_id)
+                safe_relationship(record, character_id)
                 for record in self._relationship_service.effective_at(
                     episode_id, character_id
                 )
@@ -166,6 +176,7 @@ class ContextService:
                             source_episode_id=state.episode_id,
                             physical_state=state.physical_state,
                             emotional_state=state.emotional_state,
+                            beliefs=parse_beliefs(state.beliefs_json),
                             location_world_fact_id=state.location_world_fact_id,
                         )
                     ),
@@ -211,7 +222,7 @@ class ContextService:
             boundary = self._disclosure_order(work_id, disclosure)
             if boundary is None or boundary > target_order:
                 guards.append(
-                    _guard_for(
+                    guard_for(
                         item,
                         disclosure,
                         boundary,
@@ -220,7 +231,7 @@ class ContextService:
                     )
                 )
                 continue
-            safe_item = _safe_information(item)
+            safe_item = safe_information(item)
             known.append(
                 ParticipantKnownInformation(
                     information_item_id=item.id,
@@ -241,12 +252,20 @@ class ContextService:
     def _reader_context(
         self,
         work_id: int,
+        episode_id: int,
         target_order: tuple[int, int],
         outline: EpisodeOutline,
         participant_candidates: Sequence[_InformationCandidate],
     ) -> tuple[ReaderContext, int]:
         candidates: dict[int, _InformationCandidate] = {}
         reveal: dict[int, SafeInformationItem] = {}
+
+        for disclosure in self._repository.current_disclosures(work_id, episode_id):
+            item = self._repository.information(work_id, disclosure.information_item_id)
+            if item is None or item.canon_status == "deprecated":
+                continue
+            reveal[item.id] = safe_information(item)
+
         for item in outline.references.information:
             disclosure = self._repository.disclosure(work_id, item.id)
             boundary = self._disclosure_order(work_id, disclosure)
@@ -372,130 +391,3 @@ class ContextService:
             unique[key]
             for key in sorted(unique, key=lambda value: (value[0], value[1] or 0))
         )
-
-    def _context_meta(
-        self,
-        *,
-        target_order: tuple[int, int],
-        world_facts_returned: int,
-        world_facts_total: int,
-        timeline_events_returned: int,
-        timeline_events_total: int,
-        information_returned: int,
-        information_total: int,
-        previous_returned: int,
-        previous_total: int,
-        previous_draft_tail: int,
-        draft_truncated: bool,
-        guard_count: int,
-    ) -> dict[str, object]:
-        return {
-            "narrative_position": {
-                "chapter_position": target_order[0],
-                "episode_position": target_order[1],
-            },
-            "limits": {
-                "previous_episode_summaries": PREVIOUS_SUMMARIES_MAX,
-                "previous_draft_tail_chars": PREVIOUS_DRAFT_TAIL_CHARS,
-                "world_facts_max": WORLD_FACTS_MAX,
-                "timeline_events_max": TIMELINE_EVENTS_MAX,
-                "information_items_max": INFORMATION_ITEMS_MAX,
-            },
-            "returned_counts": {
-                "previous_episode_summaries": previous_returned,
-                "previous_draft_tail_chars": previous_draft_tail,
-                "world_facts": world_facts_returned,
-                "timeline_events": timeline_events_returned,
-                "information_items": information_returned,
-                "protected_information_guards": guard_count,
-            },
-            "omitted_counts": {
-                "previous_episode_summaries": max(
-                    0, previous_total - previous_returned
-                ),
-                "world_facts": max(0, world_facts_total - world_facts_returned),
-                "timeline_events": max(
-                    0, timeline_events_total - timeline_events_returned
-                ),
-                "information_items": max(0, information_total - INFORMATION_ITEMS_MAX),
-            },
-            "truncated": {
-                "world_facts": world_facts_total > WORLD_FACTS_MAX,
-                "timeline_events": timeline_events_total > TIMELINE_EVENTS_MAX,
-                "information_items": information_total > INFORMATION_ITEMS_MAX,
-                "previous_draft_tail": draft_truncated,
-            },
-        }
-
-
-def _parse_foreshadowing(value: str) -> tuple[object, ...]:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ValidationError(
-            "foreshadowing_notes must be valid JSON", field="foreshadowing_notes"
-        ) from exc
-    if not isinstance(parsed, list):
-        raise ValidationError(
-            "foreshadowing_notes must be a JSON array", field="foreshadowing_notes"
-        )
-    return tuple(parsed)
-
-
-def _safe_information(item: InformationItemRecord) -> SafeInformationItem:
-    return SafeInformationItem(
-        id=item.id,
-        statement=item.statement,
-        truth_status=item.truth_status,
-        canon_status=item.canon_status,
-        importance=item.importance,
-    )
-
-
-def _safe_relationship(
-    record: RelationshipRecord, character_id: int
-) -> EffectiveRelationship:
-    related_id = (
-        record.target_character_id
-        if record.source_character_id == character_id
-        else record.source_character_id
-    )
-    return EffectiveRelationship(
-        relationship_id=record.id,
-        related_character_id=related_id,
-        relationship_type=record.relationship_type,
-        description=record.description,
-        canon_status=record.canon_status,
-    )
-
-
-def _guard_for(
-    item: InformationItemRecord,
-    disclosure: ReaderDisclosureRecord | None,
-    boundary: tuple[int, int] | None,
-    character_id: int | None = None,
-    knowledge_state: str | None = None,
-) -> ProtectedInformationGuard:
-    guard_text = item.authoring_guard
-    if not guard_text or item.statement in guard_text:
-        guard_text = GENERIC_GUARD
-    return ProtectedInformationGuard(
-        information_item_id=item.id,
-        reason=(
-            "reader_disclosure_after_target"
-            if boundary is not None
-            else "reader_disclosure_missing"
-        ),
-        guard_text=guard_text,
-        reveal_boundary=(
-            None
-            if disclosure is None or boundary is None
-            else RevealBoundary(
-                episode_id=disclosure.episode_id,
-                chapter_position=boundary[0],
-                episode_position=boundary[1],
-            )
-        ),
-        character_id=character_id,
-        knowledge_state=knowledge_state,
-    )
