@@ -99,5 +99,20 @@ class ContextRepository:
             work_id=work_id, information_item_id=information_item_id
         )
 
+    def current_disclosures(
+        self, work_id: int, episode_id: int
+    ) -> tuple[ReaderDisclosureRecord, ...]:
+        rows = self._db.execute(
+            """
+            SELECT id, work_id, information_item_id, episode_id, version,
+                   created_at, updated_at
+            FROM reader_disclosures
+            WHERE work_id = ? AND episode_id = ?
+            ORDER BY information_item_id, id
+            """,
+            (work_id, episode_id),
+        ).fetchall()
+        return tuple(ReaderDisclosureRecord(*row) for row in rows)
+
     def latest_draft(self, work_id: int, episode_id: int) -> DraftRecord | None:
         return self._drafts.latest(work_id=work_id, episode_id=episode_id)
