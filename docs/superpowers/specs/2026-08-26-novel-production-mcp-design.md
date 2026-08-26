@@ -1,6 +1,6 @@
 # Novel Production MCP Design Specification
 
-**Status:** Approved architecture and Phase 1 implementation contract
+**Status:** Phase 1 implemented and merged; Phase 2 implementation contract approved
 
 **Date:** 2026-08-26
 
@@ -12,9 +12,10 @@ operations over story canon, historical chronology, narrative structure,
 character state, information disclosure, and append-only episode drafts.
 
 This specification defines the Phase 1–3 architecture and the invariants that
-implementation must preserve. The unmerged Phase 1 implementation is tracked
-by PR #1; Phase 2 and Phase 3 runtime code, migrations, and tools remain out of
-scope.
+implementation must preserve. Phase 1 is implemented and merged on `main` at
+`a57a0e38fef211866270e8787cf92473601a2203`. This document now also fixes the
+Phase 2 implementation contract. Phase 3 runtime code, migration, and tools
+remain out of scope for this implementation cycle.
 
 ## Architecture
 
@@ -89,11 +90,10 @@ the runtime architecture:
   limits; SHOULD thresholds are advisory.
 - Repository GitHub Actions checks run on pushes and pull requests. They cover
   dependency synchronization, Ruff, mypy, pytest, and the source-size gate.
-- PR #1 is pre-merge and has no production story database. Its approved
-  normalized core correction may update `001_initial.sql` and `002_search.sql`
-  in place, with checksum fixtures updated together. After merge/application,
-  both migration files are immutable. Future `003_narrative.sql` and
-  `004_drafts.sql` responsibilities remain unchanged.
+- Phase 1 is implemented and merged. `001_initial.sql` and `002_search.sql`
+  are immutable and must not be changed in Phase 2. `003_narrative.sql` is the
+  sole Phase 2 migration and becomes immutable after application. `004_drafts.sql`
+  is reserved for Phase 3 and must not be created in this cycle.
 
 ## Status Models
 
@@ -240,11 +240,100 @@ label is not canonical.
 
 ```text
 id, work_id, source_character_id, target_character_id, relationship_type,
-description, canon_status, version, created_at, updated_at
+description, canon_status, valid_from_episode_id, valid_to_episode_id,
+version, created_at, updated_at
 ```
 
 Relationships and timeline locations use SQLite foreign keys, while services
-also verify that all referenced rows belong to the configured work.
+also verify that all referenced rows belong to the configured work. The Phase 1
+unique constraint on `(source_character_id, target_character_id,
+relationship_type)` is rebuilt by `003_narrative.sql` so multiple non-overlapping
+narrative intervals can coexist. `valid_from_episode_id` is inclusive and
+`valid_to_episode_id` is exclusive; NULL means the narrative beginning or end.
+
+### Phase 2 implementation contract
+
+`003_narrative.sql` is the only migration added by Phase 2. It creates
+`chapters`, `episodes`, `scenes`, `character_states`, `information_items`,
+`reader_disclosures`, `character_knowledge_events`,
+`episode_characters`, `episode_world_facts`, `episode_timeline_events`, and
+`episode_information`. It also safely rebuilds `relationships` and the
+`canon_decision_changes` CHECK constraint while preserving all existing row
+IDs, work IDs, content, canon status, versions, and timestamps. Existing
+relationship rows receive NULL temporal boundaries. No draft table or Phase 3
+tool is part of this migration.
+
+Chapters, episodes, and scenes have 1-based positions and append at
+`MAX(position) + 1`. Their minimum fields are:
+
+```text
+chapters: id, work_id, position, title, summary, purpose, canon_status,
+          production_status, version, created_at, updated_at
+episodes: id, work_id, chapter_id, position, title, summary, purpose,
+          foreshadowing_notes_json, canon_status, production_status, version,
+          created_at, updated_at
+scenes:   id, work_id, episode_id, position, title, summary, purpose,
+          canon_status, production_status, version, created_at, updated_at
+```
+
+`canon_status` is `idea|draft|canon|deprecated` and `production_status` is
+`planned|outlined|drafting|revising|final`. Chapter and episode positions
+are unique within their work/parent; scene positions are unique within an
+episode. Reorder is one transaction: the moved row requires
+`expected_version`, temporary negative positions avoid unique collisions, and
+every moved or shifted row increments its version. A no-op does not increment
+versions, and a failed reorder rolls back all positions and versions.
+
+`character_states` is a change-log, not a snapshot. It stores physical and
+emotional state, `beliefs_json`, `location_world_fact_id`, and `state_json`,
+but never character knowledge, known information, or reader disclosure.
+`beliefs_json` and `state_json` must be valid JSON. The canonical change row
+for a character and episode is unique. Creation accepts
+`expected_version = None`; correction of an existing same-episode row
+requires `expected_version`. Effective state uses chapter position followed by
+episode position and never compares episode IDs.
+
+`information_items` stores `statement`, `truth_status`, `authoring_guard`,
+`notes_json`, `canon_status`, `importance`, and version/timestamps.
+`truth_status` is `true|false|uncertain|subjective`, `importance` is a
+non-negative integer, and `notes_json` is valid JSON. `authoring_guard` is
+metadata about a protected statement and does not move into character state.
+`reader_disclosures` has one canonical first-disclosure boundary per item;
+moving that boundary is an optimistic-locked transaction. For a target episode,
+known-before means disclosure narrative position `< target`, and reveal-this-
+episode means position `== target`.
+
+`character_knowledge_events` is independent from reader disclosure and stores
+the character, information item, episode, `knowledge_state`, note, and version.
+Knowledge state is `suspects|believes|knows|confirmed|doubts|rejected`.
+Truth and knowledge are never collapsed: a false item may be believed. Effective
+knowledge and its source event are resolved by chapter/episode narrative order,
+excluding future events. The structured result includes the effective state,
+effective event episode, and information item.
+
+Episode references use four separate link tables and one MCP tool family:
+`episode_reference_add`, `episode_reference_remove`, and
+`episode_reference_list`. Supported types are `character`, `world_fact`,
+`timeline_event`, and `information`; character role defaults to
+`participant` and is a bounded string. Services verify that episode, target,
+and configured work agree. Removal is idempotent and returns `removed: false`
+for an absent link. Reference tables never substitute for disclosure
+boundaries. Cross-work links are rejected.
+
+Explicit authoring/admin reads such as `information_get`,
+`information_search`, and `character_state_history` may return future or
+deprecated rows because they are not narrative-boundary context reads. Future
+and deprecated filtering applies to effective state, effective knowledge,
+reader-boundary queries, effective relationships, and the future Phase 3
+`episode_context`; `episode_context` itself is not implemented in Phase 2.
+
+The Phase 2 MCP surface is exactly 27 tools, added to the 23 Phase 1 tools for
+50 total. Every Phase 2 description begins with `Use this when ...`; schemas
+expose enum and bound constraints while services remain authoritative. Read
+tools use `readOnlyHint=true`, `destructiveHint=false`, and
+`openWorldHint=false`. Create uses read-only false and destructive false;
+update/reorder/set use read-only false and open-world false;
+`episode_reference_remove` additionally uses `destructiveHint=true`.
 
 All Phase 1 canon fields use a SQLite `CHECK` for
 `idea|draft|canon|deprecated`; all mutable entity versions use
@@ -526,8 +615,7 @@ PRAGMA busy_timeout = 5000;
 ```
 
 Migrations are explicit SQL files and are recorded in `schema_migrations`.
-PR #1 corrects the pre-merge, unapplied Phase 1 migration bytes in place;
-once merged and applied, a migration file is immutable. The fixed migration
+Phase 1 is merged and its migration bytes are immutable. The fixed migration
 sequence is:
 
 ```text
@@ -621,7 +709,7 @@ The following are deliberately excluded from this design cycle:
 - release and deployment automation;
 - automatic work creation at MCP startup;
 - generated story databases or sample story content;
-- implementation of Phase 1–3 runtime code.
+- implementation of Phase 3 runtime code in this cycle.
 
 These exclusions keep the initial commit limited to repository structure,
 architecture documentation, implementation plans, and project metadata.
