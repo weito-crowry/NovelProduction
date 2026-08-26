@@ -11,9 +11,9 @@ from novel_mcp.phase3_acceptance_probes import (
     evaluate_active_probes,
     has_deprecated,
     safe_keys,
-    seed_active_probes,
     strict_safe_disclosures,
 )
+from novel_mcp.phase3_acceptance_seed import seed_active_probes
 from novel_mcp.phase3_tool_descriptions import PHASE3_TOOL_DESCRIPTIONS
 from novel_mcp.services.context_service import ContextService
 from novel_mcp.services.draft_service import DraftService
