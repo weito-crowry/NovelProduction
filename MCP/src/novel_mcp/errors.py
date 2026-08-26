@@ -37,6 +37,24 @@ class RelationshipNotFoundError(NovelMcpError):
     """Raised when a requested relationship does not exist in the work."""
 
 
+class NarrativeNotFoundError(NovelMcpError):
+    """Raised when a narrative entity does not exist in the work."""
+
+    code = "NOT_FOUND"
+
+    def __init__(self, message: str = "NOT_FOUND") -> None:
+        super().__init__(message)
+
+
+class OrderConflictError(NovelMcpError):
+    """Raised when a narrative reorder target is invalid."""
+
+    code = "ORDER_CONFLICT"
+
+    def __init__(self, message: str = "invalid narrative position") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class WorkScopeError(NovelMcpError):
     """Raised when an entity belongs to another configured work."""
 
@@ -54,6 +72,17 @@ class ValidationError(ValueError, NovelMcpError):
         self.field = field
         self.message = message
         super().__init__(f"{self.code}: {message}")
+
+
+class RelationshipIntegrityError(ValidationError):
+    """Raised when relationship temporal ranges are ambiguous."""
+
+    code = "RELATION_INTEGRITY_ERROR"
+
+    def __init__(self, message: str = "relationship interval overlaps") -> None:
+        super().__init__(message)
+        self.code = type(self).code
+        self.args = (f"{self.code}: {message}",)
 
 
 class CanonReasonRequired(NovelMcpError):

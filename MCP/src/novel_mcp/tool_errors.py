@@ -8,6 +8,7 @@ from typing import Any
 from novel_mcp.errors import (
     CanonPolicyError,
     CanonReasonRequired,
+    RelationshipIntegrityError,
     ValidationError,
     VersionConflictError,
     WorkScopeError,
@@ -34,6 +35,8 @@ def error_payload(exc: BaseException) -> dict[str, Any]:
         code = "CANON_REASON_REQUIRED"
     elif isinstance(exc, CanonPolicyError):
         code = "CANON_POLICY_ERROR"
+    elif isinstance(exc, RelationshipIntegrityError):
+        code = "RELATION_INTEGRITY_ERROR"
     elif isinstance(exc, VersionConflictError):
         code = "VERSION_CONFLICT"
     elif isinstance(exc, WorkScopeError):

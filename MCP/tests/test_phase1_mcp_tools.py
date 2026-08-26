@@ -9,7 +9,7 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
-from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, create_server
+from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, PHASE2_TOOL_NAMES, create_server
 
 
 def _config(tmp_path: Path) -> DatabaseConfig:
@@ -36,7 +36,7 @@ def _structured(result: CallToolResult) -> dict[str, object]:
     return json.loads(text)
 
 
-def test_phase1_server_registers_only_planned_tools(server) -> None:
+def test_server_preserves_phase1_tools_and_adds_phase2_tools(server) -> None:
     expected_tool_names = {
         "work_get",
         "work_update",
@@ -63,8 +63,9 @@ def test_phase1_server_registers_only_planned_tools(server) -> None:
         "canon_decision_search",
     }
 
-    assert server.tool_names() == expected_tool_names
-    assert len(expected_tool_names) == 23
+    assert server.tool_names() == expected_tool_names | PHASE2_TOOL_NAMES
+    assert expected_tool_names == PHASE1_TOOL_NAMES
+    assert len(server.tool_names()) == 50
 
 
 def test_read_and_mutation_annotations_match_tool_effects(server) -> None:
@@ -96,7 +97,8 @@ def test_read_and_mutation_annotations_match_tool_effects(server) -> None:
         "canon_decision_search": (True, False),
     }
 
-    assert set(tools) == set(expected_annotations)
+    assert set(expected_annotations) == PHASE1_TOOL_NAMES
+    assert PHASE1_TOOL_NAMES <= set(tools)
     for name, (read_only, destructive) in expected_annotations.items():
         annotations = tools[name].annotations
         assert annotations is not None
@@ -111,7 +113,7 @@ def test_all_phase1_tools_have_actionable_descriptions_and_schema_bounds(
     server,
 ) -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
-    assert set(tools) == PHASE1_TOOL_NAMES
+    assert PHASE1_TOOL_NAMES <= set(tools)
     for tool in tools.values():
         assert tool.description
         assert tool.description.startswith("Use this when")
@@ -134,9 +136,251 @@ def test_all_phase1_tools_have_actionable_descriptions_and_schema_bounds(
     assert tools["canon_status_set"].input_schema["properties"]["target_status"][
         "enum"
     ] == ["idea", "draft", "canon", "deprecated"]
+    assert tools["canon_status_set"].input_schema["properties"]["entity_type"][
+        "enum"
+    ] == [
+        "world_fact",
+        "timeline_event",
+        "character",
+        "relationship",
+        "chapter",
+        "episode",
+        "scene",
+        "information_item",
+    ]
     assert tools["work_update"].input_schema["properties"]["production_status"][
         "anyOf"
     ][0]["enum"] == ["planned", "outlined", "drafting", "revising", "final"]
+
+
+def test_relationship_tools_expose_temporal_bounds_and_clear_nullable_boundaries(
+    server, tmp_path: Path
+) -> None:
+    config = _config(tmp_path)
+    initialize_work(config.db_path, "Phase 2")
+    first_character = _structured(
+        asyncio.run(server.call_tool("character_create", {"display_name": "A"}))
+    )["data"]
+    second_character = _structured(
+        asyncio.run(server.call_tool("character_create", {"display_name": "B"}))
+    )["data"]
+    chapter = _structured(
+        asyncio.run(server.call_tool("chapter_create", {"title": "章"}))
+    )["data"]
+    first_episode = _structured(
+        asyncio.run(
+            server.call_tool(
+                "episode_create",
+                {"chapter_id": chapter["id"], "title": "第一話"},
+            )
+        )
+    )["data"]
+    second_episode = _structured(
+        asyncio.run(
+            server.call_tool(
+                "episode_create",
+                {"chapter_id": chapter["id"], "title": "第二話"},
+            )
+        )
+    )["data"]
+    third_episode = _structured(
+        asyncio.run(
+            server.call_tool(
+                "episode_create",
+                {"chapter_id": chapter["id"], "title": "第三話"},
+            )
+        )
+    )["data"]
+
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    create_properties = tools["relationship_create"].input_schema["properties"]
+    update_properties = tools["relationship_update"].input_schema["properties"]
+    for properties in (create_properties, update_properties):
+        assert properties["valid_from_episode_id"]["anyOf"][0]["minimum"] == 1
+        assert properties["valid_to_episode_id"]["anyOf"][0]["minimum"] == 1
+    assert update_properties["clear_valid_from"]["default"] is False
+    assert update_properties["clear_valid_to"]["default"] is False
+
+    created = _structured(
+        asyncio.run(
+            server.call_tool(
+                "relationship_create",
+                {
+                    "source_character_id": first_character["id"],
+                    "target_character_id": second_character["id"],
+                    "relationship_type": "ally",
+                    "valid_from_episode_id": first_episode["id"],
+                    "valid_to_episode_id": second_episode["id"],
+                },
+            )
+        )
+    )
+    assert created["ok"] is True
+    relationship = created["data"]
+    assert relationship["valid_from_episode_id"] == first_episode["id"]
+    assert relationship["valid_to_episode_id"] == second_episode["id"]
+
+    updated = _structured(
+        asyncio.run(
+            server.call_tool(
+                "relationship_update",
+                {
+                    "relationship_id": relationship["id"],
+                    "expected_version": relationship["version"],
+                    "relationship_type": "ally",
+                    "valid_to_episode_id": third_episode["id"],
+                },
+            )
+        )
+    )
+    assert updated["ok"] is True
+    assert updated["data"]["valid_from_episode_id"] == first_episode["id"]
+    assert updated["data"]["valid_to_episode_id"] == third_episode["id"]
+
+    cleared_start = _structured(
+        asyncio.run(
+            server.call_tool(
+                "relationship_update",
+                {
+                    "relationship_id": relationship["id"],
+                    "expected_version": updated["data"]["version"],
+                    "relationship_type": "ally",
+                    "clear_valid_from": True,
+                },
+            )
+        )
+    )
+    assert cleared_start["ok"] is True
+    assert cleared_start["data"]["valid_from_episode_id"] is None
+
+    cleared_end = _structured(
+        asyncio.run(
+            server.call_tool(
+                "relationship_update",
+                {
+                    "relationship_id": relationship["id"],
+                    "expected_version": cleared_start["data"]["version"],
+                    "relationship_type": "ally",
+                    "clear_valid_to": True,
+                },
+            )
+        )
+    )
+    assert cleared_end["ok"] is True
+    assert cleared_end["data"]["valid_to_episode_id"] is None
+
+    conflicting = _structured(
+        asyncio.run(
+            server.call_tool(
+                "relationship_update",
+                {
+                    "relationship_id": relationship["id"],
+                    "expected_version": cleared_end["data"]["version"],
+                    "relationship_type": "ally",
+                    "valid_from_episode_id": first_episode["id"],
+                    "clear_valid_from": True,
+                },
+            )
+        )
+    )
+    assert conflicting["ok"] is False
+    assert conflicting["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_canon_status_set_exposes_phase2_entities_and_preserves_policy(
+    server, tmp_path: Path
+) -> None:
+    config = _config(tmp_path)
+    initialize_work(config.db_path, "Phase 2")
+    chapter = _structured(
+        asyncio.run(server.call_tool("chapter_create", {"title": "章"}))
+    )["data"]
+    episode = _structured(
+        asyncio.run(
+            server.call_tool(
+                "episode_create", {"chapter_id": chapter["id"], "title": "話"}
+            )
+        )
+    )["data"]
+    scene = _structured(
+        asyncio.run(
+            server.call_tool(
+                "scene_create", {"episode_id": episode["id"], "title": "場面"}
+            )
+        )
+    )["data"]
+    information = _structured(
+        asyncio.run(server.call_tool("information_create", {"statement": "情報"}))
+    )["data"]
+
+    for entity_type, entity in (
+        ("chapter", chapter),
+        ("episode", episode),
+        ("scene", scene),
+        ("information_item", information),
+    ):
+        result = _structured(
+            asyncio.run(
+                server.call_tool(
+                    "canon_status_set",
+                    {
+                        "entity_type": entity_type,
+                        "entity_id": entity["id"],
+                        "target_status": "canon",
+                        "expected_version": 1,
+                        "reason": "採用理由",
+                    },
+                )
+            )
+        )
+        assert result["ok"] is True
+
+    missing_reason = _structured(
+        asyncio.run(
+            server.call_tool(
+                "canon_status_set",
+                {
+                    "entity_type": "chapter",
+                    "entity_id": chapter["id"],
+                    "target_status": "deprecated",
+                    "expected_version": 2,
+                },
+            )
+        )
+    )
+    assert missing_reason["error"]["code"] == "CANON_REASON_REQUIRED"
+
+    deprecated = _structured(
+        asyncio.run(
+            server.call_tool(
+                "canon_status_set",
+                {
+                    "entity_type": "chapter",
+                    "entity_id": chapter["id"],
+                    "target_status": "deprecated",
+                    "expected_version": 2,
+                    "reason": "撤回",
+                },
+            )
+        )
+    )
+    assert deprecated["ok"] is True
+    rejected = _structured(
+        asyncio.run(
+            server.call_tool(
+                "canon_status_set",
+                {
+                    "entity_type": "chapter",
+                    "entity_id": chapter["id"],
+                    "target_status": "canon",
+                    "expected_version": 3,
+                    "reason": "復帰",
+                },
+            )
+        )
+    )
+    assert rejected["ok"] is False
+    assert rejected["error"]["code"] == "CANON_POLICY_ERROR"
 
 
 def test_work_get_returns_structured_json_and_does_not_create_work(

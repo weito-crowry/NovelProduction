@@ -28,7 +28,7 @@ def test_open_database_applies_connection_defaults_and_migrations(
             for row in connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
-        ) == ("001_initial.sql", "002_search.sql")
+        ) == ("001_initial.sql", "002_search.sql", "003_narrative.sql")
     finally:
         connection.close()
 
@@ -53,11 +53,15 @@ def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> 
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
             ("002_search.sql",),
         ).fetchone() == (1,)
+        assert second_connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+            ("003_narrative.sql",),
+        ).fetchone() == (1,)
     finally:
         second_connection.close()
 
 
-def test_pre_merge_migration_checksums_match_current_corrected_bytes(
+def test_migration_checksums_match_current_bytes(
     tmp_path: Path,
 ) -> None:
     migration_dir = Path(__file__).resolve().parents[1] / "migrations"
@@ -246,6 +250,8 @@ def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
                 "relationship_type",
                 "description",
                 "canon_status",
+                "valid_from_episode_id",
+                "valid_to_episode_id",
                 "version",
                 "created_at",
                 "updated_at",
