@@ -13,9 +13,15 @@ docs/      design specifications and implementation plans
 WEB/       reserved for a future web component
 ```
 
-The current repository contains architecture and implementation planning
-artifacts only. MCP behavior, database migrations, and the web component have
-not been implemented yet.
+The Phase 1 MCP foundation is implemented under `MCP/`. It provides the
+SQLite lifecycle and immutable Phase 1 migrations, explicit work
+initialization, canon-aware CRUD for the Phase 1 entities, bounded Japanese
+search, and exactly 23 stdio MCP tools. The configured work scope is fixed per
+MCP instance and no repository story database or generated artifacts are
+committed.
+
+Phase 2 and Phase 3 tools and runtime workflows remain intentionally deferred;
+the future web component is not implemented.
 
 ## Data ownership
 

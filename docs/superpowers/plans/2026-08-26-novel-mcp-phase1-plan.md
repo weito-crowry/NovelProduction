@@ -1,12 +1,16 @@
 # Novel MCP Phase 1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Execution policy: ChatGPT owns architecture, design, and review. Codex Luna
+> performs sequential implementation and verification. Subagent dispatch or
+> model escalation occurs only when the user explicitly requests it.
+> Superpowers are limited to non-delegating TDD, verification, debugging, and
+> documentation workflows. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the foundational Novel Production MCP database lifecycle, core canon repositories and services, Japanese search baseline, and Phase 1 stdio tools.
+**Goal:** Build the foundational Novel Production MCP database lifecycle, core canon repositories and services, Japanese search baseline, and Phase 1 stdio tools on a reproducible repository development foundation.
 
 **Architecture:** Keep MCP handlers thin and delegate to services, which own validation and transactions, while repositories own SQLite queries. One configured MCP instance uses one story database, and all implementation files remain under `MCP/`.
 
-**Tech Stack:** Python 3.10+, official MCP Python SDK v2, standard-library `sqlite3`, explicit SQL migrations, pytest, and stdio transport.
+**Tech Stack:** Python 3.10+, the concrete CI Python version in `.python-version`, `uv`, official MCP Python SDK v2, standard-library `sqlite3`, explicit SQL migrations, pytest/pytest-cov, Ruff, mypy, pre-commit, and stdio transport.
 
 **Spec:** `docs/superpowers/specs/2026-08-26-novel-production-mcp-design.md`
 
@@ -22,16 +26,36 @@
 - Preserve the independent `CanonStatus` and `ProductionStatus` value sets.
 - Require `expected_version` for mutable-entity updates and reject stale values with `VERSION_CONFLICT`.
 - Require a reason for protected canon transitions and canonical content changes.
+- Keep Phase 1 `works` metadata normalized as `working_title`, `genre`,
+  `premise`, valid-JSON `themes_json`, `description`, and constrained
+  `production_status` (`planned|outlined|drafting|revising|final`), alongside
+  `slug`, `version`, and timestamps.
+- Use `MCP/pyproject.toml` and `MCP/uv.lock` as the authoritative Python dependency files; `uv sync --all-groups` must reproduce the development environment.
+- Keep the repository Python version concrete and synchronized between `.python-version` and GitHub Actions.
+- Use Ruff for linting and formatting, strict-by-default mypy with only narrowly justified exceptions, pytest with an 80% Phase 1 coverage target, and lightweight pre-commit checks.
+- Keep repository text files UTF-8 with LF endings, final newlines, and no trailing whitespace through `.editorconfig` and validation.
+- Use standard-library `logging` for diagnostic events without logging novel prose, secret settings, episode context, private notes, or draft bodies.
+- Production Python modules under `MCP/src/**/*.py` must be at most 600 lines and 40 KiB; test modules under `MCP/tests/**/*.py` must be at most 800 lines. The SHOULD limits are 400 and 500 lines respectively. Generated files, `uv.lock`, migration SQL, fixtures, snapshots, and vendored code are exempt from the automated size gate.
+- The source-size hard limits must be enforced by a small repository script in CI; SHOULD-limit exceedance is a warning.
+- GitHub Actions must validate `uv sync`, Ruff check/format, mypy, pytest, and the source-size gate on pushes and pull requests.
 - Commit every task independently after its focused test suite passes.
 
-### Task 1: Repository bootstrap, configuration, and database lifecycle
+### Task 1: Repository Development Foundation, configuration, and SQLite database lifecycle
 
 **Files:**
 - Create: `MCP/migrations/001_initial.sql`
+- Create: `.editorconfig`
+- Create: `.python-version`
+- Create: `.github/workflows/mcp-ci.yml`
+- Create: `MCP/.pre-commit-config.yaml`
+- Create: `MCP/scripts/check_source_size.py`
+- Modify: `MCP/pyproject.toml`
 - Create: `MCP/src/novel_mcp/config.py`
 - Create: `MCP/src/novel_mcp/database.py`
 - Create: `MCP/src/novel_mcp/errors.py`
+- Create: `MCP/src/novel_mcp/__init__.py`
 - Create: `MCP/tests/test_database_lifecycle.py`
+- Create: `MCP/tests/test_development_foundation.py`
 
 **Interfaces:**
 - Consumes: database path and migration directory supplied by `DatabaseConfig`.
@@ -39,6 +63,9 @@
   `open_database(config: DatabaseConfig) -> sqlite3.Connection`,
   `apply_migrations(connection: sqlite3.Connection, migration_dir: Path) -> tuple[str, ...]`,
   and the Phase 1 core tables listed by the design specification.
+- Produces a reproducible `uv.lock`, concrete Python version declaration,
+  Ruff/mypy/pytest/pre-commit configuration, GitHub Actions checks, diagnostic
+  logging setup, and the source-size hard-limit checker.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -56,7 +83,7 @@ def test_open_database_applies_connection_defaults_and_migrations(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest MCP/tests/test_database_lifecycle.py::test_open_database_applies_connection_defaults_and_migrations -q`
+Run: `cd MCP; uv run pytest tests/test_database_lifecycle.py::test_open_database_applies_connection_defaults_and_migrations -q`
 
 Expected: FAIL because the lifecycle module and `001_initial.sql` do not yet exist.
 
@@ -70,24 +97,23 @@ different bytes. Keep `001_initial.sql` limited to Phase 1 core schema.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python -m pytest MCP/tests/test_database_lifecycle.py -q`
+Run: `cd MCP; uv run pytest tests/test_database_lifecycle.py -q`
 
 Expected: PASS, including a second-open idempotency test and a migration
 failure rollback test.
 
 - [ ] **Step 5: Validation**
 
-Run: `python -m compileall MCP/src` and inspect the migration inventory with
-`Get-ChildItem MCP/migrations`.
+Run: `cd MCP; uv run pytest tests/test_development_foundation.py -q; uv run ruff check .; uv run ruff format --check .; uv run mypy src; uv run pre-commit run --all-files`; then run `python MCP/scripts/check_source_size.py` from the repository root and inspect the migration inventory with `Get-ChildItem MCP/migrations`.
 
-Expected: compilation succeeds and only `001_initial.sql` is present for this
-task.
+Expected: development checks and source-size validation succeed, and only
+`001_initial.sql` is present for this task.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add MCP/migrations/001_initial.sql MCP/src/novel_mcp/config.py MCP/src/novel_mcp/database.py MCP/src/novel_mcp/errors.py MCP/tests/test_database_lifecycle.py
-git commit -m "feat: establish SQLite database lifecycle"
+git add .editorconfig .python-version .github/workflows/mcp-ci.yml MCP/.pre-commit-config.yaml MCP/pyproject.toml MCP/uv.lock MCP/scripts/check_source_size.py MCP/migrations/001_initial.sql MCP/src/novel_mcp MCP/tests/test_database_lifecycle.py MCP/tests/test_development_foundation.py
+git commit -m "chore: establish MCP development foundation"
 ```
 
 ### Task 2: Work metadata repository, service, and novel-init
@@ -103,18 +129,18 @@ git commit -m "feat: establish SQLite database lifecycle"
 **Interfaces:**
 - Consumes: `open_database`, the `works` table, and `DatabaseConfig` from Task 1.
 - Produces: `WorkRepository.get() -> WorkRecord | None`,
-  `WorkRepository.update(expected_version: int, title: str) -> WorkRecord`,
-  `WorkService.get() -> WorkRecord`,
-  `WorkService.update(title: str, expected_version: int) -> WorkRecord`, and
-  `initialize_work(db_path: Path, title: str) -> WorkRecord` exposed by the
-  `novel-init` console script.
+  `WorkRepository.update(expected_version: int, fields: Mapping[str, object])
+  -> WorkRecord`, `WorkService.get() -> WorkRecord`,
+  `WorkService.update(working_title: str, expected_version: int, ...metadata)
+  -> WorkRecord`, and `initialize_work(db_path: Path, working_title: str, ...)
+  -> WorkRecord` exposed by the `novel-init` console script.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 def test_initialize_work_is_explicit_and_update_requires_version(tmp_path):
     record = initialize_work(tmp_path / "story.db", "2126")
-    assert record.title == "2126"
+    assert record.working_title == "2126"
     assert record.version == 1
 
     service = WorkService(open_test_database(tmp_path / "story.db"))
@@ -131,10 +157,11 @@ Expected: FAIL because no work repository, service, or initializer exists.
 - [ ] **Step 3: Write minimal implementation**
 
 Create exactly one work during `initialize_work`; normal database opening must
-not create one. Require a non-empty title, use the repository conditional
-update for `expected_version`, and map an affected-row count of zero to
-`VERSION_CONFLICT`. Register `novel-init` with arguments for `--db` and
-`--title` only.
+not create one. Require a non-empty working title, validate metadata and
+`themes_json`, use the repository conditional update for `expected_version`,
+and map an affected-row count of zero to `VERSION_CONFLICT`. Register
+`novel-init` with `--db`, `--working-title` (keeping `--title` as an input
+alias), and the normalized metadata options.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -161,6 +188,7 @@ git commit -m "feat: add explicit work initialization"
 ### Task 3: World Fact CRUD, temporal validity, and search
 
 **Files:**
+- Create: `MCP/migrations/002_search.sql`
 - Create: `MCP/src/novel_mcp/repositories/world_fact_repository.py`
 - Create: `MCP/src/novel_mcp/services/world_fact_service.py`
 - Create: `MCP/tests/test_world_fact_service.py`
@@ -170,7 +198,7 @@ git commit -m "feat: add explicit work initialization"
   locking error mapping from Tasks 1–2.
 - Produces: `WorldFactService.create(statement: str, valid_from: str | None, valid_to: str | None) -> WorldFactRecord`,
   `get(fact_id: int) -> WorldFactRecord`,
-  `update(fact_id: int, statement: str, expected_version: int) -> WorldFactRecord`,
+  `update(fact_id: int, statement: str, expected_version: int, reason: str | None = None) -> WorldFactRecord`,
   and `search(query: str, limit: int) -> tuple[WorldFactRecord, ...]`.
 
 - [ ] **Step 1: Write the failing test**
@@ -193,10 +221,17 @@ exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Validate temporal bounds before writing, preserve the configured work scope,
-increment `version` only after a matching conditional update, and return
-`NOT_FOUND` for an absent fact. Use deterministic ordering for search results
-and keep the query implementation in the repository.
+Keep `001_initial.sql` immutable. Use `002_search.sql` for the additive nullable
+`valid_from`/`valid_to` columns and rebuildable world-fact search indexes needed
+by the Phase 1 service. The service-facing `statement` is stored as the
+authoritative `body` (and the legacy required `title` adapter field), while an
+opaque internal `fact_key` and the initial `draft` canon status are generated
+below the ordinary service input boundary. Do not expose those schema adapter
+fields in the Task 3 interface. Validate temporal bounds before writing,
+preserve the configured work scope, increment `version` only after a matching
+conditional update, and return `NOT_FOUND` for an absent fact. Use
+deterministic ordering for search results and keep the query implementation in
+the repository.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -215,7 +250,7 @@ Expected: all tests pass and no SQL appears in the service module.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add MCP/src/novel_mcp/repositories/world_fact_repository.py MCP/src/novel_mcp/services/world_fact_service.py MCP/tests/test_world_fact_service.py
+git add MCP/migrations/002_search.sql MCP/src/novel_mcp/repositories/world_fact_repository.py MCP/src/novel_mcp/services/world_fact_service.py MCP/tests/test_world_fact_service.py
 git commit -m "feat: add world fact service"
 ```
 
@@ -229,7 +264,8 @@ git commit -m "feat: add world fact service"
 **Interfaces:**
 - Consumes: configured-work scope and core timeline tables from Task 1.
 - Produces: `create_event(...) -> TimelineEventRecord`,
-  `update_event(event_id: int, expected_version: int, ...) -> TimelineEventRecord`,
+  `get_event(event_id: int) -> TimelineEventRecord`,
+  `update_event(event_id: int, expected_version: int, ..., reason: str | None = None) -> TimelineEventRecord`,
   `search_events(query: str, limit: int) -> tuple[TimelineEventRecord, ...]`,
   `range_events(start: str, end: str, limit: int) -> tuple[TimelineEventRecord, ...]`,
   `move_event(event_id: int, expected_version: int, new_date: str) -> TimelineEventRecord`,
@@ -256,10 +292,14 @@ and relation creation are absent.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Keep historical date values in `timeline_events`, validate inclusive range
-boundaries, enforce same-work foreign keys, and use a single transaction for an
-event plus participant links. Reject self-relations and duplicate relation
-edges using structured validation errors.
+Keep historical date values in `timeline_events.chronology_sort_key`, map the
+service title to both the legacy `title` and `summary` fields, generate an
+opaque internal `event_key`, and default the hidden schema adapter's
+`canon_status` to `draft`. Map participant `(label, role)` values to the
+existing participant-link table. Validate inclusive range boundaries, enforce
+same-work foreign keys, and use a single transaction for an event plus
+participant links. Reject self-relations and duplicate relation edges using
+structured validation errors.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -296,10 +336,10 @@ git commit -m "feat: add timeline event operations"
 - Consumes: configured-work scope and optimistic-locking primitives from Tasks 1–4.
 - Produces: `CharacterService.create(name: str, profile: str | None) -> CharacterRecord`,
   `get(character_id: int) -> CharacterRecord`,
-  `update(character_id: int, expected_version: int, ...) -> CharacterRecord`,
+  `update(character_id: int, expected_version: int, ..., reason: str | None = None) -> CharacterRecord`,
   `search(query: str, limit: int) -> tuple[CharacterRecord, ...]`,
   `RelationshipService.create(source_character_id: int, target_character_id: int, relation_type: str) -> RelationshipRecord`,
-  `update(relationship_id: int, expected_version: int, relation_type: str) -> RelationshipRecord`,
+  `update(relationship_id: int, expected_version: int, relation_type: str, reason: str | None = None) -> RelationshipRecord`,
   and `search(character_id: int | None, limit: int) -> tuple[RelationshipRecord, ...]`.
 
 - [ ] **Step 1: Write the failing test**
@@ -322,8 +362,13 @@ Expected: FAIL because character and relationship services do not yet exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Store relationship direction explicitly; do not infer reciprocal edges. Apply
-the same `expected_version` compare-and-set rule to character and relationship
+Use the immutable `characters` schema adapter by mapping public `name` to
+`display_name`, public `profile` to `summary` (empty when omitted), generating
+an opaque `character_key`, and defaulting hidden `canon_status` to `draft`.
+For relationships, map the public `relation_type` to `relationship_type`, use
+an empty hidden `summary`, and keep hidden `canon_status` at `draft`. Store
+relationship direction explicitly; do not infer reciprocal edges. Apply the
+same `expected_version` compare-and-set rule to character and relationship
 updates. Validate both endpoints belong to the configured work before the
 relationship transaction begins.
 
@@ -356,7 +401,8 @@ git commit -m "feat: add characters and relationships"
 
 **Interfaces:**
 - Consumes: mutable entity repositories, status values, and transaction boundary from Tasks 1–5.
-- Produces: `set_canon_status(entity_type: str, entity_id: int, target_status: str, reason: str | None) -> CanonDecisionRecord`,
+- Produces: `set_canon_status(entity_type: str, entity_id: int, target_status: str, expected_version: int, reason: str | None) -> CanonDecisionRecord`,
+  `update_content(entity_type: str, entity_id: int, fields: Mapping[str, object], expected_version: int, reason: str | None) -> CanonDecisionRecord`,
   `record_decision(summary: str, reason: str, changes: Sequence[CanonChange]) -> CanonDecisionRecord`,
   `get_decision(decision_id: int) -> CanonDecisionRecord`, and
   `search_decisions(query: str, limit: int) -> tuple[CanonDecisionRecord, ...]`.
@@ -368,10 +414,10 @@ def test_canon_transition_requires_reason_and_commits_decision_atomically(servic
     fact = service.world_fact.create("旧記述", None, None)
 
     with pytest.raises(CanonReasonRequired):
-        service.canon.set_canon_status("world_fact", fact.id, "canon", None)
+        service.canon.set_canon_status("world_fact", fact.id, "canon", 1, None)
 
     decision = service.canon.set_canon_status(
-        "world_fact", fact.id, "canon", "採用理由"
+        "world_fact", fact.id, "canon", 1, "採用理由"
     )
     assert decision.changes[0].entity_id == fact.id
 ```
@@ -384,10 +430,14 @@ Expected: FAIL because canon policy and decision history are not implemented.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Validate the protected transitions and canonical content edits before opening
-the write transaction. Persist one decision and all change rows in the same
-transaction as the target mutation. Roll back the target mutation if any
-decision row fails. Keep `canon_decisions` separate from
+Validate static entity/status fields before opening the write transaction, then
+begin before taking the entity snapshot so caller `expected_version` is checked
+against the same transaction that performs the conditional mutation. Generate
+the immutable schema's opaque `decision_key` and use its `decided_at` timestamp
+below the public interface. Persist one decision and all change rows in the
+same transaction as the target mutation; repository methods own all SQL while
+the service owns validation and transaction boundaries. Roll back the target
+mutation if any decision row fails. Keep `canon_decisions` separate from
 `canon_decision_changes`.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -414,13 +464,14 @@ git commit -m "feat: enforce canon decision history"
 ### Task 7: Japanese text search baseline
 
 **Files:**
-- Create: `MCP/migrations/002_search.sql`
 - Create: `MCP/src/novel_mcp/repositories/search_repository.py`
 - Create: `MCP/src/novel_mcp/services/search_service.py`
 - Create: `MCP/tests/test_japanese_search.py`
 
 **Interfaces:**
 - Consumes: canonical text rows and migration runner from Tasks 1–6.
+- Consumes the immutable `002_search.sql` additive validity/index migration
+  created in Task 3; Task 7 must not rewrite an applied migration.
 - Produces: `SearchService.search_world_facts(query: str, limit: int) -> tuple[WorldFactRecord, ...]`,
   `search_characters(query: str, limit: int) -> tuple[CharacterRecord, ...]`,
   and deterministic empty-query behavior that returns an empty tuple.
@@ -448,11 +499,13 @@ Expected: FAIL because `002_search.sql` and the search repository do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add only rebuildable search structures in `002_search.sql`. Implement the
-selected SQLite text-search strategy behind `SearchRepository`, preserve work
-scope, normalize the empty query to no results, cap `limit` at the service
-bound, and use a stable tie-breaker for equal matches. Keep canonical rows as
-the only authoritative data.
+Do not modify `002_search.sql`. Implement the selected SQLite text-search
+strategy behind `SearchRepository`, using the rebuildable structures already
+created there and a parameterized `LIKE` fallback when the available SQLite
+build does not provide the preferred tokenizer. Preserve work scope, normalize
+the empty query to no results, cap `limit` at the service bound, and use a
+stable tie-breaker for equal matches. Keep canonical rows as the only
+authoritative data.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -522,9 +575,10 @@ connection management below the service boundary. Do not add Phase 2 or Phase
 
 Run: `python -m pytest MCP/tests/test_phase1_mcp_tools.py MCP/tests/test_phase1_acceptance.py -q`
 
-Expected: PASS, including tool registration, successful structured output,
-validation errors, stale-version errors, canon reason errors, and no future
-phase tools.
+Expected: PASS, including tool registration against a literal expected Phase 1
+set, successful structured output, validation errors, stale-version errors,
+canon reason errors, direct timeline retrieval beyond the range default limit,
+and no future phase tools.
 
 - [ ] **Step 5: Validation**
 
@@ -540,3 +594,14 @@ file is generated in the repository working tree.
 git add MCP/src/novel_mcp/mcp_server.py MCP/src/novel_mcp/tool_errors.py MCP/tests/test_phase1_mcp_tools.py MCP/tests/test_phase1_acceptance.py
 git commit -m "feat: expose Phase 1 MCP tools"
 ```
+
+## PR #1 specification-alignment correction
+
+The unmerged PR review requires the approved normalized Phase 1 data model,
+non-exact timeline ranges, SQLite invariants, trigram-first search, explicit
+canon transition/noise policy, and MCP descriptions/schemas. The detailed
+inline execution plan is
+`docs/superpowers/plans/2026-08-26-novel-mcp-phase1-pr1-review-fixes.md`.
+It corrects the pre-merge `001_initial.sql`/`002_search.sql` bytes in place,
+keeps future `003_narrative.sql`/`004_drafts.sql` responsibilities untouched,
+and does not expand the 23-tool Phase 1 boundary.

@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+
+class NovelMcpError(RuntimeError):
+    """Base error for MCP lifecycle failures."""
+
+
+class MigrationError(NovelMcpError):
+    """Raised when migrations cannot be applied safely."""
+
+
+class VersionConflictError(NovelMcpError):
+    """Raised when optimistic concurrency checks fail."""
+
+
+class WorkExistsError(NovelMcpError):
+    """Raised when explicit initialization is attempted twice."""
+
+
+class WorkNotFoundError(NovelMcpError):
+    """Raised when a requested work record does not exist."""
+
+
+class WorldFactNotFoundError(NovelMcpError):
+    """Raised when a requested world fact does not exist."""
+
+
+class TimelineEventNotFoundError(NovelMcpError):
+    """Raised when a requested timeline event does not exist in the work."""
+
+
+class CharacterNotFoundError(NovelMcpError):
+    """Raised when a requested character does not exist in the work."""
+
+
+class RelationshipNotFoundError(NovelMcpError):
+    """Raised when a requested relationship does not exist in the work."""
+
+
+class WorkScopeError(NovelMcpError):
+    """Raised when an entity belongs to another configured work."""
+
+    code = "WORK_SCOPE_ERROR"
+
+    def __init__(self, message: str = "entity belongs to another work") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class ValidationError(ValueError, NovelMcpError):
+    """Raised for invalid input with a stable machine-readable code."""
+
+    def __init__(self, message: str, *, field: str | None = None) -> None:
+        self.code = "VALIDATION_ERROR"
+        self.field = field
+        self.message = message
+        super().__init__(f"{self.code}: {message}")
+
+
+class CanonReasonRequired(NovelMcpError):
+    """Raised when a protected canon mutation has no reason."""
+
+    code = "CANON_REASON_REQUIRED"
+
+    def __init__(self, message: str = "reason is required") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class CanonPolicyError(NovelMcpError):
+    """Raised when a canon mutation violates the canon policy."""
+
+    code = "CANON_POLICY_ERROR"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class CanonDecisionNotFoundError(NovelMcpError):
+    """Raised when a canon decision is absent."""
+
+    code = "NOT_FOUND"
+
+    def __init__(self, message: str = "NOT_FOUND") -> None:
+        super().__init__(message)
+
+
+class CanonEntityNotFoundError(NovelMcpError):
+    """Raised when a requested canon entity is absent from the work."""
+
+    code = "NOT_FOUND"
+
+    def __init__(self, message: str = "NOT_FOUND") -> None:
+        super().__init__(message)

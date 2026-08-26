@@ -1,6 +1,6 @@
 # Novel Production MCP Design Specification
 
-**Status:** Approved architecture for the initial repository bootstrap
+**Status:** Approved architecture and Phase 1 implementation contract
 
 **Date:** 2026-08-26
 
@@ -12,9 +12,9 @@ operations over story canon, historical chronology, narrative structure,
 character state, information disclosure, and append-only episode drafts.
 
 This specification defines the Phase 1–3 architecture and the invariants that
-future implementation must preserve. The initial repository commit contains
-this specification and implementation plans only; it does not contain the MCP
-server, SQLite schema, migrations, or tools.
+implementation must preserve. The unmerged Phase 1 implementation is tracked
+by PR #1; Phase 2 and Phase 3 runtime code, migrations, and tools remain out of
+scope.
 
 ## Architecture
 
@@ -62,11 +62,38 @@ In scope for the Phase 1–3 design:
 Out of scope:
 
 - Web UI, widgets, ChatGPT Apps UI, or a browser client.
-- Production deployment, CI/CD, Docker, release management, and hosting.
+- Production deployment, production CI/CD, Docker, release management, and hosting.
 - ORM, vector search, embeddings, or an external search service.
 - Automatic story creation during ordinary MCP startup.
 - A generated `story.db` in the repository.
 - Any live writing workflow before the Phase 3 acceptance gate.
+
+## Development Constraints
+
+Phase 1 uses a reproducible repository development foundation in addition to
+the runtime architecture:
+
+- `MCP/pyproject.toml` and `MCP/uv.lock` are the authoritative Python
+  dependency files. `uv sync --all-groups` is the supported environment setup.
+- `.python-version` contains the concrete Python version used by CI. Ruff is
+  the lint and formatter, mypy is strict by default, pytest/pytest-cov provide
+  the test and coverage baseline, and pre-commit runs lightweight checks.
+- Repository text files use UTF-8, LF endings, final newlines, and no trailing
+  whitespace. Standard-library `logging` may record diagnostic events, but it
+  must not record novel prose, secret settings, episode context, private notes,
+  or draft bodies.
+- Production Python modules under `MCP/src/**/*.py` must not exceed 600 lines
+  or 40 KiB. Test modules under `MCP/tests/**/*.py` must not exceed 800 lines.
+  Generated files, `uv.lock`, migration SQL, fixtures, snapshots, and vendored
+  code are exempt. A small automated source-size check enforces the hard
+  limits; SHOULD thresholds are advisory.
+- Repository GitHub Actions checks run on pushes and pull requests. They cover
+  dependency synchronization, Ruff, mypy, pytest, and the source-size gate.
+- PR #1 is pre-merge and has no production story database. Its approved
+  normalized core correction may update `001_initial.sql` and `002_search.sql`
+  in place, with checksum fixtures updated together. After merge/application,
+  both migration files are immutable. Future `003_narrative.sql` and
+  `004_drafts.sql` responsibilities remain unchanged.
 
 ## Status Models
 
@@ -146,6 +173,83 @@ connection.
 Major mutable entities carry `version INTEGER NOT NULL DEFAULT 1`. Any update
 that changes such an entity requires an `expected_version` value and must
 reject a stale value with `VERSION_CONFLICT`.
+
+### Phase 1 normalized core fields
+
+The Phase 1 migrations implement the following normalized fields. These are
+the canonical SQLite columns and corresponding service/MCP payload names;
+legacy compatibility properties may exist on Python records but are not
+additional sources of truth.
+
+`works` contains:
+
+```text
+id, slug, working_title, genre, premise, themes_json, description,
+production_status, version, created_at, updated_at
+```
+
+`production_status` is constrained to `planned`, `outlined`, `drafting`,
+`revising`, or `final`. `themes_json` is valid JSON at both the service and
+SQLite boundaries. `slug` remains the stable internal work identifier; the
+working title and other metadata fields are the normalized authoring metadata
+exposed by the Phase 1 work tools.
+
+`world_facts` contains:
+
+```text
+id, work_id, topic_key, category, title, statement, details_json,
+valid_from, valid_to, canon_status, importance, version, created_at, updated_at
+```
+
+`topic_key` is not unique within a work. Multiple rows may represent the same
+topic at different validity ranges, and `(work_id, topic_key, id)` is indexed
+for deterministic lookup without making the derived search index canonical.
+
+`characters` contains:
+
+```text
+id, work_id, character_key, display_name, entity_type, description,
+birth_date, death_date, physical_description, occupation, core_beliefs,
+goals, fears, personality, speech_style, ai_attitude,
+genetic_modification_attitude, private_notes, profile_json, canon_status,
+version, created_at, updated_at
+```
+
+`entity_type` is constrained to `human`, `ai`, or `organization`.
+
+`timeline_events` contains:
+
+```text
+id, work_id, event_key, time_start, time_end, date_precision, date_display,
+title, description, category, location_world_fact_id, cause_summary,
+consequence_summary, canon_status, importance, version, created_at, updated_at
+```
+
+`time_start` and `time_end` are nullable internal range endpoints. The
+human-facing `date_display` is independent. `date_precision` is constrained to
+`unknown`, `year`, `season`, `month`, or `day`, allowing values such as
+`2104年`, `2104年春頃`, `2104年3月頃`, and `正確な日付不明` without treating
+the display string as a sort key.
+
+`timeline_event_participants` contains `event_id`, `character_id`, and `role`;
+`character_id` is a foreign key to `characters`, so human, AI, and
+organization participants share one integrity path. A free-text participant
+label is not canonical.
+
+`relationships` contains:
+
+```text
+id, work_id, source_character_id, target_character_id, relationship_type,
+description, canon_status, version, created_at, updated_at
+```
+
+Relationships and timeline locations use SQLite foreign keys, while services
+also verify that all referenced rows belong to the configured work.
+
+All Phase 1 canon fields use a SQLite `CHECK` for
+`idea|draft|canon|deprecated`; all mutable entity versions use
+`CHECK(version >= 1)`. Episode-dependent relationship validity fields remain
+Phase 2.
 
 ## Historical Chronology / Narrative Disclosure
 
@@ -235,9 +339,11 @@ overwrite is forbidden.
 
 Search is a read operation over the canonical SQLite database. Exact identity
 and relationship lookups use ordinary indexed predicates. Timeline range
-operations use chronology fields and bounded result ordering. Text search is
-introduced by `002_search.sql` and must support the Japanese text search
-baseline described in the Phase 1 plan.
+operations use internal chronology endpoints and bounded overlap ordering. Text
+search prefers an available SQLite FTS5 trigram strategy; when that capability
+is unavailable, the repository uses parameterized, escaped `LIKE` fallback.
+The selected strategy is diagnostically observable. FTS/index rows are
+rebuildable derived data and never become a second source of truth.
 
 The search implementation must be demonstrated by focused tests for Japanese
 terms, empty queries, stable ordering, and work scoping before it is exposed by
@@ -248,7 +354,10 @@ canonical rows; they do not become a second source of truth.
 
 MCP tools return structured JSON objects with stable field names and structured
 errors. The tool layer delegates to services and does not expose database
-connection objects, SQL, or arbitrary table operations.
+connection objects, SQL, or arbitrary table operations. All 23 Phase 1 tools
+have explicit `Use this when ...` descriptions. Their generated JSON Schemas
+expose bounds and enum values where the contract defines them, while service
+validation remains authoritative.
 
 ### Phase 1 tools
 
@@ -417,7 +526,9 @@ PRAGMA busy_timeout = 5000;
 ```
 
 Migrations are explicit SQL files and are recorded in `schema_migrations`.
-Once applied, a migration file is immutable. The fixed migration sequence is:
+PR #1 corrects the pre-merge, unapplied Phase 1 migration bytes in place;
+once merged and applied, a migration file is immutable. The fixed migration
+sequence is:
 
 ```text
 001_initial.sql   Phase 1 core schema
@@ -427,7 +538,7 @@ Once applied, a migration file is immutable. The fixed migration sequence is:
 ```
 
 Ordinary MCP startup never creates a work implicitly. A future Phase 1
-`novel-init --db ./data/story.db --title "2126"` command performs explicit
+`novel-init --db ./data/story.db --working-title "2126"` command performs explicit
 database and work initialization; this command is planned but is not part of
 the initial repository commit.
 
@@ -506,7 +617,7 @@ The following are deliberately excluded from this design cycle:
 - vector databases and embeddings;
 - ORM abstractions;
 - external search services;
-- Docker and CI/CD configuration;
+- Production Docker and CI/CD configuration;
 - release and deployment automation;
 - automatic work creation at MCP startup;
 - generated story databases or sample story content;

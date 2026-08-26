@@ -1,6 +1,10 @@
 # Novel MCP Phase 3 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Execution policy: ChatGPT owns architecture, design, and review. Codex Luna
+> performs sequential implementation and verification. Subagent dispatch or
+> model escalation occurs only when the user explicitly requests it.
+> Superpowers are limited to non-delegating TDD, verification, debugging, and
+> documentation workflows. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add append-only episode drafts, bounded episode outline and context retrieval, leakage hardening, and the Phase 3 MCP tools with a real-writing acceptance gate.
 
