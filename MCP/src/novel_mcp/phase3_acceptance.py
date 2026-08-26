@@ -5,19 +5,17 @@ import sqlite3
 from dataclasses import dataclass, fields
 from typing import Any
 
-from novel_mcp.errors import VersionConflictError, WorkScopeError
+from novel_mcp.errors import VersionConflictError
 from novel_mcp.phase2_tool_descriptions import PHASE2_TOOL_DESCRIPTIONS
-from novel_mcp.phase3_tool_descriptions import PHASE3_TOOL_DESCRIPTIONS
-from novel_mcp.repositories.context_repository import ContextRepository
-from novel_mcp.repositories.work_repository import WorkRepository
-from novel_mcp.services.context_service import (
-    INFORMATION_ITEMS_MAX,
-    PREVIOUS_DRAFT_TAIL_CHARS,
-    PREVIOUS_SUMMARIES_MAX,
-    TIMELINE_EVENTS_MAX,
-    WORLD_FACTS_MAX,
-    ContextService,
+from novel_mcp.phase3_acceptance_probes import (
+    evaluate_active_probes,
+    has_deprecated,
+    safe_keys,
+    seed_active_probes,
+    strict_safe_disclosures,
 )
+from novel_mcp.phase3_tool_descriptions import PHASE3_TOOL_DESCRIPTIONS
+from novel_mcp.services.context_service import ContextService
 from novel_mcp.services.draft_service import DraftService
 from novel_mcp.services.outline_service import OutlineService
 from novel_mcp.tool_descriptions import TOOL_DESCRIPTIONS
@@ -77,30 +75,19 @@ class AcceptanceReport:
 def run_phase3_acceptance(
     database: sqlite3.Connection, *, episode_id: int
 ) -> AcceptanceReport:
-    """Run the real-writing qualification probes against a temporary DB."""
+    """Run active real-writing qualification probes against a temporary DB."""
     migration_sequence_ok = _migration_sequence_ok(database)
-    tool_inventory_ok = (
-        len(TOOL_DESCRIPTIONS) == 23
-        and len(PHASE2_TOOL_DESCRIPTIONS) == 27
-        and len(PHASE3_TOOL_DESCRIPTIONS) == 5
-        and len(
-            set(TOOL_DESCRIPTIONS)
-            | set(PHASE2_TOOL_DESCRIPTIONS)
-            | set(PHASE3_TOOL_DESCRIPTIONS)
-        )
-        == 55
-    )
+    tool_inventory_ok = _tool_inventory_ok()
+    scenario = seed_active_probes(database, episode_id=episode_id)
     draft_append_only, draft_parent_cas_ok, draft_hash_ok = _draft_probes(
         database, episode_id
     )
+
     try:
         outline = OutlineService(database).get_episode_outline(episode_id)
         outline_payload = json_value(outline)
-        outline_safe = _safe_keys(outline_payload) and not _has_deprecated(
-            outline_payload
-        )
+        outline_safe = safe_keys(outline_payload) and not has_deprecated(outline_payload)
     except Exception:
-        outline = None
         outline_payload = {}
         outline_safe = False
 
@@ -123,19 +110,14 @@ def run_phase3_acceptance(
     finally:
         database.set_trace_callback(None)
 
-    context_bounds_ok = _context_bounds_ok(context)
-    future_episode = _future_episode_ok(database, episode_id, context)
-    future_state = _future_state_ok(database, episode_id, context)
-    future_knowledge = _future_knowledge_ok(database, episode_id, context)
-    future_disclosure = _future_disclosure_ok(database, episode_id, context)
-    deprecated_ok = context is not None and not _has_deprecated(context_payload)
-    other_work_ok = _other_work_ok(database, episode_id)
-    private_notes_ok = _keys_absent(outline_payload, {"private_notes", "death_date"})
-    profile_json_ok = _keys_absent(
-        outline_payload, {"profile_json", "details_json", "notes_json"}
+    probes = evaluate_active_probes(
+        database,
+        episode_id=episode_id,
+        context=context,
+        context_payload=context_payload,
+        outline_payload=outline_payload,
+        scenario=scenario,
     )
-    protected_ok = _protected_statements_absent(database, context_payload, context)
-    guard_present = bool(context is not None and context.protected_information_guards)
     ready = all(
         (
             migration_sequence_ok,
@@ -144,17 +126,17 @@ def run_phase3_acceptance(
             draft_hash_ok,
             outline_safe,
             context_read_only,
-            context_bounds_ok,
-            future_episode,
-            future_state,
-            future_knowledge,
-            future_disclosure,
-            deprecated_ok,
-            other_work_ok,
-            private_notes_ok,
-            profile_json_ok,
-            protected_ok,
-            guard_present,
+            probes.context_bounds_ok,
+            probes.future_episode_ok,
+            probes.future_state_ok,
+            probes.future_knowledge_ok,
+            probes.future_disclosure_ok,
+            probes.deprecated_ok,
+            probes.other_work_ok,
+            probes.private_notes_ok,
+            probes.profile_json_ok,
+            probes.protected_statement_ok,
+            probes.guard_present,
             tool_inventory_ok,
         )
     )
@@ -165,19 +147,33 @@ def run_phase3_acceptance(
         draft_hash_ok=draft_hash_ok,
         outline_safe=outline_safe,
         context_read_only=context_read_only,
-        context_bounds_ok=context_bounds_ok,
-        future_episode_leakage_blocked=future_episode,
-        future_state_leakage_blocked=future_state,
-        future_knowledge_leakage_blocked=future_knowledge,
-        future_disclosure_leakage_blocked=future_disclosure,
-        deprecated_canon_leakage_blocked=deprecated_ok,
-        other_work_leakage_blocked=other_work_ok,
-        private_notes_leakage_blocked=private_notes_ok,
-        profile_json_leakage_blocked=profile_json_ok,
-        protected_statement_leakage_blocked=protected_ok,
-        guard_present=guard_present,
+        context_bounds_ok=probes.context_bounds_ok,
+        future_episode_leakage_blocked=probes.future_episode_ok,
+        future_state_leakage_blocked=probes.future_state_ok,
+        future_knowledge_leakage_blocked=probes.future_knowledge_ok,
+        future_disclosure_leakage_blocked=probes.future_disclosure_ok,
+        deprecated_canon_leakage_blocked=probes.deprecated_ok,
+        other_work_leakage_blocked=probes.other_work_ok,
+        private_notes_leakage_blocked=probes.private_notes_ok,
+        profile_json_leakage_blocked=probes.profile_json_ok,
+        protected_statement_leakage_blocked=probes.protected_statement_ok,
+        guard_present=probes.guard_present,
         tool_inventory_ok=tool_inventory_ok,
         writing_ready=ready,
+    )
+
+
+def _tool_inventory_ok() -> bool:
+    return (
+        len(TOOL_DESCRIPTIONS) == 23
+        and len(PHASE2_TOOL_DESCRIPTIONS) == 27
+        and len(PHASE3_TOOL_DESCRIPTIONS) == 5
+        and len(
+            set(TOOL_DESCRIPTIONS)
+            | set(PHASE2_TOOL_DESCRIPTIONS)
+            | set(PHASE3_TOOL_DESCRIPTIONS)
+        )
+        == 55
     )
 
 
@@ -254,182 +250,13 @@ def _raw_append_only_probe(
     return rejected_update and rejected_delete and stored == (body,)
 
 
-def _context_bounds_ok(context: Any) -> bool:
-    if context is None:
-        return False
-    meta = context.context_meta
-    limits = meta.get("limits", {})
-    return (
-        len(context.recent_context.previous_episode_summaries) <= PREVIOUS_SUMMARIES_MAX
-        and len(context.recent_context.previous_draft_tail) <= PREVIOUS_DRAFT_TAIL_CHARS
-        and len(context.world_facts) <= WORLD_FACTS_MAX
-        and len(context.timeline_events) <= TIMELINE_EVENTS_MAX
-        and len(context.reader_context.known_before_episode)
-        + len(context.reader_context.reveal_this_episode)
-        <= INFORMATION_ITEMS_MAX + len(context.reader_context.reveal_this_episode)
-        and limits
-        == {
-            "previous_episode_summaries": PREVIOUS_SUMMARIES_MAX,
-            "previous_draft_tail_chars": PREVIOUS_DRAFT_TAIL_CHARS,
-            "world_facts_max": WORLD_FACTS_MAX,
-            "timeline_events_max": TIMELINE_EVENTS_MAX,
-            "information_items_max": INFORMATION_ITEMS_MAX,
-        }
-    )
-
-
-def _future_episode_ok(
-    database: sqlite3.Connection, episode_id: int, context: Any
-) -> bool:
-    if context is None:
-        return False
-    repository = ContextRepository(database)
-    work = WorkRepository(database).get()
-    if work is None:
-        return False
-    target = repository.get_episode_order(work.id, episode_id)
-    if target is None:
-        return False
-    return all(
-        (item.chapter_position, item.episode_position) < target
-        for item in context.recent_context.previous_episode_summaries
-    )
-
-
-def _future_state_ok(
-    database: sqlite3.Connection, episode_id: int, context: Any
-) -> bool:
-    if context is None:
-        return False
-    repository = ContextRepository(database)
-    work = WorkRepository(database).get()
-    if work is None:
-        return False
-    target = repository.get_episode_order(work.id, episode_id)
-    if target is None:
-        return False
-    for participant in context.participants:
-        state = participant.effective_state
-        if state is None:
-            continue
-        source_order = repository.get_episode_order(work.id, state.source_episode_id)
-        if source_order is None or source_order > target:
-            return False
-    return True
-
-
-def _future_knowledge_ok(
-    database: sqlite3.Connection, episode_id: int, context: Any
-) -> bool:
-    if context is None:
-        return False
-    repository = ContextRepository(database)
-    work = WorkRepository(database).get()
-    if work is None:
-        return False
-    target = repository.get_episode_order(work.id, episode_id)
-    if target is None:
-        return False
-    for participant in context.participants:
-        for item in participant.known_information:
-            source_order = repository.get_episode_order(work.id, item.source_episode_id)
-            if source_order is None or source_order > target:
-                return False
-    return True
-
-
 def _future_disclosure_ok(
     database: sqlite3.Connection, episode_id: int, context: Any
 ) -> bool:
-    if context is None:
-        return False
-    repository = ContextRepository(database)
-    work = WorkRepository(database).get()
-    if work is None:
-        return False
-    target = repository.get_episode_order(work.id, episode_id)
-    if target is None:
-        return False
-    safe_items = (
-        *context.reader_context.known_before_episode,
-        *context.reader_context.reveal_this_episode,
-    )
-    return all(
-        (boundary := repository.get_episode_order(work.id, disclosure.episode_id))
-        is not None
-        and boundary <= target
-        for item in safe_items
-        for disclosure in (repository.disclosure(work.id, item.id),)
-        if disclosure is not None
-    )
-
-
-def _other_work_ok(database: sqlite3.Connection, episode_id: int) -> bool:
-    work = WorkRepository(database).get()
-    if work is None:
-        return False
-    other = database.execute(
-        "SELECT id FROM episodes WHERE work_id != ? ORDER BY id LIMIT 1", (work.id,)
-    ).fetchone()
-    if other is None:
-        return True
-    try:
-        OutlineService(database).get_episode_outline(other[0])
-    except WorkScopeError:
-        return True
-    except Exception:
-        return False
-    return False
-
-
-def _protected_statements_absent(
-    database: sqlite3.Connection, payload: Any, context: Any
-) -> bool:
-    if context is None:
-        return False
-    work = WorkRepository(database).get()
-    if work is None:
-        return False
-    repository = ContextRepository(database)
-    statements = {
-        item.statement
-        for guard in context.protected_information_guards
-        if (item := repository.information(work.id, guard.information_item_id))
-        is not None
-    }
-    serialized = repr(payload)
-    return bool(statements) and all(
-        statement not in serialized for statement in statements
-    )
-
-
-def _safe_keys(value: Any) -> bool:
-    return not _keys(value) & {
-        "private_notes",
-        "profile_json",
-        "death_date",
-        "details_json",
-        "notes_json",
-    }
-
-
-def _keys_absent(value: Any, forbidden: set[str]) -> bool:
-    return not _keys(value) & forbidden
-
-
-def _keys(value: Any) -> set[str]:
-    if isinstance(value, dict):
-        return set(value) | {key for item in value.values() for key in _keys(item)}
-    if isinstance(value, (list, tuple)):
-        return {key for item in value for key in _keys(item)}
-    return set()
+    """Compatibility wrapper for strict disclosure regression tests."""
+    return strict_safe_disclosures(database, episode_id, context)
 
 
 def _has_deprecated(value: Any) -> bool:
-    if hasattr(value, "canon_status") and value.canon_status == "deprecated":
-        return True
-    if isinstance(value, dict):
-        return any(_has_deprecated(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_has_deprecated(item) for item in value)
-    return False
+    """Compatibility wrapper for deprecated-payload regression tests."""
+    return has_deprecated(value)
