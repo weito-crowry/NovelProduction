@@ -139,7 +139,9 @@ def test_partial_forward_reorder_restores_unaffected_siblings_and_supports_follo
         assert after[episode.id].version == before[episode.id].version + 1
 
     followed_up = service.reorder_episode(
-        episodes[1].id, target_position=4, expected_version=after[episodes[1].id].version
+        episodes[1].id,
+        target_position=4,
+        expected_version=after[episodes[1].id].version,
     )
     assert [row.position for row in followed_up] == [1, 2, 3, 4, 5]
     assert [row.id for row in followed_up] == [
@@ -188,4 +190,11 @@ def test_partial_reorder_then_append_uses_next_contiguous_position(
     appended = service.create_episode(chapter.id, "話6")
 
     assert appended.position == 6
-    assert [row.position for row in service.list_episodes(chapter.id)] == [1, 2, 3, 4, 5, 6]
+    assert [row.position for row in service.list_episodes(chapter.id)] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]

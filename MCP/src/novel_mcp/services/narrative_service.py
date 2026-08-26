@@ -253,10 +253,7 @@ class NarrativeService:
             changed_start = min(old_index, new_index)
             changed_end = max(old_index, new_index)
             affected = tuple(row.id for row in ordered[changed_start : changed_end + 1])
-            final_positions = {
-                row.id: index + 1
-                for index, row in enumerate(ordered)
-            }
+            final_positions = {row.id: index + 1 for index, row in enumerate(ordered)}
             self._repository.reorder_positions(
                 table=table,
                 parent_column=parent_column,
