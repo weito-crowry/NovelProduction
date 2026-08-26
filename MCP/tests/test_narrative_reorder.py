@@ -110,3 +110,82 @@ def test_stale_reorder_is_rejected_without_mutation(service: NarrativeService) -
         service.reorder_episode(episodes[0].id, target_position=2, expected_version=1)
 
     assert service.list_episodes(chapter.id) == before
+
+
+def test_partial_forward_reorder_restores_unaffected_siblings_and_supports_follow_up(
+    service: NarrativeService,
+) -> None:
+    chapter = service.create_chapter("章")
+    episodes = [service.create_episode(chapter.id, f"話{i}") for i in range(1, 6)]
+    before = {row.id: row for row in service.list_episodes(chapter.id)}
+
+    reordered = service.reorder_episode(
+        episodes[1].id, target_position=3, expected_version=1
+    )
+
+    assert [row.position for row in reordered] == [1, 2, 3, 4, 5]
+    assert [row.id for row in reordered] == [
+        episodes[0].id,
+        episodes[2].id,
+        episodes[1].id,
+        episodes[3].id,
+        episodes[4].id,
+    ]
+    after = {row.id: row for row in reordered}
+    for episode in (episodes[0], episodes[3], episodes[4]):
+        assert after[episode.id].position == before[episode.id].position
+        assert after[episode.id].version == before[episode.id].version
+    for episode in (episodes[1], episodes[2]):
+        assert after[episode.id].version == before[episode.id].version + 1
+
+    followed_up = service.reorder_episode(
+        episodes[1].id, target_position=4, expected_version=after[episodes[1].id].version
+    )
+    assert [row.position for row in followed_up] == [1, 2, 3, 4, 5]
+    assert [row.id for row in followed_up] == [
+        episodes[0].id,
+        episodes[2].id,
+        episodes[3].id,
+        episodes[1].id,
+        episodes[4].id,
+    ]
+
+
+def test_partial_backward_reorder_preserves_unaffected_positions_and_versions(
+    service: NarrativeService,
+) -> None:
+    chapter = service.create_chapter("章")
+    episodes = [service.create_episode(chapter.id, f"話{i}") for i in range(1, 6)]
+    before = {row.id: row for row in service.list_episodes(chapter.id)}
+
+    reordered = service.reorder_episode(
+        episodes[3].id, target_position=2, expected_version=1
+    )
+
+    assert [row.position for row in reordered] == [1, 2, 3, 4, 5]
+    assert [row.id for row in reordered] == [
+        episodes[0].id,
+        episodes[3].id,
+        episodes[1].id,
+        episodes[2].id,
+        episodes[4].id,
+    ]
+    after = {row.id: row for row in reordered}
+    for episode in (episodes[0], episodes[4]):
+        assert after[episode.id].position == before[episode.id].position
+        assert after[episode.id].version == before[episode.id].version
+    for episode in (episodes[1], episodes[2], episodes[3]):
+        assert after[episode.id].version == before[episode.id].version + 1
+
+
+def test_partial_reorder_then_append_uses_next_contiguous_position(
+    service: NarrativeService,
+) -> None:
+    chapter = service.create_chapter("章")
+    episodes = [service.create_episode(chapter.id, f"話{i}") for i in range(1, 6)]
+
+    service.reorder_episode(episodes[1].id, target_position=3, expected_version=1)
+    appended = service.create_episode(chapter.id, "話6")
+
+    assert appended.position == 6
+    assert [row.position for row in service.list_episodes(chapter.id)] == [1, 2, 3, 4, 5, 6]

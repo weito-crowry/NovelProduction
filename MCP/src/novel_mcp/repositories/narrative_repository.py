@@ -202,11 +202,18 @@ class NarrativeRepository:
                 f"WHERE work_id = ? AND {parent_column} = ? AND id = ?",
                 (temporary_base + index, work_id, parent_id, int(row[0])),
             )
-        for entity_id in affected_ids:
+        affected = frozenset(affected_ids)
+        for row in rows:
+            entity_id = int(row[0])
+            if entity_id in affected:
+                update = (
+                    f"UPDATE {table} SET position = ?, version = version + 1, "
+                    "updated_at = CURRENT_TIMESTAMP "
+                )
+            else:
+                update = f"UPDATE {table} SET position = ? "
             self._connection.execute(
-                f"UPDATE {table} SET position = ?, version = version + 1, "
-                "updated_at = CURRENT_TIMESTAMP "
-                f"WHERE work_id = ? AND {parent_column} = ? AND id = ?",
+                f"{update}WHERE work_id = ? AND {parent_column} = ? AND id = ?",
                 (
                     final_positions[entity_id],
                     work_id,

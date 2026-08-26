@@ -256,7 +256,6 @@ class NarrativeService:
             final_positions = {
                 row.id: index + 1
                 for index, row in enumerate(ordered)
-                if row.id in affected
             }
             self._repository.reorder_positions(
                 table=table,

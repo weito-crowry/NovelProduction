@@ -280,7 +280,8 @@ scenes:   id, work_id, episode_id, position, title, summary, purpose,
 `planned|outlined|drafting|revising|final`. Chapter and episode positions
 are unique within their work/parent; scene positions are unique within an
 episode. Reorder is one transaction: the moved row requires
-`expected_version`, temporary negative positions avoid unique collisions, and
+`expected_version`, collision-free temporary positions outside the live range
+avoid unique collisions, and
 every moved or shifted row increments its version. A no-op does not increment
 versions, and a failed reorder rolls back all positions and versions.
 
