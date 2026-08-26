@@ -41,3 +41,30 @@ class ValidationError(ValueError, NovelMcpError):
         self.field = field
         self.message = message
         super().__init__(f"{self.code}: {message}")
+
+
+class CanonReasonRequired(NovelMcpError):
+    """Raised when a protected canon mutation has no reason."""
+
+    code = "CANON_REASON_REQUIRED"
+
+    def __init__(self, message: str = "reason is required") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class CanonPolicyError(NovelMcpError):
+    """Raised when a canon mutation violates the canon policy."""
+
+    code = "CANON_POLICY_ERROR"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class CanonDecisionNotFoundError(NovelMcpError):
+    """Raised when a canon decision is absent."""
+
+    code = "NOT_FOUND"
+
+    def __init__(self, message: str = "NOT_FOUND") -> None:
+        super().__init__(message)
