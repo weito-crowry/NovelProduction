@@ -48,6 +48,16 @@ async def _run_stdio_smoke(db_path: Path) -> str:
                 chapter = _data(
                     await session.call_tool("chapter_create", {"title": "章"})
                 )
+                search_before_write = await session.call_tool(
+                    "world_fact_search", {"query": "検索前の設定", "limit": 10}
+                )
+                assert _data(search_before_write) == []
+                created_after_search = _data(
+                    await session.call_tool(
+                        "world_fact_create", {"statement": "検索後に作成する設定"}
+                    )
+                )
+                assert created_after_search["statement"] == "検索後に作成する設定"
                 previous = _data(
                     await session.call_tool(
                         "episode_create",

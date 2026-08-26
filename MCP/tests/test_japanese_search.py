@@ -10,7 +10,9 @@ from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
 from novel_mcp.repositories.search_repository import SearchRepository
 from novel_mcp.services.character_service import CharacterService
+from novel_mcp.services.narrative_service import NarrativeService
 from novel_mcp.services.search_service import SearchService
+from novel_mcp.services.work_service import WorkService
 from novel_mcp.services.world_fact_service import WorldFactService
 
 
@@ -110,4 +112,70 @@ def test_search_limit_is_bounded(database: sqlite3.Connection) -> None:
             )
         )
         == 100
+    )
+
+
+def _require_trigram(database: sqlite3.Connection) -> None:
+    if not SearchRepository(database).supports_trigram:
+        pytest.skip("SQLite build does not provide FTS5 trigram")
+
+
+def test_trigram_search_then_work_update_does_not_leak_transaction(
+    database: sqlite3.Connection,
+) -> None:
+    _require_trigram(database)
+    WorldFactService(database).create("検索対象の設定")
+    SearchService(database).search_world_facts("検索対象", 10)
+
+    assert database.in_transaction is False
+    updated = WorkService(database).update("updated", 1)
+
+    assert updated.version == 2
+
+
+def test_trigram_search_then_world_fact_create_does_not_leak_transaction(
+    database: sqlite3.Connection,
+) -> None:
+    _require_trigram(database)
+    SearchService(database).search_world_facts("検索対象", 10)
+
+    assert database.in_transaction is False
+    created = WorldFactService(database).create("新しい設定")
+
+    assert created.statement == "新しい設定"
+
+
+def test_trigram_search_then_chapter_create_does_not_leak_transaction(
+    database: sqlite3.Connection,
+) -> None:
+    _require_trigram(database)
+    SearchService(database).search_world_facts("検索対象", 10)
+
+    assert database.in_transaction is False
+    created = NarrativeService(database).create_chapter("新しい章")
+
+    assert created.title == "新しい章"
+
+
+def test_trigram_search_preserves_caller_transaction_ownership(
+    database: sqlite3.Connection,
+) -> None:
+    _require_trigram(database)
+    database.execute("BEGIN IMMEDIATE")
+    database.execute(
+        "INSERT INTO world_facts "
+        "(work_id, topic_key, title, statement) VALUES (?, ?, ?, ?)",
+        (1, "outer", "外側transaction", "外側transaction検索対象"),
+    )
+
+    SearchService(database).search_world_facts("外側transaction", 10)
+
+    assert database.in_transaction is True
+    database.rollback()
+    assert database.in_transaction is False
+    assert (
+        database.execute(
+            "SELECT COUNT(*) FROM world_facts WHERE topic_key = ?", ("outer",)
+        ).fetchone()[0]
+        == 0
     )
