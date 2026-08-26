@@ -189,7 +189,7 @@ git commit -m "feat: add explicit work initialization"
   locking error mapping from Tasks 1–2.
 - Produces: `WorldFactService.create(statement: str, valid_from: str | None, valid_to: str | None) -> WorldFactRecord`,
   `get(fact_id: int) -> WorldFactRecord`,
-  `update(fact_id: int, statement: str, expected_version: int) -> WorldFactRecord`,
+  `update(fact_id: int, statement: str, expected_version: int, reason: str | None = None) -> WorldFactRecord`,
   and `search(query: str, limit: int) -> tuple[WorldFactRecord, ...]`.
 
 - [ ] **Step 1: Write the failing test**
@@ -256,7 +256,7 @@ git commit -m "feat: add world fact service"
 - Consumes: configured-work scope and core timeline tables from Task 1.
 - Produces: `create_event(...) -> TimelineEventRecord`,
   `get_event(event_id: int) -> TimelineEventRecord`,
-  `update_event(event_id: int, expected_version: int, ...) -> TimelineEventRecord`,
+  `update_event(event_id: int, expected_version: int, ..., reason: str | None = None) -> TimelineEventRecord`,
   `search_events(query: str, limit: int) -> tuple[TimelineEventRecord, ...]`,
   `range_events(start: str, end: str, limit: int) -> tuple[TimelineEventRecord, ...]`,
   `move_event(event_id: int, expected_version: int, new_date: str) -> TimelineEventRecord`,
@@ -327,10 +327,10 @@ git commit -m "feat: add timeline event operations"
 - Consumes: configured-work scope and optimistic-locking primitives from Tasks 1–4.
 - Produces: `CharacterService.create(name: str, profile: str | None) -> CharacterRecord`,
   `get(character_id: int) -> CharacterRecord`,
-  `update(character_id: int, expected_version: int, ...) -> CharacterRecord`,
+  `update(character_id: int, expected_version: int, ..., reason: str | None = None) -> CharacterRecord`,
   `search(query: str, limit: int) -> tuple[CharacterRecord, ...]`,
   `RelationshipService.create(source_character_id: int, target_character_id: int, relation_type: str) -> RelationshipRecord`,
-  `update(relationship_id: int, expected_version: int, relation_type: str) -> RelationshipRecord`,
+  `update(relationship_id: int, expected_version: int, relation_type: str, reason: str | None = None) -> RelationshipRecord`,
   and `search(character_id: int | None, limit: int) -> tuple[RelationshipRecord, ...]`.
 
 - [ ] **Step 1: Write the failing test**
@@ -392,7 +392,7 @@ git commit -m "feat: add characters and relationships"
 
 **Interfaces:**
 - Consumes: mutable entity repositories, status values, and transaction boundary from Tasks 1–5.
-- Produces: `set_canon_status(entity_type: str, entity_id: int, target_status: str, reason: str | None) -> CanonDecisionRecord`,
+- Produces: `set_canon_status(entity_type: str, entity_id: int, target_status: str, expected_version: int, reason: str | None) -> CanonDecisionRecord`,
   `record_decision(summary: str, reason: str, changes: Sequence[CanonChange]) -> CanonDecisionRecord`,
   `get_decision(decision_id: int) -> CanonDecisionRecord`, and
   `search_decisions(query: str, limit: int) -> tuple[CanonDecisionRecord, ...]`.
