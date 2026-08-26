@@ -14,7 +14,7 @@ def test_development_foundation_files_and_constraints_exist() -> None:
     assert (mcp_root / ".pre-commit-config.yaml").is_file()
     assert (mcp_root / "scripts" / "check_source_size.py").is_file()
     migrations = sorted(path.name for path in (mcp_root / "migrations").glob("*.sql"))
-    assert migrations == ["001_initial.sql", "002_search.sql"]
+    assert migrations == ["001_initial.sql", "002_search.sql", "003_narrative.sql"]
 
     pyproject_text = (mcp_root / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.10"' in pyproject_text
