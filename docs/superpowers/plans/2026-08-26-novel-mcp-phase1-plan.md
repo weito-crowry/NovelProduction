@@ -585,3 +585,14 @@ file is generated in the repository working tree.
 git add MCP/src/novel_mcp/mcp_server.py MCP/src/novel_mcp/tool_errors.py MCP/tests/test_phase1_mcp_tools.py MCP/tests/test_phase1_acceptance.py
 git commit -m "feat: expose Phase 1 MCP tools"
 ```
+
+## PR #1 specification-alignment correction
+
+The unmerged PR review requires the approved normalized Phase 1 data model,
+non-exact timeline ranges, SQLite invariants, trigram-first search, explicit
+canon transition/noise policy, and MCP descriptions/schemas. The detailed
+inline execution plan is
+`docs/superpowers/plans/2026-08-26-novel-mcp-phase1-pr1-review-fixes.md`.
+It corrects the pre-merge `001_initial.sql`/`002_search.sql` bytes in place,
+keeps future `003_narrative.sql`/`004_drafts.sql` responsibilities untouched,
+and does not expand the 23-tool Phase 1 boundary.
