@@ -9,6 +9,7 @@ from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
 from novel_mcp.errors import (
     CanonEntityNotFoundError,
+    CanonPolicyError,
     CanonReasonRequired,
     ValidationError,
     VersionConflictError,
@@ -70,6 +71,15 @@ def test_canonical_content_change_requires_reason_and_records_payloads(
     )
     assert decision.changes[0].before_payload["body"] == "旧記述"
     assert decision.changes[0].after_payload["body"] == "新記述"
+
+
+def test_invalid_content_fields_raise_canon_policy_error(
+    service: CanonService,
+) -> None:
+    fact = WorldFactService(service.connection).create("旧記述", None, None)
+
+    with pytest.raises(CanonPolicyError, match="CANON_POLICY_ERROR"):
+        service.update_content("world_fact", fact.id, {}, reason=None)
 
 
 def test_record_decision_supports_multiple_changes_and_round_trip_search(

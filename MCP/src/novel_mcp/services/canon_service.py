@@ -113,13 +113,16 @@ class CanonService:
             change = CanonChange(
                 entity_type, entity_id, "content_changed", before, after
             )
-            if not self._repository.update_content(
+            updated = self._repository.update_content(
                 work_id=work_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
                 expected_version=cast(int, before["version"]),
                 fields=normalized,
-            ):
+            )
+            if updated is None:
+                raise CanonPolicyError("invalid content fields")
+            if not updated:
                 raise VersionConflictError("VERSION_CONFLICT")
             decision_id = self._repository.insert_decision(
                 work_id=work_id,

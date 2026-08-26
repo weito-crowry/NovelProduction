@@ -116,7 +116,7 @@ class CanonRepository:
         entity_id: int,
         expected_version: int,
         fields: Mapping[str, object],
-    ) -> bool:
+    ) -> bool | None:
         table, columns = _ENTITY_COLUMNS[entity_type]
         allowed = set(columns) - {
             "canon_status",
@@ -125,7 +125,7 @@ class CanonRepository:
             "character_key",
         }
         if not fields or not set(fields).issubset(allowed):
-            return False
+            return None
         assignments = ", ".join(f"{column} = ?" for column in fields)
         values = [fields[column] for column in fields]
         cursor = self._connection.execute(
