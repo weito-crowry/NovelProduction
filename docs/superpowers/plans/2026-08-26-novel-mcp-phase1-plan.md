@@ -255,6 +255,7 @@ git commit -m "feat: add world fact service"
 **Interfaces:**
 - Consumes: configured-work scope and core timeline tables from Task 1.
 - Produces: `create_event(...) -> TimelineEventRecord`,
+  `get_event(event_id: int) -> TimelineEventRecord`,
   `update_event(event_id: int, expected_version: int, ...) -> TimelineEventRecord`,
   `search_events(query: str, limit: int) -> tuple[TimelineEventRecord, ...]`,
   `range_events(start: str, end: str, limit: int) -> tuple[TimelineEventRecord, ...]`,
@@ -562,9 +563,10 @@ connection management below the service boundary. Do not add Phase 2 or Phase
 
 Run: `python -m pytest MCP/tests/test_phase1_mcp_tools.py MCP/tests/test_phase1_acceptance.py -q`
 
-Expected: PASS, including tool registration, successful structured output,
-validation errors, stale-version errors, canon reason errors, and no future
-phase tools.
+Expected: PASS, including tool registration against a literal expected Phase 1
+set, successful structured output, validation errors, stale-version errors,
+canon reason errors, direct timeline retrieval beyond the range default limit,
+and no future phase tools.
 
 - [ ] **Step 5: Validation**
 
