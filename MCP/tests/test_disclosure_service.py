@@ -8,6 +8,7 @@ from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
 from novel_mcp.errors import ValidationError, VersionConflictError
+from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.disclosure_service import DisclosureService
 from novel_mcp.services.information_service import InformationService
 from novel_mcp.services.narrative_service import NarrativeService
@@ -78,3 +79,18 @@ def test_reader_disclosure_move_requires_current_version(services) -> None:
         item.id, second.id, expected_version=disclosure.version
     )
     assert (moved.episode_id, moved.version) == (second.id, 2)
+
+
+def test_deprecated_information_is_excluded_from_boundary_reads(services) -> None:
+    item = services.information.create_information("撤回情報")
+    chapter = services.narrative.create_chapter("章")
+    first = services.narrative.create_episode(chapter.id, "第一話")
+    second = services.narrative.create_episode(chapter.id, "第二話")
+    services.disclosure.set_reader_disclosure(item.id, first.id, expected_version=None)
+
+    canon = CanonService(services.connection)
+    canon.set_canon_status("information_item", item.id, "canon", 1, "採用")
+    canon.set_canon_status("information_item", item.id, "deprecated", 2, "撤回")
+
+    assert services.disclosure.known_before(item.id, second.id) == ()
+    assert services.disclosure.reveal_this_episode(item.id, first.id) == ()

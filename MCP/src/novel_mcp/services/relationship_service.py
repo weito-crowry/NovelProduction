@@ -104,7 +104,19 @@ class RelationshipService:
         description: str | None = None,
         valid_from_episode_id: int | None = None,
         valid_to_episode_id: int | None = None,
+        clear_valid_from: bool = False,
+        clear_valid_to: bool = False,
     ) -> RelationshipRecord:
+        if valid_from_episode_id is not None and clear_valid_from:
+            raise ValidationError(
+                "valid_from_episode_id cannot be combined with clear_valid_from",
+                field="valid_from_episode_id",
+            )
+        if valid_to_episode_id is not None and clear_valid_to:
+            raise ValidationError(
+                "valid_to_episode_id cannot be combined with clear_valid_to",
+                field="valid_to_episode_id",
+            )
         normalized_type = self._required_text(
             relationship_type if relationship_type is not None else relation_type,
             "relationship_type",
@@ -114,12 +126,16 @@ class RelationshipService:
         if current is None:
             raise RelationshipNotFoundError("NOT_FOUND")
         next_from = (
-            valid_from_episode_id
+            None
+            if clear_valid_from
+            else valid_from_episode_id
             if valid_from_episode_id is not None
             else current.valid_from_episode_id
         )
         next_to = (
-            valid_to_episode_id
+            None
+            if clear_valid_to
+            else valid_to_episode_id
             if valid_to_episode_id is not None
             else current.valid_to_episode_id
         )
@@ -145,12 +161,12 @@ class RelationshipService:
             ),
             **(
                 {"valid_from_episode_id": next_from}
-                if valid_from_episode_id is not None
+                if clear_valid_from or valid_from_episode_id is not None
                 else {}
             ),
             **(
                 {"valid_to_episode_id": next_to}
-                if valid_to_episode_id is not None
+                if clear_valid_to or valid_to_episode_id is not None
                 else {}
             ),
         }
@@ -223,6 +239,18 @@ class RelationshipService:
         valid_from_episode_id: int | None,
         valid_to_episode_id: int | None,
     ) -> None:
+        for field, episode_id in (
+            ("valid_from_episode_id", valid_from_episode_id),
+            ("valid_to_episode_id", valid_to_episode_id),
+        ):
+            if episode_id is not None and (
+                isinstance(episode_id, bool)
+                or not isinstance(episode_id, int)
+                or episode_id < 1
+            ):
+                raise ValidationError(
+                    f"{field} must be a positive integer", field=field
+                )
         start = self._episode_order(work_id, valid_from_episode_id)
         end = self._episode_order(work_id, valid_to_episode_id)
         if start is not None and end is not None and start >= end:

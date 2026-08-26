@@ -11,8 +11,18 @@ from novel_mcp.tool_support import call_service, json_text
 
 Registrar = Callable[..., None]
 Limit = Annotated[int, Field(ge=0, le=100)]
+OptionalEpisodeId = Annotated[int | None, Field(ge=1)]
 CanonStatus = Literal["idea", "draft", "canon", "deprecated"]
-EntityType = Literal["world_fact", "timeline_event", "character", "relationship"]
+EntityType = Literal[
+    "world_fact",
+    "timeline_event",
+    "character",
+    "relationship",
+    "chapter",
+    "episode",
+    "scene",
+    "information_item",
+]
 DatePrecision = Literal["unknown", "year", "season", "month", "day"]
 
 
@@ -304,6 +314,8 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         target_character_id: int,
         relationship_type: Annotated[str, Field(min_length=1)],
         description: str = "",
+        valid_from_episode_id: OptionalEpisodeId = None,
+        valid_to_episode_id: OptionalEpisodeId = None,
     ) -> dict[str, Any]:
         return await _call(
             services.relationship.create,
@@ -311,6 +323,8 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
             target_character_id,
             relationship_type,
             description,
+            valid_from_episode_id=valid_from_episode_id,
+            valid_to_episode_id=valid_to_episode_id,
         )
 
     async def relationship_update(
@@ -319,6 +333,10 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         relationship_type: Annotated[str, Field(min_length=1)],
         description: str | None = None,
         reason: str | None = None,
+        valid_from_episode_id: OptionalEpisodeId = None,
+        valid_to_episode_id: OptionalEpisodeId = None,
+        clear_valid_from: bool = False,
+        clear_valid_to: bool = False,
     ) -> dict[str, Any]:
         return await _call(
             services.relationship.update,
@@ -327,6 +345,10 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
             relationship_type,
             reason,
             description=description,
+            valid_from_episode_id=valid_from_episode_id,
+            valid_to_episode_id=valid_to_episode_id,
+            clear_valid_from=clear_valid_from,
+            clear_valid_to=clear_valid_to,
         )
 
     async def relationship_search(

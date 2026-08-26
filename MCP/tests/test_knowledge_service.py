@@ -8,6 +8,7 @@ from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
 from novel_mcp.errors import ValidationError, VersionConflictError
+from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.character_service import CharacterService
 from novel_mcp.services.information_service import InformationService
 from novel_mcp.services.knowledge_service import KnowledgeService
@@ -123,3 +124,20 @@ def test_effective_knowledge_uses_current_narrative_order(services) -> None:
     result = services.knowledge.get_character_knowledge(character.id, third.id)
     assert result[0].knowledge_state == "suspects"
     assert result[0].event_episode_id == first.id
+
+
+def test_deprecated_information_is_excluded_from_effective_knowledge(services) -> None:
+    character = services.character.create("主人公")
+    item = services.information.create_information("撤回情報")
+    chapter = services.narrative.create_chapter("章")
+    episode = services.narrative.create_episode(chapter.id, "第一話")
+    services.knowledge.set_character_knowledge(
+        character.id, item.id, episode.id, "knows", expected_version=None
+    )
+
+    canon = CanonService(services.connection)
+    canon.set_canon_status("information_item", item.id, "canon", 1, "採用")
+    canon.set_canon_status("information_item", item.id, "deprecated", 2, "撤回")
+
+    assert services.knowledge.get_character_knowledge(character.id, episode.id) == ()
+    assert services.knowledge.get_known_information(character.id, episode.id) == ()

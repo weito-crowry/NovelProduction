@@ -196,3 +196,102 @@ def test_phase2_tools_return_structured_narrative_and_state_data(
         )
     )
     assert duplicate["error"]["code"] == "RELATION_INTEGRITY_ERROR"
+
+
+def test_deprecated_information_remains_admin_visible_but_not_effective_knowledge(
+    server, tmp_path: Path
+) -> None:
+    config = _config(tmp_path)
+    initialize_work(config.db_path, "Phase 2")
+    character = _payload(
+        asyncio.run(server.call_tool("character_create", {"display_name": "主人公"}))
+    )["data"]
+    chapter = _payload(
+        asyncio.run(server.call_tool("chapter_create", {"title": "章"}))
+    )["data"]
+    episode = _payload(
+        asyncio.run(
+            server.call_tool(
+                "episode_create", {"chapter_id": chapter["id"], "title": "話"}
+            )
+        )
+    )["data"]
+    item = _payload(
+        asyncio.run(
+            server.call_tool(
+                "information_create",
+                {"statement": "撤回対象情報", "truth_status": "uncertain"},
+            )
+        )
+    )["data"]
+    _payload(
+        asyncio.run(
+            server.call_tool(
+                "reader_disclosure_set",
+                {"information_item_id": item["id"], "episode_id": episode["id"]},
+            )
+        )
+    )
+    _payload(
+        asyncio.run(
+            server.call_tool(
+                "character_knowledge_set",
+                {
+                    "character_id": character["id"],
+                    "information_item_id": item["id"],
+                    "episode_id": episode["id"],
+                    "knowledge_state": "knows",
+                },
+            )
+        )
+    )
+    _payload(
+        asyncio.run(
+            server.call_tool(
+                "canon_status_set",
+                {
+                    "entity_type": "information_item",
+                    "entity_id": item["id"],
+                    "target_status": "canon",
+                    "expected_version": 1,
+                    "reason": "採用",
+                },
+            )
+        )
+    )
+    deprecated = _payload(
+        asyncio.run(
+            server.call_tool(
+                "canon_status_set",
+                {
+                    "entity_type": "information_item",
+                    "entity_id": item["id"],
+                    "target_status": "deprecated",
+                    "expected_version": 2,
+                    "reason": "撤回",
+                },
+            )
+        )
+    )
+    assert deprecated["ok"] is True
+
+    admin_get = _payload(
+        asyncio.run(
+            server.call_tool("information_get", {"information_item_id": item["id"]})
+        )
+    )
+    admin_search = _payload(
+        asyncio.run(server.call_tool("information_search", {"query": "撤回対象情報"}))
+    )
+    assert admin_get["data"]["canon_status"] == "deprecated"
+    assert [row["id"] for row in admin_search["data"]] == [item["id"]]
+
+    effective = _payload(
+        asyncio.run(
+            server.call_tool(
+                "character_knowledge_get",
+                {"character_id": character["id"], "episode_id": episode["id"]},
+            )
+        )
+    )
+    assert effective["data"] == []

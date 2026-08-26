@@ -96,6 +96,8 @@ class DisclosureService:
         self, information_item_id: int, episode_id: int
     ) -> tuple[InformationItemRecord, ...]:
         item, boundary = self._boundary(information_item_id, episode_id)
+        if item.canon_status == "deprecated":
+            return ()
         if boundary < self._episode_order(item.work_id, episode_id):
             return (item,)
         return ()
@@ -104,6 +106,8 @@ class DisclosureService:
         self, information_item_id: int, episode_id: int
     ) -> tuple[InformationItemRecord, ...]:
         item, boundary = self._boundary(information_item_id, episode_id)
+        if item.canon_status == "deprecated":
+            return ()
         if boundary == self._episode_order(item.work_id, episode_id):
             return (item,)
         return ()

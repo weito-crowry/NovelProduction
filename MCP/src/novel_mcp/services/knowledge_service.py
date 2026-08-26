@@ -145,7 +145,9 @@ class KnowledgeService:
             information_item = self._information_repository.get(
                 work_id=work_id, item_id=event.information_item_id
             )
-            if information_item is None:
+            if information_item is None or (
+                information_item.canon_status == "deprecated"
+            ):
                 continue
             results.append(
                 EffectiveKnowledgeRecord(

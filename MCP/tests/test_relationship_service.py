@@ -213,3 +213,45 @@ def test_temporal_relationships_allow_adjacent_ranges_and_reject_overlap(
             valid_from_episode_id=episodes[0].id,
             valid_to_episode_id=episodes[2].id,
         )
+
+
+def test_canonical_relationship_boundary_clear_requires_reason_and_audits(
+    service,
+) -> None:
+    source = service.character.create("A")
+    target = service.character.create("B")
+    chapter = service.narrative.create_chapter("章")
+    first = service.narrative.create_episode(chapter.id, "第一話")
+    second = service.narrative.create_episode(chapter.id, "第二話")
+    relation = service.relationship.create(
+        source.id,
+        target.id,
+        "ally",
+        valid_from_episode_id=first.id,
+        valid_to_episode_id=second.id,
+    )
+    CanonService(service.connection).set_canon_status(
+        "relationship", relation.id, "canon", relation.version, "採用"
+    )
+
+    with pytest.raises(CanonReasonRequired, match="CANON_REASON_REQUIRED"):
+        service.relationship.update(
+            relation.id,
+            2,
+            "ally",
+            clear_valid_to=True,
+        )
+    updated = service.relationship.update(
+        relation.id,
+        2,
+        "ally",
+        reason="終端解除",
+        clear_valid_to=True,
+    )
+    assert (updated.valid_from_episode_id, updated.valid_to_episode_id) == (
+        first.id,
+        None,
+    )
+    assert service.connection.execute(
+        "SELECT COUNT(*) FROM canon_decisions"
+    ).fetchone() == (2,)
