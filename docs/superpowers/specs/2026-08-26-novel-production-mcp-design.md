@@ -552,6 +552,10 @@ scenes
 participants[]
   profile
   effective_state
+    physical_state
+    emotional_state
+    beliefs
+    location_world_fact_id
   effective_relationships
   known_information
 
@@ -591,6 +595,23 @@ character knowledge, future reader disclosures, deprecated canon, and data
 belonging to another work. If future information is relevant as an authoring
 constraint, the result may contain an `authoring_guard` describing the guard,
 but must not return the secret's protected body.
+
+Noncritical `known_before_episode` information candidates are relevance-bound
+to explicit current-episode `episode_information` references and effective
+knowledge of current participants. Phase 3 performs no vector or whole-database
+semantic scan for those candidates. This bound does not apply to canonical
+current reveals: every active information item whose `reader_disclosures`
+boundary targets the current episode is relevant to
+`reader_context.reveal_this_episode` even when it has no episode reference and
+no participant knowledge. Current reveals are deduplicated, exclude deprecated
+information, are critical data, and are not truncated by
+`information_items_max`.
+
+Effective character state is the latest state change at or before the target
+according to chapter/episode narrative order, never episode ID ordering. The
+Phase 3 safe projection parses `character_states.beliefs_json` and returns it
+as structured `beliefs` together with physical/emotional state and location.
+Future beliefs are excluded and raw `state_json` is not exposed.
 
 ## Error Model
 
@@ -695,13 +716,17 @@ than raw database row dumps. Participant profiles may contain only `id`,
 `private_notes`, `profile_json`, or `death_date`. World facts omit
 `details_json`; timeline events are limited to the approved safe projection.
 
-Episode references are the relevance boundary: context candidates come from
-`episode_world_facts`, `episode_timeline_events`, and `episode_information`,
-plus effective knowledge of current participants. Phase 3 performs no vector
-or whole-database semantic search. Deprecated target episodes fail with
-`DEPRECATED_CANON_FORBIDDEN`; deprecated referenced entities are excluded.
-`idea`, `draft`, and `canon` remain distinct status values and are not
-implicitly promoted.
+For noncritical `known_before_episode`, episode references are the relevance
+boundary: candidates come from current `episode_information` references plus
+effective knowledge of current participants. Phase 3 performs no vector or
+whole-database semantic search for those candidates. Current reveals are the
+explicit exception: an active `information_item` with a `reader_disclosures`
+boundary at the target episode is canonical current-reveal relevance by itself,
+requires neither an episode reference nor participant knowledge, and is
+critical/non-truncated. Deprecated target episodes fail with
+`DEPRECATED_CANON_FORBIDDEN`; deprecated referenced or current-reveal entities
+are excluded. `idea`, `draft`, and `canon` remain distinct status values and
+are not implicitly promoted.
 
 Any narrative proposition that must not yet be disclosed to the reader is
 stored in `information_items`. `character.private_notes`,
@@ -719,16 +744,22 @@ entry with IDs, reason, guard text, and reveal boundary positions. A stored
 `authoring_guard` is used only when it does not contain the protected
 statement; otherwise a generic safe guard is returned.
 
+Effective participant state uses the latest `character_states` row at or before
+the target by chapter/episode narrative order. Its safe Phase 3 projection
+includes physical state, emotional state, structured `beliefs` parsed from
+`beliefs_json`, and location. Future state and future beliefs are excluded;
+raw `state_json` is not returned.
+
 The context has fixed server-side limits: two previous episode summaries,
 4000 characters of the previous episode's latest draft tail, 30 referenced
 world facts, 30 referenced timeline events, and 50 distinct noncritical
-reader-safe information items. Current episode data, participants, scenes,
-current reveals, and safe guards are not silently dropped by those limits.
-Selection and ordering are deterministic, narrative order uses chapter and
-episode positions, and context metadata reports limits, returned counts,
-omitted counts, and truncation flags without secret text. Context assembly is
-strictly read-only and performs no mutation, migration, auto-canon,
-auto-summary, or draft save.
+reader-safe `known_before_episode` information items. Current episode data,
+participants, scenes, all active current reveals, and safe guards are not
+silently dropped by those limits. Selection and ordering are deterministic,
+narrative order uses chapter and episode positions, and context metadata
+reports limits, returned counts, omitted counts, and truncation flags without
+secret text. Context assembly is strictly read-only and performs no mutation,
+migration, auto-canon, auto-summary, or draft save.
 
 ### Phase 3 MCP surface and acceptance
 
@@ -753,8 +784,14 @@ The internal real-writing acceptance gate records individual booleans for
 migration order, append-only drafts, parent CAS, hash correctness, safe
 outline, bounded/read-only context, all future/deprecated/cross-work/private
 field leakage categories, guard presence, exact tool inventory, and
-`writing_ready`. `writing_ready` is true only when every required assertion is
-true; a process exit code alone is not evidence.
+`writing_ready`. It is an active-probe gate: the qualification database seeds
+hazardous sentinels for future episode/state/knowledge/disclosure,
+deprecated and cross-work data, private fields, protected statements, and data
+beyond every context bound before evaluating the corresponding invariant.
+Missing hazardous source data cannot produce a vacuous PASS. Every reader-safe
+statement returned by the probe must have a reader-disclosure boundary at or
+before the target. `writing_ready` is true only when every required active
+assertion is true; a process exit code alone is not evidence.
 
 ## Acceptance Criteria
 
@@ -817,24 +854,3 @@ The following are deliberately excluded from this design cycle:
   repair, automatic canon mutation/promotion, vector or graph databases,
   automatic prose or outline generation, web/widgets/Apps UI, Docker,
   deployment, production story data, and migrations after `004_drafts.sql`.
-
-These exclusions keep the initial commit limited to repository structure,
-architecture documentation, implementation plans, and project metadata.
-
-## Implementation Detail
-
-The following choices are intentionally implementation-level and are governed
-by the plans rather than by additional product behavior:
-
-- Python package layout uses `MCP/src/novel_mcp`.
-- SQLite access uses standard-library `sqlite3` connections created by the
-  database lifecycle boundary.
-- The official Python MCP SDK v2 is declared as `mcp>=2.0,<3.0` without a
-  patch-level pin in the bootstrap metadata.
-- The stdio adapter is the first transport; tool payloads are structured JSON.
-- Each task adds focused tests before the smallest implementation needed to
-  satisfy them and ends with an independently reviewable commit.
-
-Implementation details may refine internal modules and SQL indexes, but they
-must not alter the status values, table inventory, migration sequence,
-layering, temporal boundaries, or leakage rules defined above.
