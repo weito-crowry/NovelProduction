@@ -89,6 +89,9 @@ the runtime architecture:
   limits; SHOULD thresholds are advisory.
 - Repository GitHub Actions checks run on pushes and pull requests. They cover
   dependency synchronization, Ruff, mypy, pytest, and the source-size gate.
+- The initial core migration is immutable after commit/application. Phase 1's
+  `002_search.sql` may add nullable, rebuildable search/temporal support needed
+  by the Phase 1 service contracts; it must not replace or rewrite `001`.
 
 ## Status Models
 

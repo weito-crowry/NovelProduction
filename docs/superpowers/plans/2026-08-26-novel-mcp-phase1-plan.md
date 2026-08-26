@@ -179,6 +179,7 @@ git commit -m "feat: add explicit work initialization"
 ### Task 3: World Fact CRUD, temporal validity, and search
 
 **Files:**
+- Create: `MCP/migrations/002_search.sql`
 - Create: `MCP/src/novel_mcp/repositories/world_fact_repository.py`
 - Create: `MCP/src/novel_mcp/services/world_fact_service.py`
 - Create: `MCP/tests/test_world_fact_service.py`
@@ -211,10 +212,17 @@ exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Validate temporal bounds before writing, preserve the configured work scope,
-increment `version` only after a matching conditional update, and return
-`NOT_FOUND` for an absent fact. Use deterministic ordering for search results
-and keep the query implementation in the repository.
+Keep `001_initial.sql` immutable. Use `002_search.sql` for the additive nullable
+`valid_from`/`valid_to` columns and rebuildable world-fact search indexes needed
+by the Phase 1 service. The service-facing `statement` is stored as the
+authoritative `body` (and the legacy required `title` adapter field), while an
+opaque internal `fact_key` and the initial `draft` canon status are generated
+below the ordinary service input boundary. Do not expose those schema adapter
+fields in the Task 3 interface. Validate temporal bounds before writing,
+preserve the configured work scope, increment `version` only after a matching
+conditional update, and return `NOT_FOUND` for an absent fact. Use
+deterministic ordering for search results and keep the query implementation in
+the repository.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -233,7 +241,7 @@ Expected: all tests pass and no SQL appears in the service module.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add MCP/src/novel_mcp/repositories/world_fact_repository.py MCP/src/novel_mcp/services/world_fact_service.py MCP/tests/test_world_fact_service.py
+git add MCP/migrations/002_search.sql MCP/src/novel_mcp/repositories/world_fact_repository.py MCP/src/novel_mcp/services/world_fact_service.py MCP/tests/test_world_fact_service.py
 git commit -m "feat: add world fact service"
 ```
 
@@ -432,13 +440,14 @@ git commit -m "feat: enforce canon decision history"
 ### Task 7: Japanese text search baseline
 
 **Files:**
-- Create: `MCP/migrations/002_search.sql`
 - Create: `MCP/src/novel_mcp/repositories/search_repository.py`
 - Create: `MCP/src/novel_mcp/services/search_service.py`
 - Create: `MCP/tests/test_japanese_search.py`
 
 **Interfaces:**
 - Consumes: canonical text rows and migration runner from Tasks 1–6.
+- Consumes the immutable `002_search.sql` additive validity/index migration
+  created in Task 3; Task 7 must not rewrite an applied migration.
 - Produces: `SearchService.search_world_facts(query: str, limit: int) -> tuple[WorldFactRecord, ...]`,
   `search_characters(query: str, limit: int) -> tuple[CharacterRecord, ...]`,
   and deterministic empty-query behavior that returns an empty tuple.
@@ -466,11 +475,13 @@ Expected: FAIL because `002_search.sql` and the search repository do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add only rebuildable search structures in `002_search.sql`. Implement the
-selected SQLite text-search strategy behind `SearchRepository`, preserve work
-scope, normalize the empty query to no results, cap `limit` at the service
-bound, and use a stable tie-breaker for equal matches. Keep canonical rows as
-the only authoritative data.
+Do not modify `002_search.sql`. Implement the selected SQLite text-search
+strategy behind `SearchRepository`, using the rebuildable structures already
+created there and a parameterized `LIKE` fallback when the available SQLite
+build does not provide the preferred tokenizer. Preserve work scope, normalize
+the empty query to no results, cap `limit` at the service bound, and use a
+stable tie-breaker for equal matches. Keep canonical rows as the only
+authoritative data.
 
 - [ ] **Step 4: Run test to verify it passes**
 
