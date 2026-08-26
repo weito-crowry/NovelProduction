@@ -51,7 +51,9 @@ def services(tmp_path: Path):
         connection.close()
 
 
-def test_current_reveal_is_canonical_without_episode_reference_or_knowledge(services) -> None:
+def test_current_reveal_is_canonical_without_episode_reference_or_knowledge(
+    services,
+) -> None:
     chapter = services.narrative.create_chapter("章")
     target = services.narrative.create_episode(chapter.id, "対象話")
     item = services.information.create_information("この話で開示する")
@@ -59,7 +61,9 @@ def test_current_reveal_is_canonical_without_episode_reference_or_knowledge(serv
 
     context = services.context.build_episode_context(target.id)
 
-    assert [value.id for value in context.reader_context.reveal_this_episode] == [item.id]
+    assert [value.id for value in context.reader_context.reveal_this_episode] == [
+        item.id
+    ]
     assert context.reader_context.reveal_this_episode[0].statement == "この話で開示する"
 
 
@@ -72,7 +76,9 @@ def test_current_reveal_is_deduplicated_when_also_referenced(services) -> None:
 
     context = services.context.build_episode_context(target.id)
 
-    assert [value.id for value in context.reader_context.reveal_this_episode] == [item.id]
+    assert [value.id for value in context.reader_context.reveal_this_episode] == [
+        item.id
+    ]
 
 
 def test_current_reveals_are_critical_and_not_capped_at_fifty(services) -> None:
@@ -86,7 +92,9 @@ def test_current_reveals_are_critical_and_not_capped_at_fifty(services) -> None:
 
     context = services.context.build_episode_context(target.id)
 
-    assert [value.id for value in context.reader_context.reveal_this_episode] == item_ids
+    assert [
+        value.id for value in context.reader_context.reveal_this_episode
+    ] == item_ids
     assert len(context.reader_context.reveal_this_episode) == 55
 
 
@@ -107,7 +115,9 @@ def test_deprecated_current_reveal_is_excluded(services) -> None:
     assert context.reader_context.reveal_this_episode == ()
 
 
-def test_effective_state_exposes_structured_beliefs_but_not_state_json(services) -> None:
+def test_effective_state_exposes_structured_beliefs_but_not_state_json(
+    services,
+) -> None:
     chapter = services.narrative.create_chapter("章")
     target = services.narrative.create_episode(chapter.id, "対象話")
     character = services.character.create("主人公")
@@ -144,7 +154,9 @@ def test_effective_beliefs_follow_narrative_order_after_reorder(services) -> Non
 
     before = services.context.build_episode_context(target.id)
     assert before.participants[0].effective_state is not None
-    assert before.participants[0].effective_state.beliefs == {"belief": "PRIOR_BELIEF"}
+    assert before.participants[0].effective_state.beliefs == {
+        "belief": "PRIOR_BELIEF"
+    }
 
     services.narrative.reorder_episode(target.id, 1, target.version)
     after = services.context.build_episode_context(target.id)
@@ -177,7 +189,9 @@ def test_acceptance_helper_detects_deprecated_mapping_payload() -> None:
     assert _has_deprecated({"canon_status": "deprecated"}) is True
 
 
-def test_future_disclosure_probe_rejects_safe_item_without_disclosure(services) -> None:
+def test_future_disclosure_probe_rejects_safe_item_without_disclosure(
+    services,
+) -> None:
     chapter = services.narrative.create_chapter("章")
     target = services.narrative.create_episode(chapter.id, "対象話")
     item = services.information.create_information("漏れてはいけない未開示情報")
@@ -196,7 +210,9 @@ def test_future_disclosure_probe_rejects_safe_item_without_disclosure(services) 
         )
     )
 
-    assert _future_disclosure_ok(services.connection, target.id, fake_context) is False
+    assert (
+        _future_disclosure_ok(services.connection, target.id, fake_context) is False
+    )
 
 
 def test_acceptance_gate_seeds_active_attack_probes(services) -> None:
@@ -221,8 +237,12 @@ def test_acceptance_gate_seeds_active_attack_probes(services) -> None:
         ).fetchone()[0]
         > 30
     )
-    assert services.connection.execute("SELECT COUNT(*) FROM information_items").fetchone()[0] > 50
-    assert services.connection.execute("SELECT COUNT(*) FROM works").fetchone()[0] > 1
+    information_count = services.connection.execute(
+        "SELECT COUNT(*) FROM information_items"
+    ).fetchone()[0]
+    work_count = services.connection.execute("SELECT COUNT(*) FROM works").fetchone()[0]
+    assert information_count > 50
+    assert work_count > 1
     assert (
         services.connection.execute(
             "SELECT COUNT(*) FROM information_items WHERE canon_status = 'deprecated'"
@@ -231,7 +251,8 @@ def test_acceptance_gate_seeds_active_attack_probes(services) -> None:
     )
     assert (
         services.connection.execute(
-            "SELECT COUNT(*) FROM characters WHERE private_notes != '' OR profile_json != '{}'"
+            "SELECT COUNT(*) FROM characters "
+            "WHERE private_notes != '' OR profile_json != '{}'"
         ).fetchone()[0]
         >= 1
     )
