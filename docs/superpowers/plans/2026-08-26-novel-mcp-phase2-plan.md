@@ -267,11 +267,10 @@ Expected: FAIL because reorder methods and atomic position updates are absent.
 
 Validate the target position and moved-row expected version before opening a
 transaction. Use collision-free temporary positions outside the live range,
-then restore every sibling to its final position
-positions and update the moved row in one transaction. Increment the version
-for the moved row and every shifted sibling; a no-op leaves every version
-unchanged. Return the complete ordered sibling list and roll back every
-position/version if any write fails.
+then restore every sibling to its final position and update the moved row in
+one transaction. Increment the version for the moved row and every shifted
+sibling; a no-op leaves every version unchanged. Return the complete ordered
+sibling list and roll back every position/version if any write fails.
 
 - [ ] **Step 4: Run test to verify it passes**
 
