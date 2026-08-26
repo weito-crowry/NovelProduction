@@ -7,6 +7,58 @@ from pathlib import Path
 import pytest
 
 from novel_mcp.database import DatabaseConfig, open_database
+from novel_mcp.errors import MigrationError
+
+MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
+MIGRATION_NAMES = (
+    "001_initial.sql",
+    "002_search.sql",
+    "003_narrative.sql",
+    "004_drafts.sql",
+)
+
+
+def _simple_migration(eol: bytes) -> bytes:
+    return (
+        b"CREATE TABLE schema_migrations "
+        b"(version TEXT PRIMARY KEY, checksum TEXT NOT NULL);" + eol
+    )
+
+
+def _migration_bytes_with_eol(raw: bytes, eol: bytes) -> bytes:
+    canonical_lf = raw.replace(b"\r\n", b"\n")
+    if eol == b"\n":
+        return canonical_lf
+    return canonical_lf.replace(b"\n", b"\r\n")
+
+
+def _copy_migrations_with_eol(destination: Path, eols: dict[str, bytes]) -> None:
+    destination.mkdir()
+    for name in MIGRATION_NAMES:
+        raw = (MIGRATION_DIR / name).read_bytes()
+        (destination / name).write_bytes(_migration_bytes_with_eol(raw, eols[name]))
+
+
+def _seed_legacy_database(
+    db_path: Path, migration_dir: Path, migration_names: tuple[str, ...]
+) -> tuple[tuple[str, str], ...]:
+    connection = sqlite3.connect(db_path)
+    try:
+        for name in migration_names:
+            migration_path = migration_dir / name
+            connection.executescript(migration_path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO schema_migrations(version, checksum) VALUES (?, ?)",
+                (name, sha256(migration_path.read_bytes()).hexdigest()),
+            )
+        connection.commit()
+        return tuple(
+            connection.execute(
+                "SELECT version, checksum FROM schema_migrations ORDER BY version"
+            ).fetchall()
+        )
+    finally:
+        connection.close()
 
 
 def test_open_database_applies_connection_defaults_and_migrations(
@@ -70,10 +122,10 @@ def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> 
         second_connection.close()
 
 
-def test_migration_checksums_match_current_bytes(
+def test_migration_checksums_match_canonical_lf_bytes(
     tmp_path: Path,
 ) -> None:
-    migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+    migration_dir = MIGRATION_DIR
     config = DatabaseConfig(db_path=tmp_path / "story.db", migration_dir=migration_dir)
     connection = open_database(config)
     try:
@@ -83,7 +135,7 @@ def test_migration_checksums_match_current_bytes(
         expected = tuple(
             (
                 path.name,
-                sha256(path.read_bytes()).hexdigest(),
+                sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
             )
             for path in sorted(migration_dir.glob("*.sql"))
         )
@@ -155,8 +207,138 @@ def test_apply_migrations_rejects_changed_bytes_for_applied_filename(
         encoding="utf-8",
     )
 
-    with pytest.raises(RuntimeError, match="001_initial.sql"):
+    with pytest.raises(MigrationError, match="001_initial.sql"):
         open_database(DatabaseConfig(db_path=db_path, migration_dir=migration_dir))
+
+
+def test_open_database_accepts_crlf_checkout_after_lf_application(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "story.db"
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+    migration_file = migration_dir / "001_initial.sql"
+    migration_file.write_bytes(_simple_migration(b"\n"))
+
+    connection = open_database(
+        DatabaseConfig(db_path=db_path, migration_dir=migration_dir)
+    )
+    stored_rows = tuple(
+        connection.execute(
+            "SELECT version, checksum FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    )
+    connection.close()
+
+    migration_file.write_bytes(_simple_migration(b"\r\n"))
+    reopened = open_database(
+        DatabaseConfig(db_path=db_path, migration_dir=migration_dir)
+    )
+    try:
+        assert (
+            tuple(
+                reopened.execute(
+                    "SELECT version, checksum FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            )
+            == stored_rows
+        )
+    finally:
+        reopened.close()
+
+
+def test_open_database_accepts_lf_checkout_after_crlf_legacy_checksum(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "story.db"
+    migration_dir = tmp_path / "migrations"
+    migration_dir.mkdir()
+    migration_file = migration_dir / "001_initial.sql"
+    migration_file.write_bytes(_simple_migration(b"\r\n"))
+
+    stored_rows = _seed_legacy_database(db_path, migration_dir, ("001_initial.sql",))
+    migration_file.write_bytes(_simple_migration(b"\n"))
+
+    reopened = open_database(
+        DatabaseConfig(db_path=db_path, migration_dir=migration_dir)
+    )
+    try:
+        assert (
+            tuple(
+                reopened.execute(
+                    "SELECT version, checksum FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            )
+            == stored_rows
+        )
+    finally:
+        reopened.close()
+
+
+def test_new_migration_checksum_is_eol_independent(tmp_path: Path) -> None:
+    checksums = []
+    for eol in (b"\n", b"\r\n"):
+        migration_dir = tmp_path / (
+            "migrations-lf" if eol == b"\n" else "migrations-crlf"
+        )
+        migration_dir.mkdir()
+        (migration_dir / "001_initial.sql").write_bytes(_simple_migration(eol))
+        connection = open_database(
+            DatabaseConfig(
+                db_path=tmp_path / ("lf.db" if eol == b"\n" else "crlf.db"),
+                migration_dir=migration_dir,
+            )
+        )
+        try:
+            checksums.append(
+                connection.execute(
+                    "SELECT checksum FROM schema_migrations WHERE version = ?",
+                    ("001_initial.sql",),
+                ).fetchone()[0]
+            )
+        finally:
+            connection.close()
+
+    assert checksums == [
+        sha256(_simple_migration(b"\n")).hexdigest(),
+        sha256(_simple_migration(b"\n")).hexdigest(),
+    ]
+
+
+@pytest.mark.parametrize("current_eol", [b"\n", b"\r\n"], ids=["lf", "crlf"])
+def test_open_database_accepts_mixed_legacy_checksums_without_rewriting_ledger(
+    tmp_path: Path, current_eol: bytes
+) -> None:
+    db_path = tmp_path / "story.db"
+    legacy_dir = tmp_path / "legacy-migrations"
+    _copy_migrations_with_eol(
+        legacy_dir,
+        {
+            "001_initial.sql": b"\r\n",
+            "002_search.sql": b"\r\n",
+            "003_narrative.sql": b"\r\n",
+            "004_drafts.sql": b"\n",
+        },
+    )
+
+    stored_rows = _seed_legacy_database(db_path, legacy_dir, MIGRATION_NAMES)
+    current_dir = tmp_path / "current-migrations"
+    _copy_migrations_with_eol(
+        current_dir, {name: current_eol for name in MIGRATION_NAMES}
+    )
+
+    reopened = open_database(DatabaseConfig(db_path=db_path, migration_dir=current_dir))
+    try:
+        assert (
+            tuple(
+                reopened.execute(
+                    "SELECT version, checksum FROM schema_migrations ORDER BY version"
+                ).fetchall()
+            )
+            == stored_rows
+        )
+    finally:
+        reopened.close()
 
 
 def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
