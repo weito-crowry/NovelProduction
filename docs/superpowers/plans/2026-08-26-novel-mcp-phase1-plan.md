@@ -282,10 +282,14 @@ and relation creation are absent.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Keep historical date values in `timeline_events`, validate inclusive range
-boundaries, enforce same-work foreign keys, and use a single transaction for an
-event plus participant links. Reject self-relations and duplicate relation
-edges using structured validation errors.
+Keep historical date values in `timeline_events.chronology_sort_key`, map the
+service title to both the legacy `title` and `summary` fields, generate an
+opaque internal `event_key`, and default the hidden schema adapter's
+`canon_status` to `draft`. Map participant `(label, role)` values to the
+existing participant-link table. Validate inclusive range boundaries, enforce
+same-work foreign keys, and use a single transaction for an event plus
+participant links. Reject self-relations and duplicate relation edges using
+structured validation errors.
 
 - [ ] **Step 4: Run test to verify it passes**
 
