@@ -86,7 +86,9 @@ def run_phase3_acceptance(
     try:
         outline = OutlineService(database).get_episode_outline(episode_id)
         outline_payload = json_value(outline)
-        outline_safe = safe_keys(outline_payload) and not has_deprecated(outline_payload)
+        outline_safe = safe_keys(outline_payload) and not has_deprecated(
+            outline_payload
+        )
     except Exception:
         outline_payload = {}
         outline_safe = False
