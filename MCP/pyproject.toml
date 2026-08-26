@@ -11,8 +11,35 @@ dependencies = [
     "mcp>=2.0,<3.0",
 ]
 
+[dependency-groups]
+dev = [
+    "mypy>=1.18.0",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.12.0",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+]

@@ -1,0 +1,24 @@
+name: MCP CI
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MCP
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest
+      - run: python scripts/check_source_size.py
