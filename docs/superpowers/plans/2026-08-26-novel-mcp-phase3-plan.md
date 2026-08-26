@@ -43,11 +43,18 @@
 - `episode_context` is completely read-only: no INSERT, UPDATE, DELETE,
   CREATE, DROP, ALTER, migration, auto-reference, auto-summary, auto-canon,
   or draft save.
-- Context candidates are limited to explicit current-episode references and
-  effective participant knowledge; no vector search or whole-database semantic
-  extraction is allowed.
+- Noncritical `known_before_episode` candidates are limited to explicit
+  current-episode information references and effective participant knowledge;
+  no vector search or whole-database semantic extraction is allowed.
+- `reader_disclosures` targeting the current episode are the canonical
+  relevance source for `reveal_this_episode`. They require no
+  `episode_information` reference or participant knowledge and are critical,
+  deduplicated, and outside `information_items_max` truncation.
 - Current episode, scenes, participants, current reveal, and safe guards are
   critical output and are not silently removed by ordinary count bounds.
+- Effective character state includes structured `beliefs` parsed from
+  `character_states.beliefs_json`; effective-state selection uses narrative
+  order and must never expose a future state's beliefs or raw `state_json`.
 - Require the real-writing acceptance gate before treating Phase 3 output as writing-ready.
 - Commit every task independently after its focused test suite passes.
 
@@ -73,6 +80,11 @@ The implementation must preserve the following exact interfaces and evidence:
   metadata-only safe guards with no statement, notes, future episode title, or
   future summary. The target episode's valid `foreshadowing_notes_json` is
   returned as a JSON array; malformed JSON is a structured error.
+- Current-episode reader disclosures are always returned in
+  `reader_context.reveal_this_episode` when their information item is active,
+  even without an episode reference or participant knowledge. They are
+  critical data and are not counted toward the 50-item noncritical
+  `known_before_episode` selection bound.
 - `context_meta` includes `narrative_position`, all five fixed `limits`,
   `returned_counts`, `omitted_counts`, and `truncated` flags. It contains no
   secret text. Previous context follows narrative order, excludes deprecated
@@ -84,6 +96,12 @@ The implementation must preserve the following exact interfaces and evidence:
   migration sequence, draft append-only/CAS/hash, outline safety, context
   bounds/read-only, future/deprecated/cross-work/private-field leakage,
   guard presence, tool inventory, and `writing_ready`.
+- Acceptance leakage checks are active probes: the qualification database must
+  explicitly seed future episode/state/knowledge/disclosure sentinels,
+  deprecated and cross-work sentinels, private fields, protected statements,
+  and data beyond every context bound. Vacuous PASS without the corresponding
+  hazardous source data is forbidden, and `writing_ready` is true only when
+  every active probe passes.
 
 The repository must not receive `data/story.db` production content. Phase 3
 tests use temporary qualification databases only.
@@ -277,15 +295,20 @@ Expected: FAIL because the context model and builder do not exist.
 
 Build a read-only structured result using the fixed bounds from the design
 specification. Resolve character state, relationships, and knowledge at the
-requested episode. Fetch at most two previous summaries, trim the previous
+requested episode. Effective character state projects `physical_state`,
+`emotional_state`, structured `beliefs` parsed from `beliefs_json`, and
+`location_world_fact_id`; raw `state_json` is not exposed. State selection is
+the latest change at or before the target by chapter/episode narrative order,
+never by episode ID. Fetch at most two previous summaries, trim the previous
 draft tail to 4000 characters, and include deterministic ordering metadata.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest MCP/tests/test_context_service.py -q`
 
-Expected: PASS, including all five bounds, participant effective state,
-reader context, recent context, stable ordering, and no mutation during reads.
+Expected: PASS, including all five bounds, participant effective state and
+beliefs, reader context, recent context, stable narrative ordering, future
+belief exclusion, and no mutation during reads.
 
 - [ ] **Step 5: Validation**
 
@@ -402,26 +425,33 @@ Expected: FAIL because Phase 3 adapters and the acceptance gate are absent.
 
 Register exactly the five Phase 3 tools, delegate to services, serialize
 structured context and guards, and expose draft history without an update or
-delete operation. The acceptance gate must exercise fixed bounds, all leakage
-categories, deprecated-canon exclusion, configured-work scope, and two draft
-saves that produce revisions 1 and 2. A positive process exit alone is not a
-passing gate; each assertion must be recorded in `AcceptanceReport`.
+delete operation. The acceptance gate must seed and exercise every hazardous
+category before judging it: future episode, future character state, future
+character knowledge, future reader disclosure, deprecated entity/information,
+cross-work data, private notes/profile JSON, protected statement, world facts
+>30, timeline events >30, information items >50, previous episodes >2, and a
+previous draft >4000 characters. It must also exercise two draft saves that
+produce revisions 1 and 2. A positive process exit or absence of hazardous
+source rows is not a passing gate; each active assertion must be recorded in
+`AcceptanceReport`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest MCP/tests/test_phase3_mcp_tools.py MCP/tests/test_phase3_acceptance.py -q`
 
 Expected: PASS, including tool registration, safe context serialization,
-append-only draft operations, and all acceptance-gate assertions.
+append-only draft operations, active leakage probes, and all acceptance-gate
+assertions.
 
 - [ ] **Step 5: Validation**
 
 Run: `python -m pytest MCP/tests -q`; inspect `server.tool_names()` and confirm
 that all Phase 1–3 names are present exactly once, no database file is created
-under the repository root, and the acceptance report lists every guard.
+under the repository root, and the acceptance report lists every active guard
+and leakage probe.
 
 Expected: the complete test suite passes and the real-writing gate is backed by
-specific evidence rather than a wrapper exit code.
+specific seeded evidence rather than a wrapper exit code or vacuous PASS.
 
 - [ ] **Step 6: Commit**
 
