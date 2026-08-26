@@ -134,18 +134,7 @@ def create_server(config: DatabaseConfig) -> Phase1MCPServer:
         )
 
     async def timeline_event_get(event_id: int) -> dict[str, Any]:
-        result = await _call(
-            services["timeline"].range_events, "0001-01-01", "9999-12-31", 100
-        )
-        if not result["ok"]:
-            return result
-        for event in result["data"]:
-            if event["id"] == event_id:
-                return {"ok": True, "data": event}
-        return {
-            "ok": False,
-            "error": {"code": "NOT_FOUND", "message": "requested entity was not found"},
-        }
+        return await _call(services["timeline"].get_event, event_id)
 
     async def timeline_event_search(query: str, limit: int = 20) -> dict[str, Any]:
         return await _call(services["timeline"].search_events, query, limit)

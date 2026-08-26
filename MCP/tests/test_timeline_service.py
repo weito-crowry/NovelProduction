@@ -58,6 +58,15 @@ def test_timeline_event_maps_legacy_fields_and_participants(service):
     assert service.search_events("山異", limit=10) == (event,)
 
 
+def test_timeline_get_event_returns_record_and_stable_not_found(service):
+    event = service.create_event("2104-03-02", "火山異常", participants=[])
+
+    assert service.get_event(event.id) == event
+
+    with pytest.raises(RuntimeError, match="NOT_FOUND"):
+        service.get_event(9999)
+
+
 def test_timeline_update_and_move_require_expected_version(service):
     event = service.create_event("2104-01-01", "検知", participants=[])
 

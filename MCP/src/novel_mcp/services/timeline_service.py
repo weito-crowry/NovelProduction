@@ -5,7 +5,11 @@ from collections.abc import Sequence
 from datetime import date
 from uuid import uuid4
 
-from novel_mcp.errors import VersionConflictError, WorkNotFoundError
+from novel_mcp.errors import (
+    TimelineEventNotFoundError,
+    VersionConflictError,
+    WorkNotFoundError,
+)
 from novel_mcp.repositories.timeline_repository import (
     TimelineEventRecord,
     TimelineRelationRecord,
@@ -51,6 +55,12 @@ class TimelineService:
         except Exception:
             self._connection.rollback()
             raise
+
+    def get_event(self, event_id: int) -> TimelineEventRecord:
+        record = self._repository.get(work_id=self._work_id(), event_id=event_id)
+        if record is None:
+            raise TimelineEventNotFoundError("NOT_FOUND")
+        return record
 
     def update_event(
         self,

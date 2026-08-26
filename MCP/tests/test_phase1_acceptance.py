@@ -66,6 +66,57 @@ def test_tool_calls_return_json_compatible_records(tmp_path: Path) -> None:
     assert isinstance(payload["data"]["version"], int)
 
 
+def test_timeline_event_get_retrieves_beyond_range_default_limit(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    initialize_work(config.db_path, "Phase 1")
+    server = create_server(config)
+
+    event_ids = []
+    for index in range(101):
+        created = asyncio.run(
+            server.call_tool(
+                "timeline_event_create",
+                {
+                    "event_date": "2104-01-01",
+                    "title": f"event-{index}",
+                    "participants": [],
+                },
+            )
+        )
+        created_payload = _payload(created)
+        assert created_payload["ok"] is True
+        event_ids.append(created_payload["data"]["id"])
+
+    result = asyncio.run(
+        server.call_tool("timeline_event_get", {"event_id": event_ids[-1]})
+    )
+
+    payload = _payload(result)
+    assert payload["ok"] is True
+    assert payload["data"]["id"] == event_ids[-1]
+
+
+def test_timeline_event_get_missing_event_returns_stable_not_found(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    initialize_work(config.db_path, "Phase 1")
+    server = create_server(config)
+
+    result = asyncio.run(server.call_tool("timeline_event_get", {"event_id": 9999}))
+
+    payload = _payload(result)
+    assert payload == {
+        "ok": False,
+        "error": {
+            "code": "NOT_FOUND",
+            "message": "requested entity was not found",
+        },
+    }
+
+
 def test_server_inventory_has_no_phase_two_or_three_names(tmp_path: Path) -> None:
     server = create_server(_config(tmp_path))
     names = server.tool_names()

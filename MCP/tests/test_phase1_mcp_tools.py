@@ -8,7 +8,7 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
-from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, create_server
+from novel_mcp.mcp_server import create_server
 
 
 def _config(tmp_path: Path) -> DatabaseConfig:
@@ -29,11 +29,34 @@ def _structured(result: CallToolResult) -> dict[str, object]:
 def test_phase1_server_registers_only_planned_tools(tmp_path: Path) -> None:
     server = create_server(_config(tmp_path))
 
-    assert server.tool_names() == PHASE1_TOOL_NAMES
-    assert len(PHASE1_TOOL_NAMES) == 23
-    assert all("chapter_" not in name for name in PHASE1_TOOL_NAMES)
-    assert all("episode_" not in name for name in PHASE1_TOOL_NAMES)
-    assert all("draft" not in name for name in PHASE1_TOOL_NAMES)
+    expected_tool_names = {
+        "work_get",
+        "work_update",
+        "world_fact_create",
+        "world_fact_update",
+        "world_fact_get",
+        "world_fact_search",
+        "timeline_event_create",
+        "timeline_event_update",
+        "timeline_event_get",
+        "timeline_event_search",
+        "timeline_range",
+        "timeline_move",
+        "timeline_relation_create",
+        "character_create",
+        "character_update",
+        "character_get",
+        "character_search",
+        "relationship_create",
+        "relationship_update",
+        "relationship_search",
+        "canon_status_set",
+        "canon_decision_get",
+        "canon_decision_search",
+    }
+
+    assert server.tool_names() == expected_tool_names
+    assert len(expected_tool_names) == 23
 
 
 def test_read_and_mutation_annotations_match_tool_effects(tmp_path: Path) -> None:

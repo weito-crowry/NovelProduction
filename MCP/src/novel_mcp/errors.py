@@ -25,6 +25,10 @@ class WorldFactNotFoundError(NovelMcpError):
     """Raised when a requested world fact does not exist."""
 
 
+class TimelineEventNotFoundError(NovelMcpError):
+    """Raised when a requested timeline event does not exist in the work."""
+
+
 class CharacterNotFoundError(NovelMcpError):
     """Raised when a requested character does not exist in the work."""
 
