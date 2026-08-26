@@ -69,7 +69,9 @@ class DeprecatedCanonForbiddenError(NovelMcpError):
 
     code = "DEPRECATED_CANON_FORBIDDEN"
 
-    def __init__(self, message: str = "deprecated canon cannot be used as active context") -> None:
+    def __init__(
+        self, message: str = "deprecated canon cannot be used as active context"
+    ) -> None:
         super().__init__(f"{self.code}: {message}")
 
 

@@ -9,7 +9,12 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
-from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, PHASE2_TOOL_NAMES, create_server
+from novel_mcp.mcp_server import (
+    PHASE1_TOOL_NAMES,
+    PHASE2_TOOL_NAMES,
+    PHASE3_TOOL_NAMES,
+    create_server,
+)
 
 
 def _config(tmp_path: Path) -> DatabaseConfig:
@@ -63,9 +68,12 @@ def test_server_preserves_phase1_tools_and_adds_phase2_tools(server) -> None:
         "canon_decision_search",
     }
 
-    assert server.tool_names() == expected_tool_names | PHASE2_TOOL_NAMES
+    assert (
+        server.tool_names()
+        == expected_tool_names | PHASE2_TOOL_NAMES | PHASE3_TOOL_NAMES
+    )
     assert expected_tool_names == PHASE1_TOOL_NAMES
-    assert len(server.tool_names()) == 50
+    assert len(server.tool_names()) == 55
 
 
 def test_read_and_mutation_annotations_match_tool_effects(server) -> None:

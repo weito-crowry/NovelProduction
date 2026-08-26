@@ -12,6 +12,7 @@ from novel_mcp.config import DatabaseConfig
 from novel_mcp.mcp_server import (
     PHASE1_TOOL_NAMES,
     PHASE2_TOOL_NAMES,
+    PHASE3_TOOL_NAMES,
     create_server,
 )
 
@@ -68,21 +69,16 @@ def _payload(result: CallToolResult) -> dict[str, object]:
     return json.loads(result.content[0].text)
 
 
-def test_phase2_tool_inventory_is_exact_and_phase3_is_absent(server) -> None:
+def test_phase2_tool_inventory_is_exact_and_phase3_is_present(server) -> None:
     assert PHASE2_TOOL_NAMES == PHASE2_EXPECTED
-    assert server.tool_names() == PHASE1_TOOL_NAMES | PHASE2_EXPECTED
-    assert not server.tool_names() & {
-        "episode_outline_get",
-        "episode_context",
-        "episode_draft_get",
-        "episode_draft_save",
-        "episode_draft_history",
-    }
+    assert (
+        server.tool_names() == PHASE1_TOOL_NAMES | PHASE2_EXPECTED | PHASE3_TOOL_NAMES
+    )
 
 
 def test_phase2_annotations_descriptions_and_schema_bounds(server) -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
-    assert set(tools) == PHASE1_TOOL_NAMES | PHASE2_EXPECTED
+    assert set(tools) == PHASE1_TOOL_NAMES | PHASE2_EXPECTED | PHASE3_TOOL_NAMES
     for name in PHASE2_EXPECTED:
         tool = tools[name]
         assert tool.description

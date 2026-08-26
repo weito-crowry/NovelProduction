@@ -16,14 +16,19 @@ from novel_mcp.database import open_database
 from novel_mcp.phase1_tools import register_phase1_tools
 from novel_mcp.phase2_tool_descriptions import PHASE2_TOOL_DESCRIPTIONS
 from novel_mcp.phase2_tools import register_phase2_tools
+from novel_mcp.phase3_tool_descriptions import PHASE3_TOOL_DESCRIPTIONS
+from novel_mcp.phase3_tools import register_phase3_tools
 from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.character_service import CharacterService
 from novel_mcp.services.character_state_service import CharacterStateService
+from novel_mcp.services.context_service import ContextService
 from novel_mcp.services.disclosure_service import DisclosureService
+from novel_mcp.services.draft_service import DraftService
 from novel_mcp.services.episode_reference_service import EpisodeReferenceService
 from novel_mcp.services.information_service import InformationService
 from novel_mcp.services.knowledge_service import KnowledgeService
 from novel_mcp.services.narrative_service import NarrativeService
+from novel_mcp.services.outline_service import OutlineService
 from novel_mcp.services.relationship_service import RelationshipService
 from novel_mcp.services.search_service import SearchService
 from novel_mcp.services.timeline_service import TimelineService
@@ -34,7 +39,8 @@ from novel_mcp.tool_support import Handler
 
 PHASE1_TOOL_NAMES = frozenset(TOOL_DESCRIPTIONS)
 PHASE2_TOOL_NAMES = frozenset(PHASE2_TOOL_DESCRIPTIONS)
-ALL_TOOL_NAMES = PHASE1_TOOL_NAMES | PHASE2_TOOL_NAMES
+PHASE3_TOOL_NAMES = frozenset(PHASE3_TOOL_DESCRIPTIONS)
+ALL_TOOL_NAMES = PHASE1_TOOL_NAMES | PHASE2_TOOL_NAMES | PHASE3_TOOL_NAMES
 
 
 class Phase1MCPServer(MCPServer):
@@ -59,6 +65,10 @@ class Phase1MCPServer(MCPServer):
     def tool_names(self) -> frozenset[str]:
         return frozenset(tool.name for tool in self._tool_manager.list_tools())
 
+    @property
+    def database(self) -> sqlite3.Connection:
+        return self._connection
+
 
 @dataclass(frozen=True, slots=True)
 class ServiceContainer:
@@ -75,6 +85,9 @@ class ServiceContainer:
     disclosure: DisclosureService
     knowledge: KnowledgeService
     references: EpisodeReferenceService
+    drafts: DraftService
+    outline: OutlineService
+    context: ContextService
 
 
 Registrar = Callable[..., None]
@@ -97,6 +110,9 @@ def create_server(config: DatabaseConfig) -> Phase1MCPServer:
             disclosure=DisclosureService(connection),
             knowledge=KnowledgeService(connection),
             references=EpisodeReferenceService(connection),
+            drafts=DraftService(connection),
+            outline=OutlineService(connection),
+            context=ContextService(connection),
         )
         server = Phase1MCPServer(
             "novel-production", version="0.1.0", connection=connection
@@ -105,7 +121,11 @@ def create_server(config: DatabaseConfig) -> Phase1MCPServer:
         connection.close()
         raise
 
-    descriptions = {**TOOL_DESCRIPTIONS, **PHASE2_TOOL_DESCRIPTIONS}
+    descriptions = {
+        **TOOL_DESCRIPTIONS,
+        **PHASE2_TOOL_DESCRIPTIONS,
+        **PHASE3_TOOL_DESCRIPTIONS,
+    }
 
     def register(
         name: str, handler: Handler, *, read_only: bool, destructive: bool
@@ -124,6 +144,7 @@ def create_server(config: DatabaseConfig) -> Phase1MCPServer:
 
     register_phase1_tools(services, register)
     register_phase2_tools(services, register)
+    register_phase3_tools(services, register)
     return server
 
 
