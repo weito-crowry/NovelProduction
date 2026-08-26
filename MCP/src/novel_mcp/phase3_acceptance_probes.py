@@ -200,9 +200,7 @@ def has_deprecated(value: Any) -> bool:
         return any(has_deprecated(item) for item in value.values())
     if isinstance(value, (list, tuple)):
         return any(has_deprecated(item) for item in value)
-    return bool(
-        hasattr(value, "canon_status") and value.canon_status == "deprecated"
-    )
+    return bool(hasattr(value, "canon_status") and value.canon_status == "deprecated")
 
 
 def safe_keys(value: Any) -> bool:
@@ -217,9 +215,7 @@ def safe_keys(value: Any) -> bool:
 
 def _keys(value: Any) -> set[str]:
     if isinstance(value, dict):
-        return set(value) | {
-            key for item in value.values() for key in _keys(item)
-        }
+        return set(value) | {key for item in value.values() for key in _keys(item)}
     if isinstance(value, (list, tuple)):
         return {key for item in value for key in _keys(item)}
     return set()
@@ -228,9 +224,7 @@ def _keys(value: Any) -> set[str]:
 def _active_bounds_ok(context: Any, *, current_reveal_item_id: int) -> bool:
     meta = context.context_meta
     truncated = meta.get("truncated", {})
-    reveal_ids = {
-        item.id for item in context.reader_context.reveal_this_episode
-    }
+    reveal_ids = {item.id for item in context.reader_context.reveal_this_episode}
     return (
         current_reveal_item_id in reveal_ids
         and len(context.recent_context.previous_episode_summaries) == 2
