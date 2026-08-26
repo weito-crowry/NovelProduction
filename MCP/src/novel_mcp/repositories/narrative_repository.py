@@ -159,6 +159,42 @@ class NarrativeRepository:
         ).fetchall()
         return tuple(SceneRecord(*row) for row in rows)
 
+    def reorder_positions(
+        self,
+        *,
+        table: str,
+        parent_column: str,
+        work_id: int,
+        parent_id: int,
+        final_positions: Mapping[int, int],
+        affected_ids: tuple[int, ...],
+    ) -> None:
+        rows = self._connection.execute(
+            f"SELECT id, position FROM {table} WHERE work_id = ? "
+            f"AND {parent_column} = ? "
+            "ORDER BY position, id",
+            (work_id, parent_id),
+        ).fetchall()
+        temporary_base = max(int(row[1]) for row in rows)
+        for index, row in enumerate(rows, start=1):
+            self._connection.execute(
+                f"UPDATE {table} SET position = ? "
+                f"WHERE work_id = ? AND {parent_column} = ? AND id = ?",
+                (temporary_base + index, work_id, parent_id, int(row[0])),
+            )
+        for entity_id in affected_ids:
+            self._connection.execute(
+                f"UPDATE {table} SET position = ?, version = version + 1, "
+                "updated_at = CURRENT_TIMESTAMP "
+                f"WHERE work_id = ? AND {parent_column} = ? AND id = ?",
+                (
+                    final_positions[entity_id],
+                    work_id,
+                    parent_id,
+                    entity_id,
+                ),
+            )
+
     def update(
         self,
         *,

@@ -46,6 +46,15 @@ class NarrativeNotFoundError(NovelMcpError):
         super().__init__(message)
 
 
+class OrderConflictError(NovelMcpError):
+    """Raised when a narrative reorder target is invalid."""
+
+    code = "ORDER_CONFLICT"
+
+    def __init__(self, message: str = "invalid narrative position") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class WorkScopeError(NovelMcpError):
     """Raised when an entity belongs to another configured work."""
 

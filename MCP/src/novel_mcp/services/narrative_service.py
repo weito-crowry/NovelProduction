@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 
 from novel_mcp.errors import (
     NarrativeNotFoundError,
+    OrderConflictError,
     ValidationError,
     VersionConflictError,
     WorkNotFoundError,
@@ -169,6 +170,105 @@ class NarrativeService:
         return self._repository.list_scenes(
             work_id=self._work_id(), episode_id=episode_id
         )
+
+    def reorder_chapter(
+        self, chapter_id: int, target_position: int, expected_version: int
+    ) -> tuple[ChapterRecord, ...]:
+        return self._reorder(
+            table="chapters",
+            parent_column="work_id",
+            parent_id=self._work_id(),
+            entity_id=chapter_id,
+            target_position=target_position,
+            expected_version=expected_version,
+            current_getter=self.get_chapter,
+            sibling_getter=lambda _parent_id: self.list_chapters(),
+        )
+
+    def reorder_episode(
+        self, episode_id: int, target_position: int, expected_version: int
+    ) -> tuple[EpisodeRecord, ...]:
+        current = self.get_episode(episode_id)
+        return self._reorder(
+            table="episodes",
+            parent_column="chapter_id",
+            parent_id=current.chapter_id,
+            entity_id=episode_id,
+            target_position=target_position,
+            expected_version=expected_version,
+            current_getter=self.get_episode,
+            sibling_getter=self.list_episodes,
+        )
+
+    def reorder_scene(
+        self, scene_id: int, target_position: int, expected_version: int
+    ) -> tuple[SceneRecord, ...]:
+        current = self.get_scene(scene_id)
+        return self._reorder(
+            table="scenes",
+            parent_column="episode_id",
+            parent_id=current.episode_id,
+            entity_id=scene_id,
+            target_position=target_position,
+            expected_version=expected_version,
+            current_getter=self.get_scene,
+            sibling_getter=self.list_scenes,
+        )
+
+    def _reorder(
+        self,
+        *,
+        table: str,
+        parent_column: str,
+        parent_id: int,
+        entity_id: int,
+        target_position: int,
+        expected_version: int,
+        current_getter: Callable[[int], RecordT],
+        sibling_getter: Callable[[int], tuple[RecordT, ...]],
+    ) -> tuple[RecordT, ...]:
+        self._validate_version(expected_version)
+        if isinstance(target_position, bool) or not isinstance(target_position, int):
+            raise OrderConflictError("target_position must be an integer")
+        work_id = self._work_id()
+        self._repository.begin_write()
+        try:
+            current = current_getter(entity_id)
+            if current.version != expected_version:
+                raise VersionConflictError("VERSION_CONFLICT")
+            siblings = sibling_getter(parent_id)
+            if target_position < 1 or target_position > len(siblings):
+                raise OrderConflictError("target_position is outside the sibling range")
+            old_index = current.position - 1
+            new_index = target_position - 1
+            if old_index == new_index:
+                self._repository.commit()
+                return siblings
+            ordered = list(siblings)
+            moved = ordered.pop(old_index)
+            ordered.insert(new_index, moved)
+            changed_start = min(old_index, new_index)
+            changed_end = max(old_index, new_index)
+            affected = tuple(row.id for row in ordered[changed_start : changed_end + 1])
+            final_positions = {
+                row.id: index + 1
+                for index, row in enumerate(ordered)
+                if row.id in affected
+            }
+            self._repository.reorder_positions(
+                table=table,
+                parent_column=parent_column,
+                work_id=work_id,
+                parent_id=parent_id,
+                final_positions=final_positions,
+                affected_ids=affected,
+            )
+            result = sibling_getter(parent_id)
+            self._repository.commit()
+            return result
+        except Exception:
+            self._repository.rollback()
+            raise
 
     def update_chapter(
         self,
