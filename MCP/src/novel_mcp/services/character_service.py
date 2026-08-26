@@ -26,7 +26,7 @@ class CharacterService:
         normalized_name = self._required_text(name, "name")
         normalized_profile = "" if profile is None else profile.strip()
         work_id = self._work_id()
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._repository.begin_write()
         try:
             character_id = self._repository.create(
                 work_id=work_id,
@@ -67,7 +67,7 @@ class CharacterService:
             self._required_text(name, "name") if name is not None else current.name
         )
         normalized_profile = profile.strip() if profile is not None else current.profile
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._repository.begin_write()
         try:
             if not self._repository.update(
                 work_id=work_id,

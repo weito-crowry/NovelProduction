@@ -18,6 +18,9 @@ class CharacterRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def begin_write(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+
     def create(
         self, *, work_id: int, character_key: str, name: str, profile: str
     ) -> int:

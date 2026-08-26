@@ -21,6 +21,15 @@ def open_test_database(db_path: Path):
     )
 
 
+def test_character_and_relationship_services_contain_no_sql_tokens() -> None:
+    source_root = Path(__file__).resolve().parents[1] / "src" / "novel_mcp" / "services"
+    forbidden_tokens = ("SELECT", "INSERT", "UPDATE", "DELETE", "BEGIN")
+
+    for module_name in ("character_service.py", "relationship_service.py"):
+        source = (source_root / module_name).read_text(encoding="utf-8")
+        assert not any(token in source for token in forbidden_tokens), module_name
+
+
 @pytest.fixture
 def service(tmp_path: Path):
     db_path = tmp_path / "story.db"

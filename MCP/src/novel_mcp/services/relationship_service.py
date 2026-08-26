@@ -36,7 +36,7 @@ class RelationshipService:
         work_id = self._work_id()
         self._validate_endpoint(work_id, source_character_id)
         self._validate_endpoint(work_id, target_character_id)
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._repository.begin_write()
         try:
             try:
                 relationship_id = self._repository.create(
@@ -76,7 +76,7 @@ class RelationshipService:
             is None
         ):
             raise RelationshipNotFoundError("NOT_FOUND")
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._repository.begin_write()
         try:
             if not self._repository.update(
                 work_id=work_id,

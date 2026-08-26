@@ -19,6 +19,9 @@ class RelationshipRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def begin_write(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+
     def create(
         self,
         *,
