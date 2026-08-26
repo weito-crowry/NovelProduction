@@ -23,3 +23,4 @@ Thumbs.db
 
 # Keep the repository-wide story database directory, but never commit a database file.
 !data/.gitkeep
+.worktrees/
