@@ -65,18 +65,23 @@ def test_canonical_content_change_requires_reason_and_records_payloads(
 
     with pytest.raises(CanonReasonRequired):
         service.update_content(
-            "world_fact", fact.id, {"body": "新記述"}, expected_version=2, reason=None
+            "world_fact",
+            fact.id,
+            {"statement": "新記述"},
+            expected_version=2,
+            reason=None,
         )
 
     decision = service.update_content(
         "world_fact",
         fact.id,
-        {"body": "新記述"},
+        {"statement": "新記述"},
         expected_version=2,
         reason="訂正",
     )
-    assert decision.changes[0].before_payload["body"] == "旧記述"
-    assert decision.changes[0].after_payload["body"] == "新記述"
+    assert decision is not None
+    assert decision.changes[0].before_payload["statement"] == "旧記述"
+    assert decision.changes[0].after_payload["statement"] == "新記述"
 
 
 def test_invalid_content_fields_raise_canon_policy_error(
@@ -192,14 +197,14 @@ def test_content_change_snapshots_inside_transaction_and_uses_version_cas(
         service.update_content(
             "world_fact",
             fact.id,
-            {"body": "新記述"},
+            {"statement": "新記述"},
             expected_version=1,
             reason=None,
         )
 
     assert observed == {"in_transaction": True, "expected_version": 1}
     assert service.connection.execute(
-        "SELECT body, version FROM world_facts WHERE id = ?", (fact.id,)
+        "SELECT statement, version FROM world_facts WHERE id = ?", (fact.id,)
     ).fetchone() == ("旧記述", 1)
 
 
@@ -252,3 +257,36 @@ def test_canon_decision_search_caps_limit_at_service_bound(
         service.record_decision(f"検索対象 {index}", "理由", (change,))
 
     assert len(service.search_decisions("検索対象", limit=1000)) == 100
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "allowed"),
+    (
+        ("idea", "draft", True),
+        ("draft", "canon", True),
+        ("canon", "deprecated", True),
+        ("deprecated", "draft", True),
+        ("deprecated", "canon", False),
+        ("canon", "draft", False),
+        ("draft", "deprecated", False),
+    ),
+)
+def test_canon_transition_matrix_is_explicit(
+    service: CanonService, current: str, target: str, allowed: bool
+) -> None:
+    fact = WorldFactService(service.connection).create("状態")
+    service.connection.execute(
+        "UPDATE world_facts SET canon_status = ? WHERE id = ?", (current, fact.id)
+    )
+    service.connection.commit()
+    reason = "判断理由" if target in {"canon", "deprecated"} else None
+    if allowed:
+        decision = service.set_canon_status(
+            "world_fact", fact.id, target, fact.version, reason
+        )
+        assert decision.changes[0].after_payload["canon_status"] == target
+    else:
+        with pytest.raises(CanonPolicyError, match="CANON_POLICY_ERROR"):
+            service.set_canon_status(
+                "world_fact", fact.id, target, fact.version, reason
+            )

@@ -12,9 +12,11 @@ MAX_SEARCH_LIMIT = 100
 
 
 class SearchService:
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(
+        self, connection: sqlite3.Connection, *, force_fallback: bool = False
+    ) -> None:
         self._work_repository = WorkRepository(connection)
-        self._repository = SearchRepository(connection)
+        self._repository = SearchRepository(connection, force_fallback=force_fallback)
 
     def search_world_facts(self, query: str, limit: int) -> tuple[WorldFactRecord, ...]:
         normalized_query, bounded_limit = self._validate_search(query, limit)

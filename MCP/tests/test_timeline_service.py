@@ -14,6 +14,7 @@ from novel_mcp.errors import (
     WorkScopeError,
 )
 from novel_mcp.services.canon_service import CanonService
+from novel_mcp.services.character_service import CharacterService
 from novel_mcp.services.timeline_service import TimelineService
 
 
@@ -37,127 +38,140 @@ def service(tmp_path: Path):
         connection.close()
 
 
-def test_timeline_range_orders_events_and_relation_is_transactional(service):
-    first = service.create_event("2104-01-01", "検知", participants=[])
-    second = service.create_event("2104-02-01", "発表", participants=[])
-
-    assert service.range_events("2104-01-01", "2104-12-31", limit=30) == (
-        first,
-        second,
-    )
+def test_timeline_range_orders_events_and_relation_is_transactional(
+    service: TimelineService,
+) -> None:
+    first = service.create_event("2104-01-01", "検知")
+    second = service.create_event("2104-02-01", "発表")
+    assert service.range_events("2104-01-01", "2104-12-31", 30) == (first, second)
     relation = service.create_relation(first.id, second.id, "causes")
     assert relation.source_event_id == first.id
 
 
-def test_timeline_event_maps_legacy_fields_and_participants(service):
+def test_timeline_supports_year_season_month_unknown_and_character_fk(
+    service: TimelineService,
+) -> None:
+    character = CharacterService(service._connection).create("国家AI", entity_type="ai")
     event = service.create_event(
-        "2104-03-02",
-        "  火山異常  ",
-        participants=[("国家AI", "observer"), ("研究班", "announcer")],
+        "2104年春頃",
+        "火山異常",
+        description="記録",
+        category="history",
+        participants=[(character.id, "observer")],
+    )
+    assert (
+        event.time_start,
+        event.time_end,
+        event.date_precision,
+        event.date_display,
+    ) == ("2104-03-01", "2104-05-31", "season", "2104年春頃")
+    assert event.participants[0].character_id == character.id
+    assert event.participants[0].role == "observer"
+    year = service.create_event("2105年", "年次")
+    month = service.create_event("2106年3月頃", "月次")
+    unknown = service.create_event("正確な日付不明", "不明")
+    assert (year.date_precision, year.time_start, year.time_end) == (
+        "year",
+        "2105-01-01",
+        "2105-12-31",
+    )
+    assert (month.date_precision, month.time_start, month.time_end) == (
+        "month",
+        "2106-03-01",
+        "2106-03-31",
+    )
+    assert (unknown.date_precision, unknown.time_start, unknown.time_end) == (
+        "unknown",
+        None,
+        None,
     )
 
-    assert event.title == "火山異常"
-    assert event.chronology_sort_key == "2104-03-02"
-    assert event.canon_status == "draft"
-    assert event.participants == (("国家AI", "observer"), ("研究班", "announcer"))
-    assert event.event_key
-    assert service.search_events("山異", limit=10) == (event,)
 
-
-def test_timeline_get_event_returns_record_and_stable_not_found(service):
-    event = service.create_event("2104-03-02", "火山異常", participants=[])
-
+def test_timeline_get_event_returns_record_and_stable_not_found(
+    service: TimelineService,
+) -> None:
+    event = service.create_event("2104-03-02", "火山異常")
     assert service.get_event(event.id) == event
-
     with pytest.raises(RuntimeError, match="NOT_FOUND"):
         service.get_event(9999)
 
 
-def test_timeline_update_and_move_require_expected_version(service):
-    event = service.create_event("2104-01-01", "検知", participants=[])
-
-    updated = service.update_event(
-        event.id, event.version, title="発見", participants=[]
-    )
-    assert updated.title == "発見"
-    assert updated.version == 2
-
+def test_timeline_update_and_move_require_expected_version(
+    service: TimelineService,
+) -> None:
+    event = service.create_event("2104-01-01", "検知")
+    updated = service.update_event(event.id, event.version, title="発見")
+    assert (updated.title, updated.version) == ("発見", 2)
     with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
         service.move_event(event.id, event.version, "2104-01-02")
-
     moved = service.move_event(event.id, updated.version, "2104-01-02")
-    assert moved.chronology_sort_key == "2104-01-02"
-    assert moved.version == 3
-
+    assert (moved.time_start, moved.time_end, moved.date_precision, moved.version) == (
+        "2104-01-02",
+        "2104-01-02",
+        "day",
+        3,
+    )
     with pytest.raises(TimelineEventNotFoundError, match="NOT_FOUND"):
         service.update_event(9999, 1, title="存在しない")
 
 
-def test_timeline_canonical_update_requires_reason_and_keeps_mirrors(service):
-    event = service.create_event("2104-01-01", "旧題", participants=[])
+def test_timeline_canonical_update_requires_reason(service: TimelineService) -> None:
+    event = service.create_event("2104-01-01", "旧題")
     CanonService(service._connection).set_canon_status(
         "timeline_event", event.id, "canon", event.version, "採用"
     )
-
     with pytest.raises(CanonReasonRequired, match="CANON_REASON_REQUIRED"):
         service.update_event(event.id, 2, title="新題")
-
     updated = service.update_event(
         event.id, 2, title="新題", new_date="2104-02-01", reason="訂正理由"
     )
-
-    assert updated.title == "新題"
-    assert updated.chronology_sort_key == "2104-02-01"
-    assert updated.version == 3
-    assert service._connection.execute(
-        "SELECT title, summary, chronology_sort_key FROM timeline_events WHERE id = ?",
-        (event.id,),
-    ).fetchone() == ("新題", "新題", "2104-02-01")
-    assert service._connection.execute(
-        """
-        SELECT COUNT(*)
-        FROM canon_decision_changes
-        WHERE entity_type = 'timeline_event' AND entity_id = ?
-        """,
-        (event.id,),
-    ).fetchone() == (2,)
-
-
-def test_timeline_search_and_range_cap_limit_at_service_bound(service):
-    for index in range(101):
-        service.create_event("2104-01-01", f"検知 {index}", participants=[])
-
-    assert len(service.search_events("検知", limit=1000)) == 100
-    assert len(service.range_events("2104-01-01", "2104-01-01", limit=1000)) == 100
-
-
-def test_timeline_range_is_inclusive_and_deterministic(service):
-    first = service.create_event("2104-01-01", "同日後", participants=[])
-    second = service.create_event("2104-01-01", "同日前", participants=[])
-    outside = service.create_event("2104-01-02", "範囲外", participants=[])
-
-    assert service.range_events("2104-01-01", "2104-01-01", limit=30) == (
-        first,
-        second,
+    assert (updated.title, updated.time_start, updated.version) == (
+        "新題",
+        "2104-02-01",
+        3,
     )
-    assert outside not in service.range_events("2104-01-01", "2104-01-01", limit=30)
+    assert service._connection.execute(
+        "SELECT title, description, time_start, time_end "
+        "FROM timeline_events WHERE id = ?",
+        (event.id,),
+    ).fetchone() == ("新題", "", "2104-02-01", "2104-02-01")
 
 
-def test_timeline_rejects_self_and_duplicate_relations(service):
-    first = service.create_event("2104-01-01", "検知", participants=[])
-    second = service.create_event("2104-02-01", "発表", participants=[])
+def test_timeline_search_and_range_cap_limit_at_service_bound(
+    service: TimelineService,
+) -> None:
+    for index in range(101):
+        service.create_event("2104-01-01", f"検知 {index}")
+    assert len(service.search_events("検知", 1000)) == 100
+    assert len(service.range_events("2104-01-01", "2104-01-01", 1000)) == 100
+
+
+def test_timeline_range_is_inclusive_and_deterministic(
+    service: TimelineService,
+) -> None:
+    first = service.create_event("2104-01-01", "同日後")
+    second = service.create_event("2104-01-01", "同日前")
+    outside = service.create_event("2104-01-02", "範囲外")
+    assert service.range_events("2104-01-01", "2104-01-01", 30) == (first, second)
+    assert outside not in service.range_events("2104-01-01", "2104-01-01", 30)
+
+
+def test_timeline_rejects_self_and_duplicate_relations(
+    service: TimelineService,
+) -> None:
+    first = service.create_event("2104-01-01", "検知")
+    second = service.create_event("2104-02-01", "発表")
     service.create_relation(first.id, second.id, "causes")
-
     with pytest.raises(ValueError, match="self"):
         service.create_relation(first.id, first.id, "causes")
     with pytest.raises(ValueError, match="duplicate"):
         service.create_relation(first.id, second.id, "causes")
 
 
-def test_timeline_relation_and_participant_mutation_is_scoped_to_work(
-    service, tmp_path: Path
-):
-    event = service.create_event("2104-01-01", "検知", participants=[])
+def test_timeline_location_and_participants_are_work_scoped(
+    service: TimelineService,
+) -> None:
+    event = service.create_event("2104-01-01", "検知")
     connection = service._connection
     connection.execute(
         "INSERT INTO works (slug, title) VALUES (?, ?)", ("other", "other")
@@ -167,14 +181,33 @@ def test_timeline_relation_and_participant_mutation_is_scoped_to_work(
     ).fetchone()[0]
     other_event_id = connection.execute(
         """
-        INSERT INTO timeline_events (
-            work_id, event_key, title, summary, chronology_sort_key, canon_status
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        RETURNING id
+        INSERT INTO timeline_events
+            (work_id, event_key, time_start, time_end, date_precision,
+             date_display, title)
+        VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id
         """,
-        (other_work_id, "other-event", "別", "別", "2104-01-02", "draft"),
+        (
+            other_work_id,
+            "other-event",
+            "2104-01-02",
+            "2104-01-02",
+            "day",
+            "2104-01-02",
+            "別",
+        ),
+    ).fetchone()[0]
+    other_fact_id = connection.execute(
+        """
+        INSERT INTO world_facts
+            (work_id, topic_key, category, title, statement, details_json)
+        VALUES (?, ?, ?, ?, ?, ?) RETURNING id
+        """,
+        (other_work_id, "other-fact", "history", "別", "別", "{}"),
     ).fetchone()[0]
     connection.commit()
-
     with pytest.raises(WorkScopeError, match="WORK_SCOPE_ERROR"):
         service.create_relation(event.id, other_event_id, "causes")
+    with pytest.raises(WorkScopeError, match="WORK_SCOPE_ERROR"):
+        service.update_event(
+            event.id, event.version, location_world_fact_id=other_fact_id
+        )

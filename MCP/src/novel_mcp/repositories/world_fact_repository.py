@@ -7,12 +7,19 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class WorldFactRecord:
     id: int
+    work_id: int
+    topic_key: str
+    category: str
+    title: str
     statement: str
+    details_json: str
     valid_from: str | None
     valid_to: str | None
+    canon_status: str
+    importance: int
+    version: int
     created_at: str
     updated_at: str
-    version: int
 
 
 class WorldFactRepository:
@@ -32,32 +39,32 @@ class WorldFactRepository:
         self,
         *,
         work_id: int,
-        fact_key: str,
+        topic_key: str,
+        category: str,
+        title: str,
         statement: str,
+        details_json: str,
         valid_from: str | None,
         valid_to: str | None,
+        importance: int,
     ) -> int:
         cursor = self._connection.execute(
             """
-            INSERT INTO world_facts (
-                work_id,
-                fact_key,
-                title,
-                body,
-                canon_status,
-                valid_from,
-                valid_to
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO world_facts
+                (work_id, topic_key, category, title, statement, details_json,
+                 valid_from, valid_to, canon_status, importance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
             """,
             (
                 work_id,
-                fact_key,
+                topic_key,
+                category,
+                title,
                 statement,
-                statement,
-                "draft",
+                details_json,
                 valid_from,
                 valid_to,
+                importance,
             ),
         )
         if cursor.lastrowid is None:
@@ -67,49 +74,33 @@ class WorldFactRepository:
     def get(self, *, work_id: int, fact_id: int) -> WorldFactRecord | None:
         row = self._connection.execute(
             """
-            SELECT id, body, valid_from, valid_to, created_at, updated_at, version
-            FROM world_facts
-            WHERE work_id = ? AND id = ?
+            SELECT id, work_id, topic_key, category, title, statement, details_json,
+                   valid_from, valid_to, canon_status, importance, version,
+                   created_at, updated_at
+            FROM world_facts WHERE work_id = ? AND id = ?
             """,
             (work_id, fact_id),
         ).fetchone()
-        if row is None:
-            return None
-        return WorldFactRecord(*row)
+        return None if row is None else WorldFactRecord(*row)
 
-    def update_statement(
-        self,
-        *,
-        work_id: int,
-        fact_id: int,
-        expected_version: int,
-        statement: str,
-    ) -> bool:
-        cursor = self._connection.execute(
-            """
-            UPDATE world_facts
-            SET
-                title = ?,
-                body = ?,
-                updated_at = CURRENT_TIMESTAMP,
-                version = version + 1
-            WHERE work_id = ? AND id = ? AND version = ?
-            """,
-            (statement, statement, work_id, fact_id, expected_version),
-        )
-        return cursor.rowcount == 1
+    def get_work_id(self, fact_id: int) -> int | None:
+        row = self._connection.execute(
+            "SELECT work_id FROM world_facts WHERE id = ?", (fact_id,)
+        ).fetchone()
+        return None if row is None else int(row[0])
 
     def search(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[WorldFactRecord, ...]:
         rows = self._connection.execute(
             """
-            SELECT id, body, valid_from, valid_to, created_at, updated_at, version
+            SELECT id, work_id, topic_key, category, title, statement, details_json,
+                   valid_from, valid_to, canon_status, importance, version,
+                   created_at, updated_at
             FROM world_facts
-            WHERE work_id = ? AND instr(body, ?) > 0
-            ORDER BY id
-            LIMIT ?
+            WHERE work_id = ? AND (instr(title, ?) > 0 OR instr(statement, ?) > 0)
+            ORDER BY id LIMIT ?
             """,
-            (work_id, query, limit),
+            (work_id, query, query, limit),
         ).fetchall()
         return tuple(WorldFactRecord(*row) for row in rows)

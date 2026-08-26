@@ -2,19 +2,41 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from typing import cast
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineParticipantRecord:
+    event_id: int
+    character_id: int
+    role: str
 
 
 @dataclass(frozen=True, slots=True)
 class TimelineEventRecord:
     id: int
+    work_id: int
     event_key: str
+    time_start: str | None
+    time_end: str | None
+    date_precision: str
+    date_display: str
     title: str
-    chronology_sort_key: str
+    description: str
+    category: str
+    location_world_fact_id: int | None
+    cause_summary: str
+    consequence_summary: str
     canon_status: str
-    participants: tuple[tuple[str, str], ...]
+    importance: int
+    version: int
     created_at: str
     updated_at: str
-    version: int
+    participants: tuple[TimelineParticipantRecord, ...]
+
+    @property
+    def chronology_sort_key(self) -> str:
+        return self.time_start or ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,79 +62,81 @@ class TimelineRepository:
     def rollback(self) -> None:
         self._connection.rollback()
 
-    def create(
-        self,
-        *,
-        work_id: int,
-        event_key: str,
-        title: str,
-        chronology_sort_key: str,
-    ) -> int:
+    def create(self, *, work_id: int, fields: dict[str, object]) -> int:
+        columns = ", ".join(("work_id", *fields.keys()))
+        placeholders = ", ".join("?" for _ in range(len(fields) + 1))
         cursor = self._connection.execute(
-            """
-            INSERT INTO timeline_events (
-                work_id, event_key, title, summary, chronology_sort_key, canon_status
-            ) VALUES (?, ?, ?, ?, ?, 'draft')
-            """,
-            (work_id, event_key, title, title, chronology_sort_key),
+            f"INSERT INTO timeline_events ({columns}) VALUES ({placeholders})",
+            (work_id, *fields.values()),
         )
         if cursor.lastrowid is None:
             raise sqlite3.IntegrityError("timeline event insert did not return an id")
         return cursor.lastrowid
 
-    def add_participant(self, *, event_id: int, label: str, role: str) -> None:
+    def add_participant(self, *, event_id: int, character_id: int, role: str) -> None:
         self._connection.execute(
             """
-            INSERT INTO timeline_event_participants
-                (timeline_event_id, participant_label, role)
+            INSERT INTO timeline_event_participants (event_id, character_id, role)
             VALUES (?, ?, ?)
             """,
-            (event_id, label, role),
+            (event_id, character_id, role),
         )
 
     def replace_participants(
-        self, *, event_id: int, participants: tuple[tuple[str, str], ...]
+        self, *, event_id: int, participants: tuple[tuple[int, str], ...]
     ) -> None:
         self._connection.execute(
-            "DELETE FROM timeline_event_participants WHERE timeline_event_id = ?",
-            (event_id,),
+            "DELETE FROM timeline_event_participants WHERE event_id = ?", (event_id,)
         )
-        for label, role in participants:
-            self.add_participant(event_id=event_id, label=label, role=role)
+        for character_id, role in participants:
+            self.add_participant(
+                event_id=event_id, character_id=character_id, role=role
+            )
 
     def get(self, *, work_id: int, event_id: int) -> TimelineEventRecord | None:
         row = self._connection.execute(
             """
-            SELECT id, event_key, title, chronology_sort_key, canon_status,
-                   created_at, updated_at, version
-            FROM timeline_events
-            WHERE work_id = ? AND id = ?
+            SELECT id, work_id, event_key, time_start, time_end, date_precision,
+                   date_display, title, description, category,
+                   location_world_fact_id, cause_summary, consequence_summary,
+                   canon_status, importance, version, created_at, updated_at
+            FROM timeline_events WHERE work_id = ? AND id = ?
             """,
             (work_id, event_id),
         ).fetchone()
         if row is None:
             return None
         participants = tuple(
-            self._connection.execute(
+            TimelineParticipantRecord(*participant)
+            for participant in self._connection.execute(
                 """
-                SELECT participant_label, role
+                SELECT event_id, character_id, role
                 FROM timeline_event_participants
-                WHERE timeline_event_id = ?
-                ORDER BY id
+                WHERE event_id = ? ORDER BY id
                 """,
                 (event_id,),
             ).fetchall()
         )
         return TimelineEventRecord(
-            id=row[0],
-            event_key=row[1],
-            title=row[2],
-            chronology_sort_key=row[3],
-            canon_status=row[4],
+            id=cast(int, row[0]),
+            work_id=cast(int, row[1]),
+            event_key=cast(str, row[2]),
+            time_start=cast(str | None, row[3]),
+            time_end=cast(str | None, row[4]),
+            date_precision=cast(str, row[5]),
+            date_display=cast(str, row[6]),
+            title=cast(str, row[7]),
+            description=cast(str, row[8]),
+            category=cast(str, row[9]),
+            location_world_fact_id=cast(int | None, row[10]),
+            cause_summary=cast(str, row[11]),
+            consequence_summary=cast(str, row[12]),
+            canon_status=cast(str, row[13]),
+            importance=cast(int, row[14]),
+            version=cast(int, row[15]),
+            created_at=cast(str, row[16]),
+            updated_at=cast(str, row[17]),
             participants=participants,
-            created_at=row[5],
-            updated_at=row[6],
-            version=row[7],
         )
 
     def get_work_id(self, event_id: int) -> int | None:
@@ -121,51 +145,14 @@ class TimelineRepository:
         ).fetchone()
         return None if row is None else int(row[0])
 
-    def update(
-        self,
-        *,
-        work_id: int,
-        event_id: int,
-        expected_version: int,
-        title: str | None,
-        chronology_sort_key: str | None,
-    ) -> bool:
-        current = self._connection.execute(
-            """
-            SELECT title, chronology_sort_key
-            FROM timeline_events
-            WHERE work_id = ? AND id = ?
-            """,
-            (work_id, event_id),
-        ).fetchone()
-        if current is None:
-            return False
-        cursor = self._connection.execute(
-            """
-            UPDATE timeline_events
-            SET title = ?, summary = ?, chronology_sort_key = ?,
-                updated_at = CURRENT_TIMESTAMP, version = version + 1
-            WHERE work_id = ? AND id = ? AND version = ?
-            """,
-            (
-                title if title is not None else current[0],
-                title if title is not None else current[0],
-                chronology_sort_key if chronology_sort_key is not None else current[1],
-                work_id,
-                event_id,
-                expected_version,
-            ),
-        )
-        return cursor.rowcount == 1
-
     def search(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[TimelineEventRecord, ...]:
         rows = self._connection.execute(
             """
             SELECT id FROM timeline_events
-            WHERE work_id = ? AND (instr(title, ?) > 0 OR instr(summary, ?) > 0)
-            ORDER BY chronology_sort_key, id LIMIT ?
+            WHERE work_id = ? AND (instr(title, ?) > 0 OR instr(description, ?) > 0)
+            ORDER BY COALESCE(time_start, '9999-12-31'), id LIMIT ?
             """,
             (work_id, query, query, limit),
         ).fetchall()
@@ -181,11 +168,11 @@ class TimelineRepository:
         rows = self._connection.execute(
             """
             SELECT id FROM timeline_events
-            WHERE work_id = ? AND chronology_sort_key >= ?
-              AND chronology_sort_key <= ?
-            ORDER BY chronology_sort_key, id LIMIT ?
+            WHERE work_id = ? AND time_start IS NOT NULL
+              AND time_start <= ? AND time_end >= ?
+            ORDER BY time_start, id LIMIT ?
             """,
-            (work_id, start, end, limit),
+            (work_id, end, start, limit),
         ).fetchall()
         return tuple(
             record

@@ -33,8 +33,10 @@ class RelationshipService:
         source_character_id: int,
         target_character_id: int,
         relation_type: str,
+        description: str = "",
     ) -> RelationshipRecord:
         normalized_type = self._required_text(relation_type, "relation_type")
+        normalized_description = self._optional_text(description, "description")
         work_id = self._work_id()
         self._validate_endpoint(work_id, source_character_id)
         self._validate_endpoint(work_id, target_character_id)
@@ -47,7 +49,8 @@ class RelationshipService:
                     work_id=work_id,
                     source_character_id=source_character_id,
                     target_character_id=target_character_id,
-                    relation_type=normalized_type,
+                    relationship_type=normalized_type,
+                    description=normalized_description,
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValidationError("duplicate relationship") from exc
@@ -76,8 +79,14 @@ class RelationshipService:
         expected_version: int,
         relation_type: str,
         reason: str | None = None,
+        *,
+        relationship_type: str | None = None,
+        description: str | None = None,
     ) -> RelationshipRecord:
-        normalized_type = self._required_text(relation_type, "relation_type")
+        normalized_type = self._required_text(
+            relationship_type if relationship_type is not None else relation_type,
+            "relationship_type",
+        )
         work_id = self._work_id()
         if (
             self._repository.get(work_id=work_id, relationship_id=relationship_id)
@@ -88,7 +97,14 @@ class RelationshipService:
             self._canon_service.update_content(
                 "relationship",
                 relationship_id,
-                {"relationship_type": normalized_type},
+                {
+                    "relationship_type": normalized_type,
+                    **(
+                        {"description": self._optional_text(description, "description")}
+                        if description is not None
+                        else {}
+                    ),
+                },
                 expected_version=expected_version,
                 reason=reason,
             )
@@ -136,3 +152,8 @@ class RelationshipService:
         if not normalized:
             raise ValidationError(f"{field_name} must be non-empty", field=field_name)
         return normalized
+
+    def _optional_text(self, value: str, field_name: str) -> str:
+        if not isinstance(value, str):
+            raise ValidationError(f"{field_name} must be a string", field=field_name)
+        return value.strip()

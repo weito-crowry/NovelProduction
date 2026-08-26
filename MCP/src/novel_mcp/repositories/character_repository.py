@@ -7,11 +7,36 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class CharacterRecord:
     id: int
-    name: str
-    profile: str
+    work_id: int
+    character_key: str
+    display_name: str
+    entity_type: str
+    description: str
+    birth_date: str | None
+    death_date: str | None
+    physical_description: str
+    occupation: str
+    core_beliefs: str
+    goals: str
+    fears: str
+    personality: str
+    speech_style: str
+    ai_attitude: str
+    genetic_modification_attitude: str
+    private_notes: str
+    profile_json: str
+    canon_status: str
+    version: int
     created_at: str
     updated_at: str
-    version: int
+
+    @property
+    def name(self) -> str:
+        return self.display_name
+
+    @property
+    def profile(self) -> str:
+        return self.description
 
 
 class CharacterRepository:
@@ -27,16 +52,12 @@ class CharacterRepository:
     def rollback(self) -> None:
         self._connection.rollback()
 
-    def create(
-        self, *, work_id: int, character_key: str, name: str, profile: str
-    ) -> int:
+    def create(self, *, work_id: int, fields: dict[str, object]) -> int:
+        columns = ", ".join(("work_id", *fields.keys()))
+        placeholders = ", ".join("?" for _ in range(len(fields) + 1))
         cursor = self._connection.execute(
-            """
-            INSERT INTO characters
-                (work_id, character_key, display_name, summary, canon_status)
-            VALUES (?, ?, ?, ?, 'draft')
-            """,
-            (work_id, character_key, name, profile),
+            f"INSERT INTO characters ({columns}) VALUES ({placeholders})",
+            (work_id, *fields.values()),
         )
         if cursor.lastrowid is None:
             raise sqlite3.IntegrityError("character insert did not return an id")
@@ -45,9 +66,12 @@ class CharacterRepository:
     def get(self, *, work_id: int, character_id: int) -> CharacterRecord | None:
         row = self._connection.execute(
             """
-            SELECT id, display_name, summary, created_at, updated_at, version
-            FROM characters
-            WHERE work_id = ? AND id = ?
+            SELECT id, work_id, character_key, display_name, entity_type, description,
+                   birth_date, death_date, physical_description, occupation,
+                   core_beliefs, goals, fears, personality, speech_style,
+                   ai_attitude, genetic_modification_attitude, private_notes,
+                   profile_json, canon_status, version, created_at, updated_at
+            FROM characters WHERE work_id = ? AND id = ?
             """,
             (work_id, character_id),
         ).fetchone()
@@ -59,37 +83,20 @@ class CharacterRepository:
         ).fetchone()
         return None if row is None else int(row[0])
 
-    def update(
-        self,
-        *,
-        work_id: int,
-        character_id: int,
-        expected_version: int,
-        name: str,
-        profile: str,
-    ) -> bool:
-        cursor = self._connection.execute(
-            """
-            UPDATE characters
-            SET display_name = ?, summary = ?,
-                updated_at = CURRENT_TIMESTAMP, version = version + 1
-            WHERE work_id = ? AND id = ? AND version = ?
-            """,
-            (name, profile, work_id, character_id, expected_version),
-        )
-        return cursor.rowcount == 1
-
     def search(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[CharacterRecord, ...]:
         rows = self._connection.execute(
             """
-            SELECT id, display_name, summary, created_at, updated_at, version
+            SELECT id, work_id, character_key, display_name, entity_type, description,
+                   birth_date, death_date, physical_description, occupation,
+                   core_beliefs, goals, fears, personality, speech_style,
+                   ai_attitude, genetic_modification_attitude, private_notes,
+                   profile_json, canon_status, version, created_at, updated_at
             FROM characters
             WHERE work_id = ?
-              AND (instr(display_name, ?) > 0 OR instr(summary, ?) > 0)
-            ORDER BY id
-            LIMIT ?
+              AND (instr(display_name, ?) > 0 OR instr(description, ?) > 0)
+            ORDER BY id LIMIT ?
             """,
             (work_id, query, query, limit),
         ).fetchall()

@@ -27,6 +27,15 @@ class CanonService:
     _ENTITY_TYPES = frozenset(
         ("world_fact", "timeline_event", "character", "relationship")
     )
+    _ALLOWED_TRANSITIONS = frozenset(
+        {
+            ("idea", "draft"),
+            ("idea", "canon"),
+            ("draft", "canon"),
+            ("canon", "deprecated"),
+            ("deprecated", "draft"),
+        }
+    )
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
@@ -60,6 +69,10 @@ class CanonService:
             current_status = before["canon_status"]
             if current_status == target_status:
                 raise CanonPolicyError("target status is unchanged")
+            if (current_status, target_status) not in self._ALLOWED_TRANSITIONS:
+                raise CanonPolicyError(
+                    f"transition {current_status}->{target_status} is not allowed"
+                )
             if (current_status in ("idea", "draft") and target_status == "canon") or (
                 current_status == "canon" and target_status == "deprecated"
             ):
@@ -107,7 +120,7 @@ class CanonService:
         reason: str | None = None,
         after_update: Callable[[], None] | None = None,
         allow_empty: bool = False,
-    ) -> CanonDecisionRecord:
+    ) -> CanonDecisionRecord | None:
         self._validate_entity_type(entity_type)
         work_id = self._work_id()
         normalized = dict(fields)
@@ -118,6 +131,8 @@ class CanonService:
                 raise VersionConflictError("VERSION_CONFLICT")
             if before["canon_status"] == "canon":
                 self._require_reason(reason)
+            elif before["canon_status"] == "deprecated":
+                raise CanonPolicyError("deprecated content cannot be edited")
             after = {
                 **before,
                 **normalized,
@@ -140,16 +155,20 @@ class CanonService:
                 raise VersionConflictError("VERSION_CONFLICT")
             if after_update is not None:
                 after_update()
-            decision_id = self._repository.insert_decision(
-                work_id=work_id,
-                summary=f"Update {entity_type} {entity_id} content",
-                reason=reason or "ordinary authoring edit",
-                changes=(change,),
-            )
+            decision_id: int | None = None
+            if before["canon_status"] == "canon":
+                decision_id = self._repository.insert_decision(
+                    work_id=work_id,
+                    summary=f"Update {entity_type} {entity_id} content",
+                    reason=reason or "",
+                    changes=(change,),
+                )
             self._repository.commit()
         except Exception:
             self._repository.rollback()
             raise
+        if decision_id is None:
+            return None
         return self._decision_or_not_found(work_id, decision_id)
 
     def record_decision(

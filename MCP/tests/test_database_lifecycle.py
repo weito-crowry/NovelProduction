@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -54,6 +55,28 @@ def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> 
         ).fetchone() == (1,)
     finally:
         second_connection.close()
+
+
+def test_pre_merge_migration_checksums_match_current_corrected_bytes(
+    tmp_path: Path,
+) -> None:
+    migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+    config = DatabaseConfig(db_path=tmp_path / "story.db", migration_dir=migration_dir)
+    connection = open_database(config)
+    try:
+        rows = connection.execute(
+            "SELECT version, checksum FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        expected = tuple(
+            (
+                path.name,
+                sha256(path.read_bytes()).hexdigest(),
+            )
+            for path in sorted(migration_dir.glob("*.sql"))
+        )
+        assert tuple(rows) == expected
+    finally:
+        connection.close()
 
 
 def test_open_database_rolls_back_failed_migrations(tmp_path: Path) -> None:
@@ -217,12 +240,13 @@ def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
         }
         for table, columns in expected_columns.items():
             actual = {
-                row[1]
-                for row in connection.execute(f"PRAGMA table_info({table})")
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
             }
             assert actual == columns, table
 
-        connection.execute("INSERT INTO works (slug, title) VALUES (?, ?)", ("main", "Main"))
+        connection.execute(
+            "INSERT INTO works (slug, title) VALUES (?, ?)", ("main", "Main")
+        )
         work_id = connection.execute("SELECT id FROM works").fetchone()[0]
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
@@ -272,13 +296,38 @@ def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
                (work_id, event_key, time_start, time_end, date_precision,
                 date_display, title)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (work_id, "event", "2104-01-01", "2104-01-01", "day", "2104-01-01", "Event"),
+            (
+                work_id,
+                "event",
+                "2104-01-01",
+                "2104-01-01",
+                "day",
+                "2104-01-01",
+                "Event",
+            ),
         )
         event_id = connection.execute("SELECT id FROM timeline_events").fetchone()[0]
         connection.execute(
-            "INSERT INTO timeline_event_participants (event_id, character_id, role) VALUES (?, ?, ?)",
+            "INSERT INTO timeline_event_participants "
+            "(event_id, character_id, role) VALUES (?, ?, ?)",
             (event_id, character_id, "observer"),
         )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO timeline_event_participants "
+                "(event_id, character_id, role) VALUES (?, ?, ?)",
+                (event_id, character_id + 999, "invalid"),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO relationships
+                    (work_id, source_character_id, target_character_id,
+                     relationship_type)
+                VALUES (?, ?, ?, ?)
+                """,
+                (work_id, character_id, character_id + 999, "knows"),
+            )
         connection.commit()
     finally:
         connection.close()
