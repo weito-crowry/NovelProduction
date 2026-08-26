@@ -154,9 +154,7 @@ def test_effective_beliefs_follow_narrative_order_after_reorder(services) -> Non
 
     before = services.context.build_episode_context(target.id)
     assert before.participants[0].effective_state is not None
-    assert before.participants[0].effective_state.beliefs == {
-        "belief": "PRIOR_BELIEF"
-    }
+    assert before.participants[0].effective_state.beliefs == {"belief": "PRIOR_BELIEF"}
 
     services.narrative.reorder_episode(target.id, 1, target.version)
     after = services.context.build_episode_context(target.id)
@@ -210,9 +208,7 @@ def test_future_disclosure_probe_rejects_safe_item_without_disclosure(
         )
     )
 
-    assert (
-        _future_disclosure_ok(services.connection, target.id, fake_context) is False
-    )
+    assert _future_disclosure_ok(services.connection, target.id, fake_context) is False
 
 
 def test_acceptance_gate_seeds_active_attack_probes(services) -> None:
