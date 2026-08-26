@@ -131,6 +131,7 @@ class SearchRepository:
         self, source_table: str, expression: str, work_id: int, query: str, limit: int
     ) -> tuple[int, ...]:
         fts_table = "novel_mcp_ephemeral_fts"
+        owns_transaction = not self._connection.in_transaction
         self._connection.execute(f"DROP TABLE IF EXISTS temp.{fts_table}")
         self._connection.execute(
             f"CREATE VIRTUAL TABLE temp.{fts_table} USING fts5("
@@ -152,7 +153,11 @@ class SearchRepository:
             ).fetchall()
             return tuple(int(row[0]) for row in rows)
         finally:
-            self._connection.execute(f"DROP TABLE temp.{fts_table}")
+            try:
+                self._connection.execute(f"DROP TABLE temp.{fts_table}")
+            finally:
+                if owns_transaction and self._connection.in_transaction:
+                    self._connection.commit()
 
     def _world_rows_by_ids(
         self, work_id: int, ids: tuple[int, ...]
