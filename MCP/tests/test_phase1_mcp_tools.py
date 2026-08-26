@@ -8,7 +8,7 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
-from novel_mcp.mcp_server import create_server
+from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, create_server
 
 
 def _config(tmp_path: Path) -> DatabaseConfig:
@@ -98,6 +98,36 @@ def test_read_and_mutation_annotations_match_tool_effects(tmp_path: Path) -> Non
         assert annotations.open_world_hint is False
 
     assert "expected_version" in tools["canon_status_set"].input_schema["required"]
+
+
+def test_all_phase1_tools_have_actionable_descriptions_and_schema_bounds(
+    tmp_path: Path,
+) -> None:
+    server = create_server(_config(tmp_path))
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    assert set(tools) == PHASE1_TOOL_NAMES
+    for tool in tools.values():
+        assert tool.description
+        assert tool.description.startswith("Use this when")
+    assert (
+        tools["world_fact_search"].input_schema["properties"]["limit"]["maximum"] == 100
+    )
+    date_precision_schema = tools["timeline_event_create"].input_schema["properties"][
+        "date_precision"
+    ]
+    assert date_precision_schema["anyOf"][0]["enum"] == [
+        "unknown",
+        "year",
+        "season",
+        "month",
+        "day",
+    ]
+    assert tools["character_create"].input_schema["properties"]["entity_type"][
+        "enum"
+    ] == ["human", "ai", "organization"]
+    assert tools["canon_status_set"].input_schema["properties"]["target_status"][
+        "enum"
+    ] == ["idea", "draft", "canon", "deprecated"]
 
 
 def test_work_get_returns_structured_json_and_does_not_create_work(

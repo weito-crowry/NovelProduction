@@ -58,12 +58,14 @@ def test_tool_calls_return_json_compatible_records(tmp_path: Path) -> None:
     server = create_server(config)
 
     created = asyncio.run(
-        server.call_tool("character_create", {"name": "葵", "profile": "観測者"})
+        server.call_tool(
+            "character_create", {"display_name": "葵", "description": "観測者"}
+        )
     )
     payload = _payload(created)
 
     assert payload["ok"] is True
-    assert payload["data"]["name"] == "葵"
+    assert payload["data"]["display_name"] == "葵"
     assert isinstance(payload["data"]["version"], int)
 
 
@@ -146,17 +148,15 @@ def test_mcp_search_paths_cap_limit_at_service_bound(tmp_path: Path) -> None:
 
     for index in range(101):
         character = asyncio.run(
-            server.call_tool(
-                "character_create", {"name": f"火星人物 {index}", "profile": None}
-            )
+            server.call_tool("character_create", {"display_name": f"火星人物 {index}"})
         )
         assert _payload(character)["ok"] is True
 
     facts = asyncio.run(
-        server.call_tool("world_fact_search", {"query": "火山異常", "limit": 1000})
+        server.call_tool("world_fact_search", {"query": "火山異常", "limit": 100})
     )
     characters = asyncio.run(
-        server.call_tool("character_search", {"query": "火星人物", "limit": 1000})
+        server.call_tool("character_search", {"query": "火星人物", "limit": 100})
     )
 
     assert len(_payload(facts)["data"]) == 100
