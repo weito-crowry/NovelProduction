@@ -260,22 +260,30 @@ class ContextService:
         candidates: dict[int, _InformationCandidate] = {}
         reveal: dict[int, SafeInformationItem] = {}
 
-        for disclosure in self._repository.current_disclosures(work_id, episode_id):
-            item = self._repository.information(work_id, disclosure.information_item_id)
-            if item is None or item.canon_status == "deprecated":
+        for current_disclosure in self._repository.current_disclosures(
+            work_id, episode_id
+        ):
+            database_item = self._repository.information(
+                work_id, current_disclosure.information_item_id
+            )
+            if database_item is None or database_item.canon_status == "deprecated":
                 continue
-            reveal[item.id] = safe_information(item)
+            reveal[database_item.id] = safe_information(database_item)
 
-        for item in outline.references.information:
-            disclosure = self._repository.disclosure(work_id, item.id)
-            boundary = self._disclosure_order(work_id, disclosure)
+        for referenced_item in outline.references.information:
+            disclosure_record = self._repository.disclosure(
+                work_id, referenced_item.id
+            )
+            boundary = self._disclosure_order(work_id, disclosure_record)
             if boundary is None:
                 continue
             if boundary == target_order:
-                reveal[item.id] = item
+                reveal[referenced_item.id] = referenced_item
             elif boundary < target_order:
-                candidates[item.id] = _InformationCandidate(
-                    item=item, direct_reference=True, disclosure_order=boundary
+                candidates[referenced_item.id] = _InformationCandidate(
+                    item=referenced_item,
+                    direct_reference=True,
+                    disclosure_order=boundary,
                 )
         for candidate in participant_candidates:
             if candidate.disclosure_order == target_order:
