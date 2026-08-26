@@ -19,6 +19,15 @@ class WorldFactRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def begin_write(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
     def create(
         self,
         *,

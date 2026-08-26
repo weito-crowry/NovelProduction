@@ -21,6 +21,12 @@ class CharacterRepository:
     def begin_write(self) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
 
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
     def create(
         self, *, work_id: int, character_key: str, name: str, profile: str
     ) -> int:
@@ -46,6 +52,12 @@ class CharacterRepository:
             (work_id, character_id),
         ).fetchone()
         return None if row is None else CharacterRecord(*row)
+
+    def get_work_id(self, character_id: int) -> int | None:
+        row = self._connection.execute(
+            "SELECT work_id FROM characters WHERE id = ?", (character_id,)
+        ).fetchone()
+        return None if row is None else int(row[0])
 
     def update(
         self,

@@ -21,6 +21,15 @@ class WorkRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def begin_write(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
     def get(self) -> WorkRecord | None:
         row = self._connection.execute(
             """
@@ -47,10 +56,20 @@ class WorkRepository:
             (title, current.id, expected_version),
         )
         if cursor.rowcount == 0:
-            self._connection.rollback()
             raise VersionConflictError("VERSION_CONFLICT")
-        self._connection.commit()
         updated = self.get()
         if updated is None:
             raise VersionConflictError("VERSION_CONFLICT")
         return updated
+
+    def create(self, *, slug: str, title: str, description: str | None) -> int:
+        cursor = self._connection.execute(
+            """
+            INSERT INTO works (slug, title, description)
+            VALUES (?, ?, ?)
+            """,
+            (slug, title, description),
+        )
+        if cursor.lastrowid is None:
+            raise sqlite3.IntegrityError("work insert did not return an id")
+        return cursor.lastrowid

@@ -5,9 +5,14 @@ monorepo.
 
 ## Current status
 
-Design and implementation planning phase. No MCP server, SQLite schema,
-migration SQL, service, repository, tool handler, or test implementation is
-included in this initial commit.
+Phase 1 foundation implemented. This directory contains the SQLite lifecycle,
+immutable Phase 1 migrations, explicit `novel-init`, service/repository layers,
+canon-aware entity mutation and audit decisions, bounded Japanese search, and
+the 23-tool stdio MCP surface.
+
+Phase 2 and Phase 3 schemas, tools, and runtime workflows are intentionally not
+implemented. No repository `story.db` or generated story artifacts are part of
+the project.
 
 ## Target stack
 

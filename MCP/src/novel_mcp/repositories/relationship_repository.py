@@ -22,6 +22,12 @@ class RelationshipRepository:
     def begin_write(self) -> None:
         self._connection.execute("BEGIN IMMEDIATE")
 
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
     def create(
         self,
         *,

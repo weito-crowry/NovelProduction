@@ -6,9 +6,10 @@ from datetime import date
 from uuid import uuid4
 
 from novel_mcp.errors import (
+    CanonEntityNotFoundError,
     TimelineEventNotFoundError,
-    VersionConflictError,
     WorkNotFoundError,
+    WorkScopeError,
 )
 from novel_mcp.repositories.timeline_repository import (
     TimelineEventRecord,
@@ -16,6 +17,8 @@ from novel_mcp.repositories.timeline_repository import (
     TimelineRepository,
 )
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.canon_service import CanonService
+from novel_mcp.services.search_service import MAX_SEARCH_LIMIT
 
 
 class TimelineService:
@@ -23,6 +26,7 @@ class TimelineService:
         self._connection = connection
         self._work_repository = WorkRepository(connection)
         self._repository = TimelineRepository(connection)
+        self._canon_service = CanonService(connection)
 
     def create_event(
         self,
@@ -35,7 +39,7 @@ class TimelineService:
         normalized_title = self._normalize_text(title, "title")
         normalized_participants = self._normalize_participants(participants)
         work_id = self._work_id()
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._repository.begin_write()
         try:
             event_id = self._repository.create(
                 work_id=work_id,
@@ -50,10 +54,10 @@ class TimelineService:
             record = self._repository.get(work_id=work_id, event_id=event_id)
             if record is None:
                 raise sqlite3.IntegrityError("timeline event creation failed")
-            self._connection.commit()
+            self._repository.commit()
             return record
         except Exception:
-            self._connection.rollback()
+            self._repository.rollback()
             raise
 
     def get_event(self, event_id: int) -> TimelineEventRecord:
@@ -70,6 +74,7 @@ class TimelineService:
         title: str | None = None,
         new_date: str | None = None,
         participants: Sequence[tuple[str, str]] | None = None,
+        reason: str | None = None,
     ) -> TimelineEventRecord:
         normalized_title = (
             self._normalize_text(title, "title") if title is not None else None
@@ -82,37 +87,41 @@ class TimelineService:
             if participants is not None
             else None
         )
-        work_id = self._work_id()
-        self._connection.execute("BEGIN IMMEDIATE")
         try:
-            if not self._repository.update(
-                work_id=work_id,
-                event_id=event_id,
+            fields: dict[str, object] = {}
+            if normalized_title is not None:
+                fields.update(title=normalized_title, summary=normalized_title)
+            if normalized_date is not None:
+                fields["chronology_sort_key"] = normalized_date
+
+            def update_participants() -> None:
+                if normalized_participants is not None:
+                    self._repository.replace_participants(
+                        event_id=event_id,
+                        participants=normalized_participants,
+                    )
+
+            self._canon_service.update_content(
+                "timeline_event",
+                event_id,
+                fields,
                 expected_version=expected_version,
-                title=normalized_title,
-                chronology_sort_key=normalized_date,
-            ):
-                raise VersionConflictError("VERSION_CONFLICT")
-            if normalized_participants is not None:
-                self._repository.replace_participants(
-                    event_id=event_id,
-                    participants=normalized_participants,
-                )
-            record = self._repository.get(work_id=work_id, event_id=event_id)
-            if record is None:
-                raise VersionConflictError("VERSION_CONFLICT")
-            self._connection.commit()
-            return record
-        except Exception:
-            self._connection.rollback()
-            raise
+                reason=reason,
+                after_update=update_participants,
+                allow_empty=True,
+            )
+        except CanonEntityNotFoundError as exc:
+            raise TimelineEventNotFoundError("NOT_FOUND") from exc
+        return self.get_event(event_id)
 
     def search_events(self, query: str, limit: int) -> tuple[TimelineEventRecord, ...]:
         normalized_query = query.strip()
         if not normalized_query or limit <= 0:
             return ()
         return self._repository.search(
-            work_id=self._work_id(), query=normalized_query, limit=limit
+            work_id=self._work_id(),
+            query=normalized_query,
+            limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
     def range_events(
@@ -128,30 +137,33 @@ class TimelineService:
             work_id=self._work_id(),
             start=normalized_start,
             end=normalized_end,
-            limit=limit,
+            limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
     def move_event(
-        self, event_id: int, expected_version: int, new_date: str
+        self,
+        event_id: int,
+        expected_version: int,
+        new_date: str,
+        reason: str | None = None,
     ) -> TimelineEventRecord:
         return self.update_event(
             event_id,
             expected_version,
             new_date=new_date,
+            reason=reason,
         )
 
     def create_relation(
         self, source_id: int, target_id: int, relation_type: str
     ) -> TimelineRelationRecord:
-        if source_id == target_id:
-            raise ValueError("self relation is not allowed")
         normalized_type = self._normalize_text(relation_type, "relation_type")
         work_id = self._work_id()
-        if self._repository.get(work_id=work_id, event_id=source_id) is None or (
-            self._repository.get(work_id=work_id, event_id=target_id) is None
-        ):
-            raise ValueError("events must belong to the same work")
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._require_event_in_work(work_id, source_id)
+        self._require_event_in_work(work_id, target_id)
+        if source_id == target_id:
+            raise ValueError("self relation is not allowed")
+        self._repository.begin_write()
         try:
             try:
                 relation = self._repository.create_relation(
@@ -162,11 +174,18 @@ class TimelineService:
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValueError("duplicate relation") from exc
-            self._connection.commit()
+            self._repository.commit()
             return relation
         except Exception:
-            self._connection.rollback()
+            self._repository.rollback()
             raise
+
+    def _require_event_in_work(self, work_id: int, event_id: int) -> None:
+        if self._repository.get(work_id=work_id, event_id=event_id) is not None:
+            return
+        if self._repository.get_work_id(event_id) is not None:
+            raise WorkScopeError()
+        raise TimelineEventNotFoundError("NOT_FOUND")
 
     def _work_id(self) -> int:
         work = self._work_repository.get()

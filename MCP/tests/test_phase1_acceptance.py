@@ -42,6 +42,7 @@ def test_canon_status_requires_reason_for_protected_transition(
                 "entity_type": "world_fact",
                 "entity_id": fact_id,
                 "target_status": "canon",
+                "expected_version": 1,
                 "reason": None,
             },
         )
@@ -123,3 +124,40 @@ def test_server_inventory_has_no_phase_two_or_three_names(tmp_path: Path) -> Non
 
     assert not names & {"chapter_create", "episode_create", "scene_create"}
     assert not names & {"episode_context", "episode_draft_get", "episode_draft_save"}
+
+
+def test_mcp_search_paths_cap_limit_at_service_bound(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    initialize_work(config.db_path, "Phase 1")
+    server = create_server(config)
+
+    for index in range(101):
+        fact = asyncio.run(
+            server.call_tool(
+                "world_fact_create",
+                {
+                    "statement": f"火山異常 {index}",
+                    "valid_from": None,
+                    "valid_to": None,
+                },
+            )
+        )
+        assert _payload(fact)["ok"] is True
+
+    for index in range(101):
+        character = asyncio.run(
+            server.call_tool(
+                "character_create", {"name": f"火星人物 {index}", "profile": None}
+            )
+        )
+        assert _payload(character)["ok"] is True
+
+    facts = asyncio.run(
+        server.call_tool("world_fact_search", {"query": "火山異常", "limit": 1000})
+    )
+    characters = asyncio.run(
+        server.call_tool("character_search", {"query": "火星人物", "limit": 1000})
+    )
+
+    assert len(_payload(facts)["data"]) == 100
+    assert len(_payload(characters)["data"]) == 100

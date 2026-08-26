@@ -393,6 +393,7 @@ git commit -m "feat: add characters and relationships"
 **Interfaces:**
 - Consumes: mutable entity repositories, status values, and transaction boundary from Tasks 1–5.
 - Produces: `set_canon_status(entity_type: str, entity_id: int, target_status: str, expected_version: int, reason: str | None) -> CanonDecisionRecord`,
+  `update_content(entity_type: str, entity_id: int, fields: Mapping[str, object], expected_version: int, reason: str | None) -> CanonDecisionRecord`,
   `record_decision(summary: str, reason: str, changes: Sequence[CanonChange]) -> CanonDecisionRecord`,
   `get_decision(decision_id: int) -> CanonDecisionRecord`, and
   `search_decisions(query: str, limit: int) -> tuple[CanonDecisionRecord, ...]`.
@@ -404,10 +405,10 @@ def test_canon_transition_requires_reason_and_commits_decision_atomically(servic
     fact = service.world_fact.create("旧記述", None, None)
 
     with pytest.raises(CanonReasonRequired):
-        service.canon.set_canon_status("world_fact", fact.id, "canon", None)
+        service.canon.set_canon_status("world_fact", fact.id, "canon", 1, None)
 
     decision = service.canon.set_canon_status(
-        "world_fact", fact.id, "canon", "採用理由"
+        "world_fact", fact.id, "canon", 1, "採用理由"
     )
     assert decision.changes[0].entity_id == fact.id
 ```
@@ -420,13 +421,15 @@ Expected: FAIL because canon policy and decision history are not implemented.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Validate the protected transitions and canonical content edits before opening
-the write transaction. Generate the immutable schema's opaque `decision_key`
-and use its `decided_at` timestamp below the public interface. Persist one
-decision and all change rows in the same transaction as the target mutation;
-repository methods own all SQL while the service owns validation and
-transaction boundaries. Roll back the target mutation if any decision row
-fails. Keep `canon_decisions` separate from `canon_decision_changes`.
+Validate static entity/status fields before opening the write transaction, then
+begin before taking the entity snapshot so caller `expected_version` is checked
+against the same transaction that performs the conditional mutation. Generate
+the immutable schema's opaque `decision_key` and use its `decided_at` timestamp
+below the public interface. Persist one decision and all change rows in the
+same transaction as the target mutation; repository methods own all SQL while
+the service owns validation and transaction boundaries. Roll back the target
+mutation if any decision row fails. Keep `canon_decisions` separate from
+`canon_decision_changes`.
 
 - [ ] **Step 4: Run test to verify it passes**
 

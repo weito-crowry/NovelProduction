@@ -4,9 +4,9 @@ import sqlite3
 from uuid import uuid4
 
 from novel_mcp.errors import (
+    CanonEntityNotFoundError,
     CharacterNotFoundError,
     ValidationError,
-    VersionConflictError,
     WorkNotFoundError,
 )
 from novel_mcp.repositories.character_repository import (
@@ -14,6 +14,8 @@ from novel_mcp.repositories.character_repository import (
     CharacterRepository,
 )
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.canon_service import CanonService
+from novel_mcp.services.search_service import MAX_SEARCH_LIMIT
 
 
 class CharacterService:
@@ -21,6 +23,7 @@ class CharacterService:
         self._connection = connection
         self._work_repository = WorkRepository(connection)
         self._repository = CharacterRepository(connection)
+        self._canon_service = CanonService(connection)
 
     def create(self, name: str, profile: str | None) -> CharacterRecord:
         normalized_name = self._required_text(name, "name")
@@ -37,10 +40,10 @@ class CharacterService:
             record = self._repository.get(work_id=work_id, character_id=character_id)
             if record is None:
                 raise sqlite3.IntegrityError("character creation failed")
-            self._connection.commit()
+            self._repository.commit()
             return record
         except Exception:
-            self._connection.rollback()
+            self._repository.rollback()
             raise
 
     def get(self, character_id: int) -> CharacterRecord:
@@ -58,6 +61,7 @@ class CharacterService:
         *,
         name: str | None = None,
         profile: str | None = None,
+        reason: str | None = None,
     ) -> CharacterRecord:
         work_id = self._work_id()
         current = self._repository.get(work_id=work_id, character_id=character_id)
@@ -67,31 +71,26 @@ class CharacterService:
             self._required_text(name, "name") if name is not None else current.name
         )
         normalized_profile = profile.strip() if profile is not None else current.profile
-        self._repository.begin_write()
         try:
-            if not self._repository.update(
-                work_id=work_id,
-                character_id=character_id,
+            self._canon_service.update_content(
+                "character",
+                character_id,
+                {"display_name": normalized_name, "summary": normalized_profile},
                 expected_version=expected_version,
-                name=normalized_name,
-                profile=normalized_profile,
-            ):
-                raise VersionConflictError("VERSION_CONFLICT")
-            updated = self._repository.get(work_id=work_id, character_id=character_id)
-            if updated is None:
-                raise CharacterNotFoundError("NOT_FOUND")
-            self._connection.commit()
-            return updated
-        except Exception:
-            self._connection.rollback()
-            raise
+                reason=reason,
+            )
+        except CanonEntityNotFoundError as exc:
+            raise CharacterNotFoundError("NOT_FOUND") from exc
+        return self.get(character_id)
 
     def search(self, query: str, limit: int) -> tuple[CharacterRecord, ...]:
         normalized_query = query.strip()
         if not normalized_query or limit <= 0:
             return ()
         return self._repository.search(
-            work_id=self._work_id(), query=normalized_query, limit=limit
+            work_id=self._work_id(),
+            query=normalized_query,
+            limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
     def _work_id(self) -> int:

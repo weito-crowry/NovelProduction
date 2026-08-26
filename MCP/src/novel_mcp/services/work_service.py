@@ -20,7 +20,14 @@ class WorkService:
         normalized_title = title.strip()
         if not normalized_title:
             raise ValueError("title must be non-empty")
-        return self._repository.update(
-            expected_version=expected_version,
-            title=normalized_title,
-        )
+        self._repository.begin_write()
+        try:
+            updated = self._repository.update(
+                expected_version=expected_version,
+                title=normalized_title,
+            )
+            self._repository.commit()
+            return updated
+        except Exception:
+            self._repository.rollback()
+            raise

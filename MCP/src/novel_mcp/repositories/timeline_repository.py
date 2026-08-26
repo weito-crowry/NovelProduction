@@ -31,6 +31,15 @@ class TimelineRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
+    def begin_write(self) -> None:
+        self._connection.execute("BEGIN IMMEDIATE")
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
     def create(
         self,
         *,
@@ -105,6 +114,12 @@ class TimelineRepository:
             updated_at=row[6],
             version=row[7],
         )
+
+    def get_work_id(self, event_id: int) -> int | None:
+        row = self._connection.execute(
+            "SELECT work_id FROM timeline_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        return None if row is None else int(row[0])
 
     def update(
         self,

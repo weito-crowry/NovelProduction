@@ -41,10 +41,7 @@ def test_normal_open_does_not_create_a_work(tmp_path: Path) -> None:
 
     try:
         assert WorkRepository(connection).get() is None
-        assert (
-            connection.execute("SELECT COUNT(*) FROM works").fetchone()
-            == (0,)
-        )
+        assert connection.execute("SELECT COUNT(*) FROM works").fetchone() == (0,)
     finally:
         connection.close()
 
@@ -82,5 +79,27 @@ def test_update_rejects_stale_version_and_empty_title(tmp_path: Path) -> None:
             service.update("2126 revised", expected_version=999)
         with pytest.raises(ValueError, match="title"):
             service.update("   ", expected_version=1)
+    finally:
+        connection.close()
+
+
+def test_work_repository_update_does_not_commit_service_owned_transaction(
+    tmp_path: Path,
+) -> None:
+    from novel_mcp.cli import initialize_work
+
+    db_path = tmp_path / "story.db"
+    initialize_work(db_path, "2126")
+    connection = open_test_database(db_path)
+
+    try:
+        repository = WorkRepository(connection)
+        repository.begin_write()
+        updated = repository.update(expected_version=1, title="uncommitted")
+
+        assert updated.title == "uncommitted"
+        assert connection.in_transaction is True
+        repository.rollback()
+        assert repository.get().title == "2126"
     finally:
         connection.close()

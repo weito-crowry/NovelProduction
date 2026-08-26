@@ -3,11 +3,12 @@ from __future__ import annotations
 import sqlite3
 
 from novel_mcp.errors import (
+    CanonEntityNotFoundError,
     CharacterNotFoundError,
     RelationshipNotFoundError,
     ValidationError,
-    VersionConflictError,
     WorkNotFoundError,
+    WorkScopeError,
 )
 from novel_mcp.repositories.character_repository import CharacterRepository
 from novel_mcp.repositories.relationship_repository import (
@@ -15,6 +16,8 @@ from novel_mcp.repositories.relationship_repository import (
     RelationshipRepository,
 )
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.canon_service import CanonService
+from novel_mcp.services.search_service import MAX_SEARCH_LIMIT
 
 
 class RelationshipService:
@@ -23,6 +26,7 @@ class RelationshipService:
         self._work_repository = WorkRepository(connection)
         self._character_repository = CharacterRepository(connection)
         self._repository = RelationshipRepository(connection)
+        self._canon_service = CanonService(connection)
 
     def create(
         self,
@@ -31,11 +35,11 @@ class RelationshipService:
         relation_type: str,
     ) -> RelationshipRecord:
         normalized_type = self._required_text(relation_type, "relation_type")
-        if source_character_id == target_character_id:
-            raise ValidationError("self relationship is not allowed", field="endpoints")
         work_id = self._work_id()
         self._validate_endpoint(work_id, source_character_id)
         self._validate_endpoint(work_id, target_character_id)
+        if source_character_id == target_character_id:
+            raise ValidationError("self relationship is not allowed", field="endpoints")
         self._repository.begin_write()
         try:
             try:
@@ -52,10 +56,10 @@ class RelationshipService:
             )
             if record is None:
                 raise sqlite3.IntegrityError("relationship creation failed")
-            self._connection.commit()
+            self._repository.commit()
             return record
         except Exception:
-            self._connection.rollback()
+            self._repository.rollback()
             raise
 
     def get(self, relationship_id: int) -> RelationshipRecord:
@@ -67,7 +71,11 @@ class RelationshipService:
         return record
 
     def update(
-        self, relationship_id: int, expected_version: int, relation_type: str
+        self,
+        relationship_id: int,
+        expected_version: int,
+        relation_type: str,
+        reason: str | None = None,
     ) -> RelationshipRecord:
         normalized_type = self._required_text(relation_type, "relation_type")
         work_id = self._work_id()
@@ -76,25 +84,17 @@ class RelationshipService:
             is None
         ):
             raise RelationshipNotFoundError("NOT_FOUND")
-        self._repository.begin_write()
         try:
-            if not self._repository.update(
-                work_id=work_id,
-                relationship_id=relationship_id,
+            self._canon_service.update_content(
+                "relationship",
+                relationship_id,
+                {"relationship_type": normalized_type},
                 expected_version=expected_version,
-                relation_type=normalized_type,
-            ):
-                raise VersionConflictError("VERSION_CONFLICT")
-            updated = self._repository.get(
-                work_id=work_id, relationship_id=relationship_id
+                reason=reason,
             )
-            if updated is None:
-                raise RelationshipNotFoundError("NOT_FOUND")
-            self._connection.commit()
-            return updated
-        except Exception:
-            self._connection.rollback()
-            raise
+        except CanonEntityNotFoundError as exc:
+            raise RelationshipNotFoundError("NOT_FOUND") from exc
+        return self.get(relationship_id)
 
     def search(
         self, character_id: int | None, limit: int
@@ -105,7 +105,9 @@ class RelationshipService:
         if character_id is not None:
             self._validate_endpoint(work_id, character_id)
         return self._repository.search(
-            work_id=work_id, character_id=character_id, limit=limit
+            work_id=work_id,
+            character_id=character_id,
+            limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
     def _work_id(self) -> int:
@@ -117,9 +119,12 @@ class RelationshipService:
     def _validate_endpoint(self, work_id: int, character_id: int) -> None:
         if (
             self._character_repository.get(work_id=work_id, character_id=character_id)
-            is None
+            is not None
         ):
-            raise CharacterNotFoundError("NOT_FOUND")
+            return
+        if self._character_repository.get_work_id(character_id) is not None:
+            raise WorkScopeError()
+        raise CharacterNotFoundError("NOT_FOUND")
 
     def _required_text(self, value: str, field_name: str) -> str:
         try:

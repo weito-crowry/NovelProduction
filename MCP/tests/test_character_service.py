@@ -7,7 +7,8 @@ import pytest
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
-from novel_mcp.errors import VersionConflictError
+from novel_mcp.errors import CanonReasonRequired, VersionConflictError
+from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.character_service import CharacterService
 
 
@@ -96,3 +97,40 @@ def test_character_get_missing_and_invalid_input_are_structured(service):
         service.get(9999)
     with pytest.raises(ValueError, match="VALIDATION_ERROR.*name"):
         service.create("   ", None)
+
+
+def test_character_canonical_update_requires_reason_and_keeps_mirrors(service):
+    character = service.create("主人公", "旧設定")
+    CanonService(service._connection).set_canon_status(
+        "character", character.id, "canon", character.version, "採用"
+    )
+
+    with pytest.raises(CanonReasonRequired, match="CANON_REASON_REQUIRED"):
+        service.update(character.id, 2, name="主人公改")
+
+    updated = service.update(
+        character.id, 2, name="主人公改", profile="新設定", reason="訂正理由"
+    )
+
+    assert updated.name == "主人公改"
+    assert updated.profile == "新設定"
+    assert updated.version == 3
+    assert service._connection.execute(
+        "SELECT display_name, summary FROM characters WHERE id = ?",
+        (character.id,),
+    ).fetchone() == ("主人公改", "新設定")
+    assert service._connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM canon_decision_changes
+        WHERE entity_type = 'character' AND entity_id = ?
+        """,
+        (character.id,),
+    ).fetchone() == (2,)
+
+
+def test_character_search_caps_limit_at_service_bound(service):
+    for index in range(101):
+        service.create(f"火星の人物 {index}", None)
+
+    assert len(service.search("火星の人物", limit=1000)) == 100

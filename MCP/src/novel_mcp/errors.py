@@ -37,6 +37,15 @@ class RelationshipNotFoundError(NovelMcpError):
     """Raised when a requested relationship does not exist in the work."""
 
 
+class WorkScopeError(NovelMcpError):
+    """Raised when an entity belongs to another configured work."""
+
+    code = "WORK_SCOPE_ERROR"
+
+    def __init__(self, message: str = "entity belongs to another work") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class ValidationError(ValueError, NovelMcpError):
     """Raised for invalid input with a stable machine-readable code."""
 

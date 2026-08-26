@@ -45,9 +45,9 @@ def test_canon_transition_requires_reason_and_commits_decision_atomically(
     fact = WorldFactService(service.connection).create("旧記述", None, None)
 
     with pytest.raises(CanonReasonRequired, match="CANON_REASON_REQUIRED"):
-        service.set_canon_status("world_fact", fact.id, "canon", None)
+        service.set_canon_status("world_fact", fact.id, "canon", 1, None)
 
-    decision = service.set_canon_status("world_fact", fact.id, "canon", "採用理由")
+    decision = service.set_canon_status("world_fact", fact.id, "canon", 1, "採用理由")
 
     assert decision.changes[0].entity_id == fact.id
     assert decision.changes[0].before_payload["canon_status"] == "draft"
@@ -61,13 +61,19 @@ def test_canonical_content_change_requires_reason_and_records_payloads(
     service: CanonService,
 ) -> None:
     fact = WorldFactService(service.connection).create("旧記述", None, None)
-    service.set_canon_status("world_fact", fact.id, "canon", "採用")
+    service.set_canon_status("world_fact", fact.id, "canon", 1, "採用")
 
     with pytest.raises(CanonReasonRequired):
-        service.update_content("world_fact", fact.id, {"body": "新記述"}, reason=None)
+        service.update_content(
+            "world_fact", fact.id, {"body": "新記述"}, expected_version=2, reason=None
+        )
 
     decision = service.update_content(
-        "world_fact", fact.id, {"body": "新記述"}, reason="訂正"
+        "world_fact",
+        fact.id,
+        {"body": "新記述"},
+        expected_version=2,
+        reason="訂正",
     )
     assert decision.changes[0].before_payload["body"] == "旧記述"
     assert decision.changes[0].after_payload["body"] == "新記述"
@@ -79,7 +85,9 @@ def test_invalid_content_fields_raise_canon_policy_error(
     fact = WorldFactService(service.connection).create("旧記述", None, None)
 
     with pytest.raises(CanonPolicyError, match="CANON_POLICY_ERROR"):
-        service.update_content("world_fact", fact.id, {}, reason=None)
+        service.update_content(
+            "world_fact", fact.id, {}, expected_version=1, reason=None
+        )
 
 
 def test_record_decision_supports_multiple_changes_and_round_trip_search(
@@ -113,9 +121,9 @@ def test_invalid_status_and_missing_entity_are_structured_errors(
     service: CanonService,
 ) -> None:
     with pytest.raises(ValidationError, match="VALIDATION_ERROR"):
-        service.set_canon_status("world_fact", 1, "unknown", "理由")
+        service.set_canon_status("world_fact", 1, "unknown", 1, "理由")
     with pytest.raises(CanonEntityNotFoundError) as error:
-        service.set_canon_status("world_fact", 9999, "canon", "理由")
+        service.set_canon_status("world_fact", 9999, "canon", 1, "理由")
     assert error.value.code == "NOT_FOUND"
 
 
@@ -146,7 +154,7 @@ def test_status_change_snapshots_inside_transaction_and_uses_version_cas(
     monkeypatch.setattr(service.repository, "update_status", update_status)
 
     with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
-        service.set_canon_status("world_fact", fact.id, "canon", "採用")
+        service.set_canon_status("world_fact", fact.id, "canon", 1, "採用")
 
     assert observed == {"in_transaction": True, "expected_version": 1}
     assert service.connection.execute(
@@ -181,7 +189,13 @@ def test_content_change_snapshots_inside_transaction_and_uses_version_cas(
     monkeypatch.setattr(service.repository, "update_content", update_content)
 
     with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
-        service.update_content("world_fact", fact.id, {"body": "新記述"}, reason=None)
+        service.update_content(
+            "world_fact",
+            fact.id,
+            {"body": "新記述"},
+            expected_version=1,
+            reason=None,
+        )
 
     assert observed == {"in_transaction": True, "expected_version": 1}
     assert service.connection.execute(
@@ -201,9 +215,40 @@ def test_failed_decision_insert_rolls_back_target_mutation(
 
     monkeypatch.setattr(service.repository, "insert_decision", fail)
     with pytest.raises(RuntimeError, match="decision insert failed"):
-        service.set_canon_status("world_fact", fact.id, "canon", "採用")
+        service.set_canon_status("world_fact", fact.id, "canon", 1, "採用")
 
     assert service.connection.execute(
         "SELECT canon_status FROM world_facts WHERE id = ?", (fact.id,)
     ).fetchone() == ("draft",)
     monkeypatch.setattr(service.repository, "insert_decision", original)
+
+
+def test_canon_status_uses_caller_expected_version(service: CanonService) -> None:
+    fact = WorldFactService(service.connection).create("旧記述", None, None)
+
+    with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
+        service.set_canon_status("world_fact", fact.id, "canon", 0, "採用")
+
+    assert service.connection.execute(
+        "SELECT canon_status, version FROM world_facts WHERE id = ?", (fact.id,)
+    ).fetchone() == ("draft", 1)
+    assert service.connection.execute(
+        "SELECT COUNT(*) FROM canon_decisions"
+    ).fetchone() == (0,)
+
+
+def test_canon_decision_search_caps_limit_at_service_bound(
+    service: CanonService,
+) -> None:
+    fact = WorldFactService(service.connection).create("検索対象", None, None)
+    change = CanonChange(
+        entity_type="world_fact",
+        entity_id=fact.id,
+        action="annotated",
+        before_payload={"body": "旧"},
+        after_payload={"body": "新"},
+    )
+    for index in range(101):
+        service.record_decision(f"検索対象 {index}", "理由", (change,))
+
+    assert len(service.search_decisions("検索対象", limit=1000)) == 100

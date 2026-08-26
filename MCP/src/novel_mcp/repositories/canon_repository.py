@@ -116,6 +116,7 @@ class CanonRepository:
         entity_id: int,
         expected_version: int,
         fields: Mapping[str, object],
+        allow_empty: bool = False,
     ) -> bool | None:
         table, columns = _ENTITY_COLUMNS[entity_type]
         allowed = set(columns) - {
@@ -124,13 +125,16 @@ class CanonRepository:
             "event_key",
             "character_key",
         }
-        if not fields or not set(fields).issubset(allowed):
+        if (not fields and not allow_empty) or not set(fields).issubset(allowed):
             return None
         assignments = ", ".join(f"{column} = ?" for column in fields)
         values = [fields[column] for column in fields]
+        set_clause = (
+            f"{assignments}, " if assignments else ""
+        ) + "updated_at = CURRENT_TIMESTAMP, version = version + 1"
         cursor = self._connection.execute(
             f"""UPDATE {table}
-                SET {assignments}, updated_at = CURRENT_TIMESTAMP, version = version + 1
+                SET {set_clause}
                 WHERE work_id = ? AND id = ? AND version = ?""",
             (*values, work_id, entity_id, expected_version),
         )

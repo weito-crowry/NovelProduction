@@ -10,15 +10,17 @@ from novel_mcp.errors import (
     CanonReasonRequired,
     ValidationError,
     VersionConflictError,
+    WorkScopeError,
 )
 
 
 def json_value(value: Any) -> Any:
-    if is_dataclass(value):
-        return {key: json_value(item) for key, item in asdict(value).items()}
+    if is_dataclass(value) and not isinstance(value, type):
+        dataclass_values = asdict(value)
+        return {key: json_value(item) for key, item in dataclass_values.items()}
     if isinstance(value, Mapping):
         return {str(key): json_value(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
+    if isinstance(value, tuple | list):
         return [json_value(item) for item in value]
     return value
 
@@ -28,12 +30,14 @@ def success(value: Any) -> dict[str, Any]:
 
 
 def error_payload(exc: BaseException) -> dict[str, Any]:
-    if isinstance(exc, (CanonReasonRequired,)):
+    if isinstance(exc, CanonReasonRequired):
         code = "CANON_REASON_REQUIRED"
     elif isinstance(exc, CanonPolicyError):
         code = "CANON_POLICY_ERROR"
     elif isinstance(exc, VersionConflictError):
         code = "VERSION_CONFLICT"
+    elif isinstance(exc, WorkScopeError):
+        code = "WORK_SCOPE_ERROR"
     elif isinstance(exc, ValidationError) or isinstance(exc, ValueError):
         code = "VALIDATION_ERROR"
     elif isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower():
@@ -57,9 +61,11 @@ def error_payload(exc: BaseException) -> dict[str, Any]:
 def _safe_message(exc: BaseException) -> str:
     if isinstance(exc, sqlite3.Error):
         return "database operation failed"
-    if isinstance(exc, (ValidationError, ValueError)):
+    if isinstance(exc, ValidationError | ValueError):
         return getattr(exc, "message", str(exc)).removeprefix("VALIDATION_ERROR: ")
-    if isinstance(exc, (CanonReasonRequired, CanonPolicyError, VersionConflictError)):
+    if isinstance(exc, CanonReasonRequired | CanonPolicyError | VersionConflictError):
+        return str(exc).split(": ", 1)[-1]
+    if isinstance(exc, WorkScopeError):
         return str(exc).split(": ", 1)[-1]
     if exc.__class__.__name__.endswith("NotFoundError"):
         return "requested entity was not found"

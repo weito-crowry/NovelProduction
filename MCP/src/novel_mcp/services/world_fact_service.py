@@ -5,7 +5,7 @@ from datetime import date
 from uuid import uuid4
 
 from novel_mcp.errors import (
-    VersionConflictError,
+    CanonEntityNotFoundError,
     WorkNotFoundError,
     WorldFactNotFoundError,
 )
@@ -14,6 +14,8 @@ from novel_mcp.repositories.world_fact_repository import (
     WorldFactRecord,
     WorldFactRepository,
 )
+from novel_mcp.services.canon_service import CanonService
+from novel_mcp.services.search_service import MAX_SEARCH_LIMIT
 
 
 class WorldFactService:
@@ -21,6 +23,7 @@ class WorldFactService:
         self._connection = connection
         self._work_repository = WorkRepository(connection)
         self._repository = WorldFactRepository(connection)
+        self._canon_service = CanonService(connection)
 
     def create(
         self,
@@ -35,7 +38,7 @@ class WorldFactService:
             valid_from, valid_to
         )
         work_id = self._get_work_id()
-        self._connection.execute("BEGIN IMMEDIATE")
+        self._repository.begin_write()
         try:
             fact_id = self._repository.create(
                 work_id=work_id,
@@ -47,10 +50,10 @@ class WorldFactService:
             created = self._repository.get(work_id=work_id, fact_id=fact_id)
             if created is None:
                 raise sqlite3.IntegrityError("world fact creation failed")
-            self._connection.commit()
+            self._repository.commit()
             return created
         except Exception:
-            self._connection.rollback()
+            self._repository.rollback()
             raise
 
     def get(self, fact_id: int) -> WorldFactRecord:
@@ -60,32 +63,26 @@ class WorldFactService:
         return record
 
     def update(
-        self, fact_id: int, statement: str, expected_version: int
+        self,
+        fact_id: int,
+        statement: str,
+        expected_version: int,
+        reason: str | None = None,
     ) -> WorldFactRecord:
         normalized_statement = statement.strip()
         if not normalized_statement:
             raise ValueError("statement must be non-empty")
-        work_id = self._get_work_id()
-        if self._repository.get(work_id=work_id, fact_id=fact_id) is None:
-            raise WorldFactNotFoundError("NOT_FOUND")
-        self._connection.execute("BEGIN IMMEDIATE")
         try:
-            updated = self._repository.update_statement(
-                work_id=work_id,
-                fact_id=fact_id,
+            self._canon_service.update_content(
+                "world_fact",
+                fact_id,
+                {"title": normalized_statement, "body": normalized_statement},
                 expected_version=expected_version,
-                statement=normalized_statement,
+                reason=reason,
             )
-            if not updated:
-                raise VersionConflictError("VERSION_CONFLICT")
-            record = self._repository.get(work_id=work_id, fact_id=fact_id)
-            if record is None:
-                raise WorldFactNotFoundError("NOT_FOUND")
-            self._connection.commit()
-            return record
-        except Exception:
-            self._connection.rollback()
-            raise
+        except CanonEntityNotFoundError as exc:
+            raise WorldFactNotFoundError("NOT_FOUND") from exc
+        return self.get(fact_id)
 
     def search(self, query: str, limit: int) -> tuple[WorldFactRecord, ...]:
         normalized_query = query.strip()
@@ -94,7 +91,7 @@ class WorldFactService:
         return self._repository.search(
             work_id=self._get_work_id(),
             query=normalized_query,
-            limit=limit,
+            limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
     def _get_work_id(self) -> int:

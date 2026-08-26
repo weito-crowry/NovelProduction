@@ -7,7 +7,8 @@ import pytest
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
-from novel_mcp.errors import VersionConflictError
+from novel_mcp.errors import CanonReasonRequired, VersionConflictError
+from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.world_fact_service import WorldFactService
 
 
@@ -159,3 +160,55 @@ def test_world_fact_search_is_scoped_and_deterministic(
             primary_service.get(other_fact_id)
     finally:
         primary_connection.close()
+
+
+def test_world_fact_canonical_update_requires_reason_and_keeps_mirrors(
+    initialized_db_path: Path,
+) -> None:
+    connection = open_test_database(initialized_db_path)
+
+    try:
+        fact_service = WorldFactService(connection)
+        fact = fact_service.create("旧記述", None, None)
+        CanonService(connection).set_canon_status(
+            "world_fact", fact.id, "canon", fact.version, "採用"
+        )
+
+        with pytest.raises(CanonReasonRequired, match="CANON_REASON_REQUIRED"):
+            fact_service.update(fact.id, "新記述", expected_version=2)
+
+        updated = fact_service.update(
+            fact.id, "新記述", expected_version=2, reason="訂正理由"
+        )
+
+        assert updated.statement == "新記述"
+        assert updated.version == 3
+        assert connection.execute(
+            "SELECT title, body FROM world_facts WHERE id = ?", (fact.id,)
+        ).fetchone() == ("新記述", "新記述")
+        assert connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM canon_decision_changes
+            WHERE entity_type = 'world_fact' AND entity_id = ?
+            """,
+            (fact.id,),
+        ).fetchone() == (2,)
+    finally:
+        connection.close()
+
+
+def test_world_fact_search_caps_limit_at_service_bound(
+    initialized_db_path: Path,
+) -> None:
+    connection = open_test_database(initialized_db_path)
+
+    try:
+        service = WorldFactService(connection)
+        for index in range(101):
+            service.create(f"火山異常 {index}", None, None)
+
+        assert len(service.search("火山異常", limit=1000)) == 100
+        assert service.search("火山異常", limit=0) == ()
+    finally:
+        connection.close()

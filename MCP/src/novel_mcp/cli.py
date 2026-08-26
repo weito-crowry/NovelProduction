@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sqlite3
 from pathlib import Path
 
 from novel_mcp.config import DatabaseConfig
@@ -27,24 +26,22 @@ def initialize_work(db_path: Path, title: str) -> WorkRecord:
     connection = open_database(_build_database_config(db_path))
     try:
         repository = WorkRepository(connection)
-        connection.execute("BEGIN IMMEDIATE")
+        repository.begin_write()
         if repository.get() is not None:
-            connection.rollback()
+            repository.rollback()
             raise WorkExistsError("WORK_EXISTS")
-        connection.execute(
-            """
-            INSERT INTO works (slug, title, description)
-            VALUES (?, ?, NULL)
-            """,
-            (DEFAULT_WORK_SLUG, normalized_title),
+        repository.create(
+            slug=DEFAULT_WORK_SLUG,
+            title=normalized_title,
+            description=None,
         )
-        connection.commit()
         record = repository.get()
         if record is None:
-            raise sqlite3.IntegrityError("work initialization failed")
+            raise RuntimeError("work initialization failed")
+        repository.commit()
         return record
     except Exception:
-        connection.rollback()
+        repository.rollback()
         raise
     finally:
         connection.close()

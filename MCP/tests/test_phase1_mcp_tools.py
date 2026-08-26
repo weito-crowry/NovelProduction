@@ -63,14 +63,41 @@ def test_read_and_mutation_annotations_match_tool_effects(tmp_path: Path) -> Non
     server = create_server(_config(tmp_path))
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
 
-    for name in ("work_get", "world_fact_get", "world_fact_search"):
+    expected_annotations = {
+        "work_get": (True, False),
+        "work_update": (False, True),
+        "world_fact_create": (False, False),
+        "world_fact_update": (False, True),
+        "world_fact_get": (True, False),
+        "world_fact_search": (True, False),
+        "timeline_event_create": (False, False),
+        "timeline_event_update": (False, True),
+        "timeline_event_get": (True, False),
+        "timeline_event_search": (True, False),
+        "timeline_range": (True, False),
+        "timeline_move": (False, True),
+        "timeline_relation_create": (False, False),
+        "character_create": (False, False),
+        "character_update": (False, True),
+        "character_get": (True, False),
+        "character_search": (True, False),
+        "relationship_create": (False, False),
+        "relationship_update": (False, True),
+        "relationship_search": (True, False),
+        "canon_status_set": (False, True),
+        "canon_decision_get": (True, False),
+        "canon_decision_search": (True, False),
+    }
+
+    assert set(tools) == set(expected_annotations)
+    for name, (read_only, destructive) in expected_annotations.items():
         annotations = tools[name].annotations
-        assert annotations.read_only_hint is True
-        assert annotations.destructive_hint is False
+        assert annotations is not None
+        assert annotations.read_only_hint is read_only
+        assert annotations.destructive_hint is destructive
         assert annotations.open_world_hint is False
 
-    assert tools["work_update"].annotations.read_only_hint is False
-    assert tools["work_update"].annotations.read_only_hint is not True
+    assert "expected_version" in tools["canon_status_set"].input_schema["required"]
 
 
 def test_work_get_returns_structured_json_and_does_not_create_work(

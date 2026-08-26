@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import cast
 
 from novel_mcp.errors import (
@@ -19,6 +19,7 @@ from novel_mcp.repositories.canon_repository import (
     CanonRepository,
 )
 from novel_mcp.repositories.work_repository import WorkRepository
+from novel_mcp.services.search_service import MAX_SEARCH_LIMIT
 
 
 class CanonService:
@@ -41,7 +42,12 @@ class CanonService:
         return self._repository
 
     def set_canon_status(
-        self, entity_type: str, entity_id: int, target_status: str, reason: str | None
+        self,
+        entity_type: str,
+        entity_id: int,
+        target_status: str,
+        expected_version: int,
+        reason: str | None = None,
     ) -> CanonDecisionRecord:
         self._validate_entity_type(entity_type)
         self._validate_status(target_status)
@@ -49,6 +55,8 @@ class CanonService:
         self._repository.begin_write()
         try:
             before = self._entity_or_not_found(work_id, entity_type, entity_id)
+            if cast(int, before["version"]) != expected_version:
+                raise VersionConflictError("VERSION_CONFLICT")
             current_status = before["canon_status"]
             if current_status == target_status:
                 raise CanonPolicyError("target status is unchanged")
@@ -71,7 +79,7 @@ class CanonService:
                 work_id=work_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
-                expected_version=cast(int, before["version"]),
+                expected_version=expected_version,
                 target_status=target_status,
             ):
                 raise VersionConflictError("VERSION_CONFLICT")
@@ -95,7 +103,10 @@ class CanonService:
         entity_id: int,
         fields: Mapping[str, object],
         *,
-        reason: str | None,
+        expected_version: int,
+        reason: str | None = None,
+        after_update: Callable[[], None] | None = None,
+        allow_empty: bool = False,
     ) -> CanonDecisionRecord:
         self._validate_entity_type(entity_type)
         work_id = self._work_id()
@@ -103,6 +114,8 @@ class CanonService:
         self._repository.begin_write()
         try:
             before = self._entity_or_not_found(work_id, entity_type, entity_id)
+            if cast(int, before["version"]) != expected_version:
+                raise VersionConflictError("VERSION_CONFLICT")
             if before["canon_status"] == "canon":
                 self._require_reason(reason)
             after = {
@@ -117,13 +130,16 @@ class CanonService:
                 work_id=work_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
-                expected_version=cast(int, before["version"]),
+                expected_version=expected_version,
                 fields=normalized,
+                allow_empty=allow_empty,
             )
             if updated is None:
                 raise CanonPolicyError("invalid content fields")
             if not updated:
                 raise VersionConflictError("VERSION_CONFLICT")
+            if after_update is not None:
+                after_update()
             decision_id = self._repository.insert_decision(
                 work_id=work_id,
                 summary=f"Update {entity_type} {entity_id} content",
@@ -172,7 +188,9 @@ class CanonService:
         if not normalized or limit <= 0:
             return ()
         return self._repository.search_decisions(
-            work_id=self._work_id(), query=normalized, limit=limit
+            work_id=self._work_id(),
+            query=normalized,
+            limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
     def _entity_or_not_found(

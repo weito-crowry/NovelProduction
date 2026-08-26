@@ -7,7 +7,13 @@ import pytest
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
-from novel_mcp.errors import VersionConflictError
+from novel_mcp.errors import (
+    CanonReasonRequired,
+    TimelineEventNotFoundError,
+    VersionConflictError,
+    WorkScopeError,
+)
+from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.timeline_service import TimelineService
 
 
@@ -83,6 +89,47 @@ def test_timeline_update_and_move_require_expected_version(service):
     assert moved.chronology_sort_key == "2104-01-02"
     assert moved.version == 3
 
+    with pytest.raises(TimelineEventNotFoundError, match="NOT_FOUND"):
+        service.update_event(9999, 1, title="存在しない")
+
+
+def test_timeline_canonical_update_requires_reason_and_keeps_mirrors(service):
+    event = service.create_event("2104-01-01", "旧題", participants=[])
+    CanonService(service._connection).set_canon_status(
+        "timeline_event", event.id, "canon", event.version, "採用"
+    )
+
+    with pytest.raises(CanonReasonRequired, match="CANON_REASON_REQUIRED"):
+        service.update_event(event.id, 2, title="新題")
+
+    updated = service.update_event(
+        event.id, 2, title="新題", new_date="2104-02-01", reason="訂正理由"
+    )
+
+    assert updated.title == "新題"
+    assert updated.chronology_sort_key == "2104-02-01"
+    assert updated.version == 3
+    assert service._connection.execute(
+        "SELECT title, summary, chronology_sort_key FROM timeline_events WHERE id = ?",
+        (event.id,),
+    ).fetchone() == ("新題", "新題", "2104-02-01")
+    assert service._connection.execute(
+        """
+        SELECT COUNT(*)
+        FROM canon_decision_changes
+        WHERE entity_type = 'timeline_event' AND entity_id = ?
+        """,
+        (event.id,),
+    ).fetchone() == (2,)
+
+
+def test_timeline_search_and_range_cap_limit_at_service_bound(service):
+    for index in range(101):
+        service.create_event("2104-01-01", f"検知 {index}", participants=[])
+
+    assert len(service.search_events("検知", limit=1000)) == 100
+    assert len(service.range_events("2104-01-01", "2104-01-01", limit=1000)) == 100
+
 
 def test_timeline_range_is_inclusive_and_deterministic(service):
     first = service.create_event("2104-01-01", "同日後", participants=[])
@@ -129,5 +176,5 @@ def test_timeline_relation_and_participant_mutation_is_scoped_to_work(
     ).fetchone()[0]
     connection.commit()
 
-    with pytest.raises(ValueError, match="same work"):
+    with pytest.raises(WorkScopeError, match="WORK_SCOPE_ERROR"):
         service.create_relation(event.id, other_event_id, "causes")
