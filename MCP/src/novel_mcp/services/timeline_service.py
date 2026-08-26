@@ -364,7 +364,12 @@ class TimelineService:
         if season_match:
             year, season = int(season_match.group(1)), season_match.group(2)
             if season == "冬":
-                return f"{year:04d}-12-01", f"{year + 1:04d}-02-28", "season"
+                last_day = calendar.monthrange(year + 1, 2)[1]
+                return (
+                    f"{year:04d}-12-01",
+                    f"{year + 1:04d}-02-{last_day:02d}",
+                    "season",
+                )
             month_start, month_end = _SEASONS[season]
             return (
                 f"{year:04d}-{month_start:02d}-01",

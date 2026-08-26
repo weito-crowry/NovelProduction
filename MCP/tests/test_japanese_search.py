@@ -51,7 +51,7 @@ def test_search_is_scoped_and_bounded(database: sqlite3.Connection) -> None:
     first = world_facts.create("火山異常 一号")
     second = world_facts.create("火山異常 二号")
     database.execute(
-        "INSERT INTO works (slug, title) VALUES (?, ?)", ("other", "other")
+        "INSERT INTO works (slug, working_title) VALUES (?, ?)", ("other", "other")
     )
     other_work_id = database.execute(
         "SELECT id FROM works WHERE slug = ?", ("other",)

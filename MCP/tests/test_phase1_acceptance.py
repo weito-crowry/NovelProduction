@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
@@ -17,16 +18,25 @@ def _config(tmp_path: Path) -> DatabaseConfig:
     )
 
 
+@pytest.fixture
+def server(tmp_path: Path):
+    value = create_server(_config(tmp_path))
+    try:
+        yield value
+    finally:
+        value.close()
+
+
 def _payload(result: CallToolResult) -> dict[str, object]:
     return result.structured_content
 
 
 def test_canon_status_requires_reason_for_protected_transition(
+    server,
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
     created = asyncio.run(
         server.call_tool(
             "world_fact_create",
@@ -52,10 +62,9 @@ def test_canon_status_requires_reason_for_protected_transition(
     assert _payload(result)["error"]["code"] == "CANON_REASON_REQUIRED"
 
 
-def test_tool_calls_return_json_compatible_records(tmp_path: Path) -> None:
+def test_tool_calls_return_json_compatible_records(server, tmp_path: Path) -> None:
     config = _config(tmp_path)
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
 
     created = asyncio.run(
         server.call_tool(
@@ -70,11 +79,11 @@ def test_tool_calls_return_json_compatible_records(tmp_path: Path) -> None:
 
 
 def test_timeline_event_get_retrieves_beyond_range_default_limit(
+    server,
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
 
     event_ids = []
     for index in range(101):
@@ -102,11 +111,11 @@ def test_timeline_event_get_retrieves_beyond_range_default_limit(
 
 
 def test_timeline_event_get_missing_event_returns_stable_not_found(
+    server,
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
 
     result = asyncio.run(server.call_tool("timeline_event_get", {"event_id": 9999}))
 
@@ -120,18 +129,16 @@ def test_timeline_event_get_missing_event_returns_stable_not_found(
     }
 
 
-def test_server_inventory_has_no_phase_two_or_three_names(tmp_path: Path) -> None:
-    server = create_server(_config(tmp_path))
+def test_server_inventory_has_no_phase_two_or_three_names(server) -> None:
     names = server.tool_names()
 
     assert not names & {"chapter_create", "episode_create", "scene_create"}
     assert not names & {"episode_context", "episode_draft_get", "episode_draft_save"}
 
 
-def test_mcp_search_paths_cap_limit_at_service_bound(tmp_path: Path) -> None:
+def test_mcp_search_paths_cap_limit_at_service_bound(server, tmp_path: Path) -> None:
     config = _config(tmp_path)
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
 
     for index in range(101):
         fact = asyncio.run(

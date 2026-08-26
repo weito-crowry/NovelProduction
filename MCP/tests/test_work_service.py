@@ -26,13 +26,32 @@ def test_initialize_work_is_explicit_and_update_requires_version(
 
     record = initialize_work(tmp_path / "story.db", "2126")
 
-    assert record.title == "2126"
+    assert record.working_title == "2126"
     assert record.version == 1
 
-    service = WorkService(open_test_database(tmp_path / "story.db"))
-    updated = service.update("2126 revised", expected_version=1)
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        service = WorkService(connection)
+        updated = service.update(
+            "2126 revised",
+            expected_version=1,
+            genre="SF",
+            premise="A long premise",
+            themes_json='["identity"]',
+            description="A description",
+            production_status="outlined",
+        )
+    finally:
+        connection.close()
 
-    assert updated.title == "2126 revised"
+    assert updated.working_title == "2126 revised"
+    assert (updated.genre, updated.premise, updated.themes_json) == (
+        "SF",
+        "A long premise",
+        '["identity"]',
+    )
+    assert updated.description == "A description"
+    assert updated.production_status == "outlined"
     assert updated.version == 2
 
 
@@ -95,11 +114,30 @@ def test_work_repository_update_does_not_commit_service_owned_transaction(
     try:
         repository = WorkRepository(connection)
         repository.begin_write()
-        updated = repository.update(expected_version=1, title="uncommitted")
+        updated = repository.update(
+            expected_version=1, fields={"working_title": "uncommitted"}
+        )
 
-        assert updated.title == "uncommitted"
+        assert updated.working_title == "uncommitted"
         assert connection.in_transaction is True
         repository.rollback()
-        assert repository.get().title == "2126"
+        assert repository.get().working_title == "2126"
+    finally:
+        connection.close()
+
+
+def test_work_service_rejects_invalid_themes_and_status(tmp_path: Path) -> None:
+    from novel_mcp.cli import initialize_work
+
+    db_path = tmp_path / "story.db"
+    initialize_work(db_path, "2126")
+    connection = open_test_database(db_path)
+
+    try:
+        service = WorkService(connection)
+        with pytest.raises(ValueError, match="themes_json"):
+            service.update("2126", expected_version=1, themes_json="not-json")
+        with pytest.raises(ValueError, match="production_status"):
+            service.update("2126", expected_version=1, production_status="unknown")
     finally:
         connection.close()

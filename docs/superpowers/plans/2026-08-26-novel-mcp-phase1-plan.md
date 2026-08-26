@@ -1,6 +1,10 @@
 # Novel MCP Phase 1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Execution policy: ChatGPT owns architecture, design, and review. Codex Luna
+> performs sequential implementation and verification. Subagent dispatch or
+> model escalation occurs only when the user explicitly requests it.
+> Superpowers are limited to non-delegating TDD, verification, debugging, and
+> documentation workflows. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the foundational Novel Production MCP database lifecycle, core canon repositories and services, Japanese search baseline, and Phase 1 stdio tools on a reproducible repository development foundation.
 
@@ -22,6 +26,10 @@
 - Preserve the independent `CanonStatus` and `ProductionStatus` value sets.
 - Require `expected_version` for mutable-entity updates and reject stale values with `VERSION_CONFLICT`.
 - Require a reason for protected canon transitions and canonical content changes.
+- Keep Phase 1 `works` metadata normalized as `working_title`, `genre`,
+  `premise`, valid-JSON `themes_json`, `description`, and constrained
+  `production_status` (`planned|outlined|drafting|revising|final`), alongside
+  `slug`, `version`, and timestamps.
 - Use `MCP/pyproject.toml` and `MCP/uv.lock` as the authoritative Python dependency files; `uv sync --all-groups` must reproduce the development environment.
 - Keep the repository Python version concrete and synchronized between `.python-version` and GitHub Actions.
 - Use Ruff for linting and formatting, strict-by-default mypy with only narrowly justified exceptions, pytest with an 80% Phase 1 coverage target, and lightweight pre-commit checks.
@@ -121,18 +129,18 @@ git commit -m "chore: establish MCP development foundation"
 **Interfaces:**
 - Consumes: `open_database`, the `works` table, and `DatabaseConfig` from Task 1.
 - Produces: `WorkRepository.get() -> WorkRecord | None`,
-  `WorkRepository.update(expected_version: int, title: str) -> WorkRecord`,
-  `WorkService.get() -> WorkRecord`,
-  `WorkService.update(title: str, expected_version: int) -> WorkRecord`, and
-  `initialize_work(db_path: Path, title: str) -> WorkRecord` exposed by the
-  `novel-init` console script.
+  `WorkRepository.update(expected_version: int, fields: Mapping[str, object])
+  -> WorkRecord`, `WorkService.get() -> WorkRecord`,
+  `WorkService.update(working_title: str, expected_version: int, ...metadata)
+  -> WorkRecord`, and `initialize_work(db_path: Path, working_title: str, ...)
+  -> WorkRecord` exposed by the `novel-init` console script.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 def test_initialize_work_is_explicit_and_update_requires_version(tmp_path):
     record = initialize_work(tmp_path / "story.db", "2126")
-    assert record.title == "2126"
+    assert record.working_title == "2126"
     assert record.version == 1
 
     service = WorkService(open_test_database(tmp_path / "story.db"))
@@ -149,10 +157,11 @@ Expected: FAIL because no work repository, service, or initializer exists.
 - [ ] **Step 3: Write minimal implementation**
 
 Create exactly one work during `initialize_work`; normal database opening must
-not create one. Require a non-empty title, use the repository conditional
-update for `expected_version`, and map an affected-row count of zero to
-`VERSION_CONFLICT`. Register `novel-init` with arguments for `--db` and
-`--title` only.
+not create one. Require a non-empty working title, validate metadata and
+`themes_json`, use the repository conditional update for `expected_version`,
+and map an affected-row count of zero to `VERSION_CONFLICT`. Register
+`novel-init` with `--db`, `--working-title` (keeping `--title` as an input
+alias), and the normalized metadata options.
 
 - [ ] **Step 4: Run test to verify it passes**
 

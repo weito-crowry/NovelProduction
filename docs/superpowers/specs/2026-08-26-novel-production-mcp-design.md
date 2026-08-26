@@ -181,12 +181,29 @@ the canonical SQLite columns and corresponding service/MCP payload names;
 legacy compatibility properties may exist on Python records but are not
 additional sources of truth.
 
+`works` contains:
+
+```text
+id, slug, working_title, genre, premise, themes_json, description,
+production_status, version, created_at, updated_at
+```
+
+`production_status` is constrained to `planned`, `outlined`, `drafting`,
+`revising`, or `final`. `themes_json` is valid JSON at both the service and
+SQLite boundaries. `slug` remains the stable internal work identifier; the
+working title and other metadata fields are the normalized authoring metadata
+exposed by the Phase 1 work tools.
+
 `world_facts` contains:
 
 ```text
 id, work_id, topic_key, category, title, statement, details_json,
 valid_from, valid_to, canon_status, importance, version, created_at, updated_at
 ```
+
+`topic_key` is not unique within a work. Multiple rows may represent the same
+topic at different validity ranges, and `(work_id, topic_key, id)` is indexed
+for deterministic lookup without making the derived search index canonical.
 
 `characters` contains:
 
@@ -521,7 +538,7 @@ sequence is:
 ```
 
 Ordinary MCP startup never creates a work implicitly. A future Phase 1
-`novel-init --db ./data/story.db --title "2126"` command performs explicit
+`novel-init --db ./data/story.db --working-title "2126"` command performs explicit
 database and work initialization; this command is planned but is not part of
 the initial repository commit.
 

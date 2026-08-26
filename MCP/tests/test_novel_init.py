@@ -24,19 +24,19 @@ def test_novel_init_cli_creates_exactly_one_work(tmp_path: Path) -> None:
     )
     try:
         assert connection.execute(
-            "SELECT COUNT(*), MIN(title), MAX(version) FROM works"
+            "SELECT COUNT(*), MIN(working_title), MAX(version) FROM works"
         ).fetchone() == (1, "2126", 1)
     finally:
         connection.close()
 
 
-def test_novel_init_parser_accepts_only_db_and_title() -> None:
+def test_novel_init_parser_accepts_work_metadata() -> None:
     parser = build_parser()
 
     namespace = parser.parse_args(["--db", "story.db", "--title", "2126"])
 
     assert namespace.db == Path("story.db")
-    assert namespace.title == "2126"
+    assert namespace.working_title == "2126"
 
     with pytest.raises(SystemExit):
         parser.parse_args(["--db", "story.db", "--title", "2126", "--slug", "x"])

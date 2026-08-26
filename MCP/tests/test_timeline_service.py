@@ -85,6 +85,13 @@ def test_timeline_supports_year_season_month_unknown_and_character_fk(
         None,
         None,
     )
+    winter = service.create_event("2103年冬頃", "うるう年をまたぐ冬")
+    assert (
+        winter.time_start,
+        winter.time_end,
+        winter.date_precision,
+        winter.date_display,
+    ) == ("2103-12-01", "2104-02-29", "season", "2103年冬頃")
 
 
 def test_timeline_get_event_returns_record_and_stable_not_found(
@@ -174,7 +181,7 @@ def test_timeline_location_and_participants_are_work_scoped(
     event = service.create_event("2104-01-01", "検知")
     connection = service._connection
     connection.execute(
-        "INSERT INTO works (slug, title) VALUES (?, ?)", ("other", "other")
+        "INSERT INTO works (slug, working_title) VALUES (?, ?)", ("other", "other")
     )
     other_work_id = connection.execute(
         "SELECT id FROM works WHERE slug = ?", ("other",)

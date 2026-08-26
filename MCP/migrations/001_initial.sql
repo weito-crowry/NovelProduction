@@ -6,8 +6,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE works (
     id INTEGER PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    description TEXT,
+    working_title TEXT NOT NULL,
+    genre TEXT NOT NULL DEFAULT '',
+    premise TEXT NOT NULL DEFAULT '',
+    themes_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(themes_json)),
+    description TEXT NOT NULL DEFAULT '',
+    production_status TEXT NOT NULL DEFAULT 'planned'
+        CHECK (production_status IN ('planned', 'outlined', 'drafting', 'revising', 'final')),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
@@ -30,7 +36,6 @@ CREATE TABLE world_facts (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
     FOREIGN KEY (work_id) REFERENCES works(id) ON DELETE CASCADE,
-    UNIQUE (work_id, topic_key),
     UNIQUE (work_id, id),
     CHECK (valid_to IS NULL OR valid_from IS NULL OR valid_from <= valid_to)
 );

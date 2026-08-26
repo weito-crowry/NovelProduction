@@ -1,3 +1,6 @@
+CREATE INDEX idx_world_facts_work_topic_key
+ON world_facts(work_id, topic_key, id);
+
 CREATE INDEX idx_world_facts_work_statement
 ON world_facts(work_id, statement, id);
 

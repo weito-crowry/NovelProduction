@@ -1,6 +1,10 @@
 # Novel MCP Phase 1 PR #1 Review Fixes Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (inline execution requested by the user). Steps use checkbox (`- [ ]`) syntax.
+> Execution policy: ChatGPT owns architecture, design, and review. Codex Luna
+> performs sequential implementation and verification. Subagent dispatch or
+> model escalation occurs only when the user explicitly requests it.
+> Superpowers are limited to non-delegating TDD, verification, debugging, and
+> documentation workflows. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Align the unmerged Phase 1 MCP implementation with the approved normalized core data model, exact-date-independent timeline model, SQLite invariants, bounded trigram-first Japanese search, canon transition/noise policy, and descriptive MCP schemas without entering Phase 2 or Phase 3.
 
@@ -39,6 +43,11 @@
 
 **Schema contract:**
 - `world_facts`: `topic_key`, `category`, `title`, `statement`, `details_json`, nullable `valid_from`/`valid_to`, checked `canon_status`, nonnegative `importance`, and `version >= 1` in addition to identity/work/timestamps.
+- `works`: normalized `working_title`, `genre`, `premise`, valid-JSON
+  `themes_json`, `description`, constrained `production_status`, `slug`,
+  version, and timestamps.
+- `world_facts.topic_key` is indexed but intentionally non-unique within a
+  work so validity ranges can coexist.
 - `characters`: `character_key`, checked `entity_type` in `human|ai|organization`, normalized descriptive/profile fields, checked `canon_status`, and `version >= 1`.
 - `timeline_events`: nullable internal range endpoints `time_start`/`time_end`, checked `date_precision` in `unknown|year|season|month|day`, human `date_display`, normalized description/category/location/cause/consequence fields, checked status, importance, and version.
 - `timeline_event_participants`: `event_id`/`timeline_event_id` and `character_id` foreign keys plus `role`; no participant label column.

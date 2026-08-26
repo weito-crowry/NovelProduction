@@ -96,7 +96,7 @@ def test_world_fact_search_is_scoped_and_deterministic(
         first = service.create("国家AIが火山異常を検知")
         second = service.create("火山異常は翌日に公表された")
         connection.execute(
-            "INSERT INTO works (slug, title) VALUES (?, ?)", ("other", "other")
+            "INSERT INTO works (slug, working_title) VALUES (?, ?)", ("other", "other")
         )
         other_work_id = connection.execute(
             "SELECT id FROM works WHERE slug = ?", ("other",)
@@ -126,6 +126,36 @@ def test_world_fact_search_is_scoped_and_deterministic(
         assert service.search("不存在", 10) == ()
         with pytest.raises(RuntimeError, match="NOT_FOUND"):
             service.get(other_fact_id)
+    finally:
+        connection.close()
+
+
+def test_world_facts_allow_same_topic_key_across_validity_ranges(
+    initialized_db_path: Path,
+) -> None:
+    connection = open_test_database(initialized_db_path)
+    try:
+        service = WorldFactService(connection)
+        first = service.create(
+            "王朝は2104年に成立",
+            "2104-01-01",
+            "2104-12-31",
+            topic_key="dynasty",
+        )
+        second = service.create(
+            "王朝は2105年に再編",
+            "2105-01-01",
+            "2105-12-31",
+            topic_key="dynasty",
+        )
+        assert first.topic_key == second.topic_key == "dynasty"
+        assert {first.id, second.id} == {
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM world_facts WHERE topic_key = ? ORDER BY id",
+                ("dynasty",),
+            ).fetchall()
+        }
     finally:
         connection.close()
 

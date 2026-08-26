@@ -123,7 +123,7 @@ def test_relationship_search_caps_limit_and_distinguishes_work_scope(service) ->
         service.relationship.create(source.id, target.id, "knows")
     assert len(service.relationship.search(None, 1000)) == 100
     service.connection.execute(
-        "INSERT INTO works (slug, title) VALUES (?, ?)", ("other", "other")
+        "INSERT INTO works (slug, working_title) VALUES (?, ?)", ("other", "other")
     )
     other_work_id = service.connection.execute(
         "SELECT id FROM works WHERE slug = ?", ("other",)

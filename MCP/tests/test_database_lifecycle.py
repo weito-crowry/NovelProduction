@@ -157,6 +157,19 @@ def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
 
     try:
         expected_columns = {
+            "works": {
+                "id",
+                "slug",
+                "working_title",
+                "genre",
+                "premise",
+                "themes_json",
+                "description",
+                "production_status",
+                "version",
+                "created_at",
+                "updated_at",
+            },
             "world_facts": {
                 "id",
                 "work_id",
@@ -245,7 +258,7 @@ def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
             assert actual == columns, table
 
         connection.execute(
-            "INSERT INTO works (slug, title) VALUES (?, ?)", ("main", "Main")
+            "INSERT INTO works (slug, working_title) VALUES (?, ?)", ("main", "Main")
         )
         work_id = connection.execute("SELECT id FROM works").fetchone()[0]
         with pytest.raises(sqlite3.IntegrityError):
@@ -261,6 +274,17 @@ def test_phase1_core_schema_has_normalized_fields_and_sqlite_invariants(
                    (work_id, topic_key, category, title, statement, version)
                    VALUES (?, ?, ?, ?, ?, 0)""",
                 (work_id, "fact", "setting", "Title", "Statement"),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO works (slug, working_title, themes_json) VALUES (?, ?, ?)",
+                ("invalid-json", "Invalid", "not-json"),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO works (slug, working_title, production_status) "
+                "VALUES (?, ?, ?)",
+                ("invalid-status", "Invalid", "unknown"),
             )
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(

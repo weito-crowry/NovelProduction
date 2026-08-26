@@ -1,6 +1,9 @@
 TOOL_DESCRIPTIONS = {
     "work_get": "Use this when you need configured work metadata.",
-    "work_update": "Use this when you need to update the work title.",
+    "work_update": (
+        "Use this when you need to update normalized work metadata, including "
+        "its working title, premise, themes, description, or production status."
+    ),
     "world_fact_create": "Use this when you need to create a normalized world fact.",
     "world_fact_update": "Use this when you need to edit a world fact safely.",
     "world_fact_get": "Use this when you need one normalized world fact.",

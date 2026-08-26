@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +38,24 @@ class ParticipantInput(BaseModel):
 
 
 class Phase1MCPServer(MCPServer):
+    def __init__(
+        self, *args: Any, connection: sqlite3.Connection, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._connection = connection
+        self._closed = False
+
+    def close(self) -> None:
+        if not self._closed:
+            self._connection.close()
+            self._closed = True
+
+    def __enter__(self) -> Phase1MCPServer:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
     def tool_names(self) -> frozenset[str]:
         return frozenset(tool.name for tool in self._tool_manager.list_tools())
 
@@ -56,16 +76,22 @@ class ServiceContainer:
 
 def create_server(config: DatabaseConfig) -> Phase1MCPServer:
     connection = open_database(config)
-    services = ServiceContainer(
-        work=WorkService(connection),
-        world=WorldFactService(connection),
-        timeline=TimelineService(connection),
-        character=CharacterService(connection),
-        relationship=RelationshipService(connection),
-        canon=CanonService(connection),
-        search=SearchService(connection),
-    )
-    server = Phase1MCPServer("novel-production", version="0.1.0")
+    try:
+        services = ServiceContainer(
+            work=WorkService(connection),
+            world=WorldFactService(connection),
+            timeline=TimelineService(connection),
+            character=CharacterService(connection),
+            relationship=RelationshipService(connection),
+            canon=CanonService(connection),
+            search=SearchService(connection),
+        )
+        server = Phase1MCPServer(
+            "novel-production", version="0.1.0", connection=connection
+        )
+    except Exception:
+        connection.close()
+        raise
 
     def register(
         name: str, handler: Handler, *, read_only: bool, destructive: bool
@@ -85,8 +111,34 @@ def create_server(config: DatabaseConfig) -> Phase1MCPServer:
     async def work_get() -> dict[str, Any]:
         return await _call(services.work.get)
 
-    async def work_update(title: str, expected_version: int) -> dict[str, Any]:
-        return await _call(services.work.update, title, expected_version)
+    async def work_update(
+        working_title: str,
+        expected_version: int,
+        genre: str | None = None,
+        premise: str | None = None,
+        themes_json: str
+        | dict[str, Any]
+        | list[Any]
+        | int
+        | float
+        | bool
+        | None = None,
+        description: str | None = None,
+        production_status: Literal[
+            "planned", "outlined", "drafting", "revising", "final"
+        ]
+        | None = None,
+    ) -> dict[str, Any]:
+        return await _call(
+            services.work.update,
+            working_title,
+            expected_version,
+            genre=genre,
+            premise=premise,
+            themes_json=_json_text(themes_json),
+            description=description,
+            production_status=production_status,
+        )
 
     async def world_fact_create(
         statement: Annotated[str, Field(min_length=1)],
@@ -437,6 +489,12 @@ async def _call(
         return error_payload(exc)
 
 
+def _json_text(value: object) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, required=True)
@@ -447,7 +505,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     server = create_server(DatabaseConfig(args.db, args.migration_dir))
-    asyncio.run(server.run_stdio_async())
+    try:
+        asyncio.run(server.run_stdio_async())
+    finally:
+        server.close()
 
 
 if __name__ == "__main__":

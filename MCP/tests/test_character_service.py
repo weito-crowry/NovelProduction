@@ -74,7 +74,7 @@ def test_character_search_is_deterministic_and_scoped(
     second = service.create("火星の師匠", "主人公を導く")
     connection = service._connection
     connection.execute(
-        "INSERT INTO works (slug, title) VALUES (?, ?)", ("other", "other")
+        "INSERT INTO works (slug, working_title) VALUES (?, ?)", ("other", "other")
     )
     other_work_id = connection.execute(
         "SELECT id FROM works WHERE slug = ?", ("other",)

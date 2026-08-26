@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
 from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
@@ -18,6 +19,15 @@ def _config(tmp_path: Path) -> DatabaseConfig:
     )
 
 
+@pytest.fixture
+def server(tmp_path: Path):
+    value = create_server(_config(tmp_path))
+    try:
+        yield value
+    finally:
+        value.close()
+
+
 def _structured(result: CallToolResult) -> dict[str, object]:
     content = result.structured_content
     if content is not None:
@@ -26,9 +36,7 @@ def _structured(result: CallToolResult) -> dict[str, object]:
     return json.loads(text)
 
 
-def test_phase1_server_registers_only_planned_tools(tmp_path: Path) -> None:
-    server = create_server(_config(tmp_path))
-
+def test_phase1_server_registers_only_planned_tools(server) -> None:
     expected_tool_names = {
         "work_get",
         "work_update",
@@ -59,8 +67,7 @@ def test_phase1_server_registers_only_planned_tools(tmp_path: Path) -> None:
     assert len(expected_tool_names) == 23
 
 
-def test_read_and_mutation_annotations_match_tool_effects(tmp_path: Path) -> None:
-    server = create_server(_config(tmp_path))
+def test_read_and_mutation_annotations_match_tool_effects(server) -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
 
     expected_annotations = {
@@ -101,9 +108,8 @@ def test_read_and_mutation_annotations_match_tool_effects(tmp_path: Path) -> Non
 
 
 def test_all_phase1_tools_have_actionable_descriptions_and_schema_bounds(
-    tmp_path: Path,
+    server,
 ) -> None:
-    server = create_server(_config(tmp_path))
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
     assert set(tools) == PHASE1_TOOL_NAMES
     for tool in tools.values():
@@ -128,13 +134,16 @@ def test_all_phase1_tools_have_actionable_descriptions_and_schema_bounds(
     assert tools["canon_status_set"].input_schema["properties"]["target_status"][
         "enum"
     ] == ["idea", "draft", "canon", "deprecated"]
+    assert tools["work_update"].input_schema["properties"]["production_status"][
+        "anyOf"
+    ][0]["enum"] == ["planned", "outlined", "drafting", "revising", "final"]
 
 
 def test_work_get_returns_structured_json_and_does_not_create_work(
+    server,
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
-    server = create_server(config)
 
     result = asyncio.run(server.call_tool("work_get", {}))
 
@@ -142,27 +151,47 @@ def test_work_get_returns_structured_json_and_does_not_create_work(
     assert payload["ok"] is False
     assert payload["error"]["code"] == "NOT_FOUND"
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
     result = asyncio.run(server.call_tool("work_get", {}))
     payload = _structured(result)
     assert payload["ok"] is True
-    assert payload["data"]["title"] == "Phase 1"
+    assert payload["data"]["working_title"] == "Phase 1"
 
 
 def test_validation_and_version_errors_are_stable_and_do_not_leak_sqlite(
+    server,
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
     initialize_work(config.db_path, "Phase 1")
-    server = create_server(config)
 
     invalid = asyncio.run(
-        server.call_tool("work_update", {"title": "", "expected_version": 1})
+        server.call_tool("work_update", {"working_title": "", "expected_version": 1})
+    )
+    updated = asyncio.run(
+        server.call_tool(
+            "work_update",
+            {
+                "working_title": "updated",
+                "genre": "SF",
+                "premise": "A premise",
+                "themes_json": '["identity"]',
+                "description": "A description",
+                "production_status": "outlined",
+                "expected_version": 1,
+            },
+        )
     )
     stale = asyncio.run(
-        server.call_tool("work_update", {"title": "updated", "expected_version": 999})
+        server.call_tool(
+            "work_update", {"working_title": "updated", "expected_version": 999}
+        )
     )
 
     assert _structured(invalid)["error"]["code"] == "VALIDATION_ERROR"
+    updated_payload = _structured(updated)
+    assert updated_payload["ok"] is True
+    assert updated_payload["data"]["working_title"] == "updated"
+    assert updated_payload["data"]["themes_json"] == '["identity"]'
+    assert updated_payload["data"]["production_status"] == "outlined"
     assert _structured(stale)["error"]["code"] == "VERSION_CONFLICT"
     assert "sqlite" not in json.dumps(_structured(stale)).lower()
