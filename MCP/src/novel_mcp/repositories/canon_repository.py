@@ -90,15 +90,21 @@ class CanonRepository:
         return dict(zip(columns, row, strict=True))
 
     def update_status(
-        self, *, work_id: int, entity_type: str, entity_id: int, target_status: str
+        self,
+        *,
+        work_id: int,
+        entity_type: str,
+        entity_id: int,
+        expected_version: int,
+        target_status: str,
     ) -> bool:
         table, _ = _ENTITY_COLUMNS[entity_type]
         cursor = self._connection.execute(
             f"""UPDATE {table}
                 SET canon_status = ?, updated_at = CURRENT_TIMESTAMP,
                     version = version + 1
-                WHERE work_id = ? AND id = ?""",
-            (target_status, work_id, entity_id),
+                WHERE work_id = ? AND id = ? AND version = ?""",
+            (target_status, work_id, entity_id, expected_version),
         )
         return cursor.rowcount == 1
 
@@ -108,6 +114,7 @@ class CanonRepository:
         work_id: int,
         entity_type: str,
         entity_id: int,
+        expected_version: int,
         fields: Mapping[str, object],
     ) -> bool:
         table, columns = _ENTITY_COLUMNS[entity_type]
@@ -124,8 +131,8 @@ class CanonRepository:
         cursor = self._connection.execute(
             f"""UPDATE {table}
                 SET {assignments}, updated_at = CURRENT_TIMESTAMP, version = version + 1
-                WHERE work_id = ? AND id = ?""",
-            (*values, work_id, entity_id),
+                WHERE work_id = ? AND id = ? AND version = ?""",
+            (*values, work_id, entity_id, expected_version),
         )
         return cursor.rowcount == 1
 

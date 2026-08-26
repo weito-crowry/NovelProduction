@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from novel_mcp.errors import (
     CanonDecisionNotFoundError,
+    CanonEntityNotFoundError,
     CanonPolicyError,
     CanonReasonRequired,
     ValidationError,
+    VersionConflictError,
     WorkNotFoundError,
 )
 from novel_mcp.repositories.canon_repository import (
@@ -44,39 +46,48 @@ class CanonService:
         self._validate_entity_type(entity_type)
         self._validate_status(target_status)
         work_id = self._work_id()
-        before = self._entity_or_not_found(work_id, entity_type, entity_id)
-        current_status = before["canon_status"]
-        if current_status == target_status:
-            raise CanonPolicyError("target status is unchanged")
-        if (current_status in ("idea", "draft") and target_status == "canon") or (
-            current_status == "canon" and target_status == "deprecated"
-        ):
-            self._require_reason(reason)
-        change = CanonChange(
-            entity_type,
-            entity_id,
-            "status_changed",
-            before,
-            {
-                **before,
-                "canon_status": target_status,
-                "version": cast(int, before["version"]) + 1,
-            },
-        )
-        return self._mutate_and_record(
-            work_id,
-            entity_type,
-            entity_id,
-            lambda: self._repository.update_status(
+        self._repository.begin_write()
+        try:
+            before = self._entity_or_not_found(work_id, entity_type, entity_id)
+            current_status = before["canon_status"]
+            if current_status == target_status:
+                raise CanonPolicyError("target status is unchanged")
+            if (current_status in ("idea", "draft") and target_status == "canon") or (
+                current_status == "canon" and target_status == "deprecated"
+            ):
+                self._require_reason(reason)
+            change = CanonChange(
+                entity_type,
+                entity_id,
+                "status_changed",
+                before,
+                {
+                    **before,
+                    "canon_status": target_status,
+                    "version": cast(int, before["version"]) + 1,
+                },
+            )
+            if not self._repository.update_status(
                 work_id=work_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
+                expected_version=cast(int, before["version"]),
                 target_status=target_status,
-            ),
-            f"Set {entity_type} {entity_id} canon status to {target_status}",
-            reason or "",
-            change,
-        )
+            ):
+                raise VersionConflictError("VERSION_CONFLICT")
+            decision_id = self._repository.insert_decision(
+                work_id=work_id,
+                summary=(
+                    f"Set {entity_type} {entity_id} canon status to {target_status}"
+                ),
+                reason=reason or "",
+                changes=(change,),
+            )
+            self._repository.commit()
+        except Exception:
+            self._repository.rollback()
+            raise
+        return self._decision_or_not_found(work_id, decision_id)
 
     def update_content(
         self,
@@ -88,30 +99,39 @@ class CanonService:
     ) -> CanonDecisionRecord:
         self._validate_entity_type(entity_type)
         work_id = self._work_id()
-        before = self._entity_or_not_found(work_id, entity_type, entity_id)
-        if before["canon_status"] == "canon":
-            self._require_reason(reason)
         normalized = dict(fields)
-        after = {
-            **before,
-            **normalized,
-            "version": cast(int, before["version"]) + 1,
-        }
-        change = CanonChange(entity_type, entity_id, "content_changed", before, after)
-        return self._mutate_and_record(
-            work_id,
-            entity_type,
-            entity_id,
-            lambda: self._repository.update_content(
+        self._repository.begin_write()
+        try:
+            before = self._entity_or_not_found(work_id, entity_type, entity_id)
+            if before["canon_status"] == "canon":
+                self._require_reason(reason)
+            after = {
+                **before,
+                **normalized,
+                "version": cast(int, before["version"]) + 1,
+            }
+            change = CanonChange(
+                entity_type, entity_id, "content_changed", before, after
+            )
+            if not self._repository.update_content(
                 work_id=work_id,
                 entity_type=entity_type,
                 entity_id=entity_id,
+                expected_version=cast(int, before["version"]),
                 fields=normalized,
-            ),
-            f"Update {entity_type} {entity_id} content",
-            reason or "ordinary authoring edit",
-            change,
-        )
+            ):
+                raise VersionConflictError("VERSION_CONFLICT")
+            decision_id = self._repository.insert_decision(
+                work_id=work_id,
+                summary=f"Update {entity_type} {entity_id} content",
+                reason=reason or "ordinary authoring edit",
+                changes=(change,),
+            )
+            self._repository.commit()
+        except Exception:
+            self._repository.rollback()
+            raise
+        return self._decision_or_not_found(work_id, decision_id)
 
     def record_decision(
         self, summary: str, reason: str, changes: Sequence[CanonChange]
@@ -152,29 +172,6 @@ class CanonService:
             work_id=self._work_id(), query=normalized, limit=limit
         )
 
-    def _mutate_and_record(
-        self,
-        work_id: int,
-        entity_type: str,
-        entity_id: int,
-        mutate: Callable[[], bool],
-        summary: str,
-        reason: str,
-        change: CanonChange,
-    ) -> CanonDecisionRecord:
-        self._repository.begin_write()
-        try:
-            if not mutate():
-                raise CanonPolicyError("canon target was not updated")
-            decision_id = self._repository.insert_decision(
-                work_id=work_id, summary=summary, reason=reason, changes=(change,)
-            )
-            self._repository.commit()
-        except Exception:
-            self._repository.rollback()
-            raise
-        return self._decision_or_not_found(work_id, decision_id)
-
     def _entity_or_not_found(
         self, work_id: int, entity_type: str, entity_id: int
     ) -> dict[str, object]:
@@ -182,7 +179,7 @@ class CanonService:
             work_id=work_id, entity_type=entity_type, entity_id=entity_id
         )
         if record is None:
-            raise RuntimeError("NOT_FOUND")
+            raise CanonEntityNotFoundError()
         return record
 
     def _decision_or_not_found(

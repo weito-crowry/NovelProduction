@@ -68,3 +68,12 @@ class CanonDecisionNotFoundError(NovelMcpError):
 
     def __init__(self, message: str = "NOT_FOUND") -> None:
         super().__init__(message)
+
+
+class CanonEntityNotFoundError(NovelMcpError):
+    """Raised when a requested canon entity is absent from the work."""
+
+    code = "NOT_FOUND"
+
+    def __init__(self, message: str = "NOT_FOUND") -> None:
+        super().__init__(message)

@@ -7,7 +7,12 @@ import pytest
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
-from novel_mcp.errors import CanonReasonRequired, ValidationError
+from novel_mcp.errors import (
+    CanonEntityNotFoundError,
+    CanonReasonRequired,
+    ValidationError,
+    VersionConflictError,
+)
 from novel_mcp.repositories.canon_repository import CanonChange
 from novel_mcp.services.canon_service import CanonService
 from novel_mcp.services.world_fact_service import WorldFactService
@@ -99,8 +104,79 @@ def test_invalid_status_and_missing_entity_are_structured_errors(
 ) -> None:
     with pytest.raises(ValidationError, match="VALIDATION_ERROR"):
         service.set_canon_status("world_fact", 1, "unknown", "理由")
-    with pytest.raises(RuntimeError, match="NOT_FOUND"):
+    with pytest.raises(CanonEntityNotFoundError) as error:
         service.set_canon_status("world_fact", 9999, "canon", "理由")
+    assert error.value.code == "NOT_FOUND"
+
+
+def test_status_change_snapshots_inside_transaction_and_uses_version_cas(
+    service: CanonService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fact = WorldFactService(service.connection).create("旧記述", None, None)
+    original_get = service.repository.get_entity
+    original_update = service.repository.update_status
+    observed: dict[str, object] = {}
+
+    def get_entity(**kwargs):
+        observed["in_transaction"] = service.connection.in_transaction
+        record = original_get(**kwargs)
+        if record is not None:
+            service.connection.execute(
+                "UPDATE world_facts SET version = version + 1 WHERE id = ?",
+                (fact.id,),
+            )
+        return record
+
+    def update_status(**kwargs):
+        observed["expected_version"] = kwargs["expected_version"]
+        return original_update(**kwargs)
+
+    monkeypatch.setattr(service.repository, "get_entity", get_entity)
+    monkeypatch.setattr(service.repository, "update_status", update_status)
+
+    with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
+        service.set_canon_status("world_fact", fact.id, "canon", "採用")
+
+    assert observed == {"in_transaction": True, "expected_version": 1}
+    assert service.connection.execute(
+        "SELECT canon_status, version FROM world_facts WHERE id = ?", (fact.id,)
+    ).fetchone() == ("draft", 1)
+
+
+def test_content_change_snapshots_inside_transaction_and_uses_version_cas(
+    service: CanonService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fact = WorldFactService(service.connection).create("旧記述", None, None)
+    original_get = service.repository.get_entity
+    original_update = service.repository.update_content
+    observed: dict[str, object] = {}
+
+    def get_entity(**kwargs):
+        observed["in_transaction"] = service.connection.in_transaction
+        record = original_get(**kwargs)
+        if record is not None:
+            service.connection.execute(
+                "UPDATE world_facts SET version = version + 1 WHERE id = ?",
+                (fact.id,),
+            )
+        return record
+
+    def update_content(**kwargs):
+        observed["expected_version"] = kwargs["expected_version"]
+        return original_update(**kwargs)
+
+    monkeypatch.setattr(service.repository, "get_entity", get_entity)
+    monkeypatch.setattr(service.repository, "update_content", update_content)
+
+    with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
+        service.update_content("world_fact", fact.id, {"body": "新記述"}, reason=None)
+
+    assert observed == {"in_transaction": True, "expected_version": 1}
+    assert service.connection.execute(
+        "SELECT body, version FROM world_facts WHERE id = ?", (fact.id,)
+    ).fetchone() == ("旧記述", 1)
 
 
 def test_failed_decision_insert_rolls_back_target_mutation(
