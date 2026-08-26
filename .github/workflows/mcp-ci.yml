@@ -12,6 +12,8 @@ jobs:
         working-directory: MCP
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with:
@@ -20,5 +22,35 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src
+      - run: uv run pytest -W error
       - run: uv run pytest -W error --cov=src/novel_mcp --cov-report=term-missing
-      - run: python scripts/check_source_size.py
+      - run: uv run pre-commit run --all-files
+      - name: Verify source size from repository root
+        working-directory: .
+        run: python MCP/scripts/check_source_size.py
+      - name: Verify Phase 3 repository invariants
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git fetch origin main --depth=1
+          git diff --exit-code origin/main -- \
+            MCP/migrations/001_initial.sql \
+            MCP/migrations/002_search.sql \
+            MCP/migrations/003_narrative.sql
+
+          actual_migrations="$(find MCP/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)"
+          expected_migrations="$(printf '%s\n' \
+            001_initial.sql \
+            002_search.sql \
+            003_narrative.sql \
+            004_drafts.sql)"
+          test "${actual_migrations}" = "${expected_migrations}"
+          test ! -f data/story.db
+          test -z "$(git status --porcelain)"
+      - name: Verify Phase 3 tool inventory
+        run: >-
+          uv run python -c
+          "from novel_mcp.mcp_server import ALL_TOOL_NAMES;
+          assert len(ALL_TOOL_NAMES) == 55, len(ALL_TOOL_NAMES)"
