@@ -352,8 +352,13 @@ Expected: FAIL because character and relationship services do not yet exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Store relationship direction explicitly; do not infer reciprocal edges. Apply
-the same `expected_version` compare-and-set rule to character and relationship
+Use the immutable `characters` schema adapter by mapping public `name` to
+`display_name`, public `profile` to `summary` (empty when omitted), generating
+an opaque `character_key`, and defaulting hidden `canon_status` to `draft`.
+For relationships, map the public `relation_type` to `relationship_type`, use
+an empty hidden `summary`, and keep hidden `canon_status` at `draft`. Store
+relationship direction explicitly; do not infer reciprocal edges. Apply the
+same `expected_version` compare-and-set rule to character and relationship
 updates. Validate both endpoints belong to the configured work before the
 relationship transaction begins.
 
