@@ -7,3 +7,11 @@ class NovelMcpError(RuntimeError):
 
 class MigrationError(NovelMcpError):
     """Raised when migrations cannot be applied safely."""
+
+
+class VersionConflictError(NovelMcpError):
+    """Raised when optimistic concurrency checks fail."""
+
+
+class WorkExistsError(NovelMcpError):
+    """Raised when explicit initialization is attempted twice."""

@@ -11,6 +11,9 @@ dependencies = [
     "mcp>=2.0,<3.0",
 ]
 
+[project.scripts]
+novel-init = "novel_mcp.cli:main"
+
 [dependency-groups]
 dev = [
     "mypy>=1.18.0",
