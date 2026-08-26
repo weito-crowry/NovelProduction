@@ -8,6 +8,7 @@ from typing import Any
 from novel_mcp.errors import (
     CanonPolicyError,
     CanonReasonRequired,
+    DeprecatedCanonForbiddenError,
     RelationshipIntegrityError,
     ValidationError,
     VersionConflictError,
@@ -33,6 +34,8 @@ def success(value: Any) -> dict[str, Any]:
 def error_payload(exc: BaseException) -> dict[str, Any]:
     if isinstance(exc, CanonReasonRequired):
         code = "CANON_REASON_REQUIRED"
+    elif isinstance(exc, DeprecatedCanonForbiddenError):
+        code = "DEPRECATED_CANON_FORBIDDEN"
     elif isinstance(exc, CanonPolicyError):
         code = "CANON_POLICY_ERROR"
     elif isinstance(exc, RelationshipIntegrityError):
@@ -68,6 +71,8 @@ def _safe_message(exc: BaseException) -> str:
         return getattr(exc, "message", str(exc)).removeprefix("VALIDATION_ERROR: ")
     if isinstance(exc, CanonReasonRequired | CanonPolicyError | VersionConflictError):
         return str(exc).split(": ", 1)[-1]
+    if isinstance(exc, DeprecatedCanonForbiddenError):
+        return "deprecated canon cannot be used as active context"
     if isinstance(exc, WorkScopeError):
         return str(exc).split(": ", 1)[-1]
     if exc.__class__.__name__.endswith("NotFoundError"):

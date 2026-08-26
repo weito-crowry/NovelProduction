@@ -182,7 +182,12 @@ def test_phase2_migration_creates_required_tables_and_columns(
         for row in database.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         )
-    ) == ("001_initial.sql", "002_search.sql", "003_narrative.sql")
+    ) == (
+        "001_initial.sql",
+        "002_search.sql",
+        "003_narrative.sql",
+        "004_drafts.sql",
+    )
 
     tables = {
         row[0]
@@ -190,7 +195,19 @@ def test_phase2_migration_creates_required_tables_and_columns(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )
     }
-    assert not {"drafts", "episode_drafts"} & tables
+    assert "drafts" in tables
+    assert {
+        "id",
+        "work_id",
+        "episode_id",
+        "revision",
+        "parent_draft_id",
+        "body",
+        "source_agent",
+        "change_summary",
+        "content_hash",
+        "created_at",
+    } == {row[1] for row in database.execute("PRAGMA table_info(drafts)")}
 
 
 def test_phase2_constraints_cover_status_positions_and_json(

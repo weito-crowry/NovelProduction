@@ -1,10 +1,10 @@
 # Novel MCP Phase 3 Implementation Plan
 
 > Execution policy: ChatGPT owns architecture, design, and review. Codex Luna
-> performs sequential implementation and verification. Subagent dispatch or
-> model escalation occurs only when the user explicitly requests it.
-> Superpowers are limited to non-delegating TDD, verification, debugging, and
-> documentation workflows. Steps use checkbox (`- [ ]`) syntax for tracking.
+> performs sequential implementation and verification. Subagent dispatch and
+> model escalation are forbidden for this phase. Superpowers are limited to
+> non-delegating TDD, verification, debugging, and documentation workflows.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add append-only episode drafts, bounded episode outline and context retrieval, leakage hardening, and the Phase 3 MCP tools with a real-writing acceptance gate.
 
@@ -19,13 +19,109 @@
 - Keep all implementation, migration, and test paths under `MCP/`.
 - Preserve the MCP tool/service/repository layering from Phases 1–2.
 - Use the Python standard-library `sqlite3` module; no ORM or external context store.
+- Start from `origin/main` at `0a10faf6b8c1ba9c838e6aea1cd0ab84cdb51ef6` on
+  branch `codex/phase3-writing-context` in the dedicated isolated worktree.
+- Do not modify the main checkout. Do not dispatch subagents or escalate the
+  model. Follow this approved contract without an architecture redesign or
+  silent simplification.
+- Keep `MCP/migrations/001_initial.sql`, `002_search.sql`, and
+  `003_narrative.sql` byte-for-byte unchanged. Add only `004_drafts.sql`; do
+  not create `005_*` or later migrations.
 - Keep `004_drafts.sql` immutable after it is applied.
 - Draft saves append a new revision and never overwrite a prior revision.
 - `episode_context` uses fixed bounds: 2 summaries, 4000 draft-tail characters, 30 world facts, 30 timeline events, and 50 information items.
 - Exclude future episode data, future character states, future character knowledge, future reader disclosures, deprecated canon, and other-work data.
+- Keep `reader_disclosures` separate from `character_knowledge_events`; a
+  character knowing an item does not permit its protected statement to be
+  returned before reader disclosure.
+- Use explicit safe projections. Never return character `private_notes`,
+  `profile_json`, or `death_date`, world-fact `details_json`, protected
+  information `notes_json`, future episode title/summary, or draft history/body
+  beyond the requested bounded tail.
 - Return an authoring guard rather than protected future secret content.
+- Never log draft bodies, tails, context secrets, or protected statements.
+- `episode_context` is completely read-only: no INSERT, UPDATE, DELETE,
+  CREATE, DROP, ALTER, migration, auto-reference, auto-summary, auto-canon,
+  or draft save.
+- Noncritical `known_before_episode` candidates are limited to explicit
+  current-episode information references and effective participant knowledge;
+  no vector search or whole-database semantic extraction is allowed.
+- `reader_disclosures` targeting the current episode are the canonical
+  relevance source for `reveal_this_episode`. They require no
+  `episode_information` reference or participant knowledge and are critical,
+  deduplicated, and outside `information_items_max` truncation.
+- Current episode, scenes, participants, current reveal, and safe guards are
+  critical output and are not silently removed by ordinary count bounds.
+- Effective character state includes structured `beliefs` parsed from
+  `character_states.beliefs_json`; effective-state selection uses narrative
+  order and must never expose a future state's beliefs or raw `state_json`.
 - Require the real-writing acceptance gate before treating Phase 3 output as writing-ready.
 - Commit every task independently after its focused test suite passes.
+
+## Final Contract Details
+
+The implementation must preserve the following exact interfaces and evidence:
+
+- Draft service: `save_draft(episode_id, body,
+  expected_parent_draft_id=None, source_agent=None, change_summary="")`,
+  `get_draft(episode_id, revision=None)`, and `history(episode_id, limit=20)`.
+  `source_agent` is optional and bounded to 1..120 characters; change summaries
+  are bounded to 1000 characters; history is bounded to 1..100 and excludes
+  bodies.
+- Draft hash is lower-case SHA-256 over exact UTF-8 body bytes. Draft table
+  triggers reject raw UPDATE and DELETE. Saves use a write transaction that
+  checks the current latest parent before allocating `MAX(revision)+1`.
+- Outline and context use only safe participant, world-fact, and timeline
+  projections. A deprecated target episode returns
+  `DEPRECATED_CANON_FORBIDDEN`; cross-work and missing targets return
+  structured `WORK_SCOPE_ERROR`/`NOT_FOUND` results.
+- Information statements are returned only for reader disclosure positions
+  before or equal to the target. Future/undisclosed related items become
+  metadata-only safe guards with no statement, notes, future episode title, or
+  future summary. The target episode's valid `foreshadowing_notes_json` is
+  returned as a JSON array; malformed JSON is a structured error.
+- Current-episode reader disclosures are always returned in
+  `reader_context.reveal_this_episode` when their information item is active,
+  even without an episode reference or participant knowledge. They are
+  critical data and are not counted toward the 50-item noncritical
+  `known_before_episode` selection bound.
+- `context_meta` includes `narrative_position`, all five fixed `limits`,
+  `returned_counts`, `omitted_counts`, and `truncated` flags. It contains no
+  secret text. Previous context follows narrative order, excludes deprecated
+  episodes, and uses the prior episode's latest draft tail, not the target's
+  prior revisions.
+- The five Phase 3 tools must be registered exactly once, bringing the
+  inventory to 23 + 27 + 5 = 55. There are no Phase 4 tools.
+- `AcceptanceReport` records each required invariant independently, including
+  migration sequence, draft append-only/CAS/hash, outline safety, context
+  bounds/read-only, future/deprecated/cross-work/private-field leakage,
+  guard presence, tool inventory, and `writing_ready`.
+- Acceptance leakage checks are active probes: the qualification database must
+  explicitly seed future episode/state/knowledge/disclosure sentinels,
+  deprecated and cross-work sentinels, private fields, protected statements,
+  and data beyond every context bound. Vacuous PASS without the corresponding
+  hazardous source data is forbidden, and `writing_ready` is true only when
+  every active probe passes.
+
+The repository must not receive `data/story.db` production content. Phase 3
+tests use temporary qualification databases only.
+
+### Task 0: Finalize Phase 3 documentation contract
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-08-26-novel-production-mcp-design.md`
+- Modify: `docs/superpowers/plans/2026-08-26-novel-mcp-phase3-plan.md`
+
+Before production code, update the design status to Phase 1/2 merged and
+Phase 3 approved, record the immutable migration boundary, secret modeling
+rule, fixed context shape/bounds, exact five-tool surface, and deferred Phase
+4 boundary. Self-review for stale Phase 3-deferred language, then commit:
+
+```bash
+git add docs/superpowers/specs/2026-08-26-novel-production-mcp-design.md \
+  docs/superpowers/plans/2026-08-26-novel-mcp-phase3-plan.md
+git commit -m "docs: finalize Phase 3 writing contract"
+```
 
 ### Task 1: Draft migration and append-only revisions
 
@@ -37,17 +133,22 @@
 
 **Interfaces:**
 - Consumes: episodes and database lifecycle from Phases 1–2.
-- Produces: `save_draft(episode_id: int, body: str, author: str | None) -> DraftRecord`,
-  `get_latest_draft(episode_id: int) -> DraftRecord | None`, and
-  `history(episode_id: int) -> tuple[DraftRecord, ...]`.
+- Produces: `save_draft(episode_id: int, body: str,
+  expected_parent_draft_id: int | None = None, source_agent: str | None = None,
+  change_summary: str = "") -> DraftRecord`, `get_draft(episode_id: int,
+  revision: int | None = None) -> DraftRecord | None`, and
+  `history(episode_id: int, limit: int = 20) -> tuple[DraftMetadata, ...]`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 def test_draft_save_is_append_only(service):
     episode = service.create_episode_for_test(27, "第二十七話")
-    first = service.save_draft(episode.id, "revision one", "author")
-    second = service.save_draft(episode.id, "revision two", "author")
+    first = service.save_draft(episode.id, "revision one", source_agent="author")
+    second = service.save_draft(
+        episode.id, "revision two", expected_parent_draft_id=first.id,
+        source_agent="author"
+    )
 
     assert (first.revision, second.revision) == (1, 2)
     assert service.history(episode.id) == (first, second)
@@ -63,17 +164,21 @@ Expected: FAIL because `004_drafts.sql` and draft services do not exist.
 - [ ] **Step 3: Write minimal implementation**
 
 Create the `drafts` table with episode scope, monotonic revision number, body,
-and creation metadata. Allocate the next revision inside one transaction,
-insert a new row, and make history read-only. Reject a missing episode and
-preserve all prior bodies exactly.
+metadata, SHA-256 hash, composite work/episode/parent integrity, and
+append-only UPDATE/DELETE triggers. Allocate the next revision inside a
+`BEGIN IMMEDIATE` transaction only after checking the latest parent and
+`expected_parent_draft_id`; insert a new row and make history metadata-only.
+Reject a missing or cross-work episode, invalid bounds, stale parents, and
+empty/non-string bodies while preserving all prior bodies exactly.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest MCP/tests/test_draft_service.py -q`
 
-Expected: PASS, including concurrent revision allocation through the SQLite
-transaction boundary, empty-body validation, history order, and cross-work
-rejection.
+Expected: PASS, including exact body/hash preservation, concurrent revision
+allocation through the SQLite transaction boundary, stale-parent rejection,
+raw UPDATE/DELETE trigger rejection, bounded metadata history, empty-body
+validation, and cross-work rejection.
 
 - [ ] **Step 5: Validation**
 
@@ -190,15 +295,20 @@ Expected: FAIL because the context model and builder do not exist.
 
 Build a read-only structured result using the fixed bounds from the design
 specification. Resolve character state, relationships, and knowledge at the
-requested episode. Fetch at most two previous summaries, trim the previous
+requested episode. Effective character state projects `physical_state`,
+`emotional_state`, structured `beliefs` parsed from `beliefs_json`, and
+`location_world_fact_id`; raw `state_json` is not exposed. State selection is
+the latest change at or before the target by chapter/episode narrative order,
+never by episode ID. Fetch at most two previous summaries, trim the previous
 draft tail to 4000 characters, and include deterministic ordering metadata.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest MCP/tests/test_context_service.py -q`
 
-Expected: PASS, including all five bounds, participant effective state,
-reader context, recent context, stable ordering, and no mutation during reads.
+Expected: PASS, including all five bounds, participant effective state and
+beliefs, reader context, recent context, stable narrative ordering, future
+belief exclusion, and no mutation during reads.
 
 - [ ] **Step 5: Validation**
 
@@ -315,26 +425,33 @@ Expected: FAIL because Phase 3 adapters and the acceptance gate are absent.
 
 Register exactly the five Phase 3 tools, delegate to services, serialize
 structured context and guards, and expose draft history without an update or
-delete operation. The acceptance gate must exercise fixed bounds, all leakage
-categories, deprecated-canon exclusion, configured-work scope, and two draft
-saves that produce revisions 1 and 2. A positive process exit alone is not a
-passing gate; each assertion must be recorded in `AcceptanceReport`.
+delete operation. The acceptance gate must seed and exercise every hazardous
+category before judging it: future episode, future character state, future
+character knowledge, future reader disclosure, deprecated entity/information,
+cross-work data, private notes/profile JSON, protected statement, world facts
+>30, timeline events >30, information items >50, previous episodes >2, and a
+previous draft >4000 characters. It must also exercise two draft saves that
+produce revisions 1 and 2. A positive process exit or absence of hazardous
+source rows is not a passing gate; each active assertion must be recorded in
+`AcceptanceReport`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest MCP/tests/test_phase3_mcp_tools.py MCP/tests/test_phase3_acceptance.py -q`
 
 Expected: PASS, including tool registration, safe context serialization,
-append-only draft operations, and all acceptance-gate assertions.
+append-only draft operations, active leakage probes, and all acceptance-gate
+assertions.
 
 - [ ] **Step 5: Validation**
 
 Run: `python -m pytest MCP/tests -q`; inspect `server.tool_names()` and confirm
 that all Phase 1–3 names are present exactly once, no database file is created
-under the repository root, and the acceptance report lists every guard.
+under the repository root, and the acceptance report lists every active guard
+and leakage probe.
 
 Expected: the complete test suite passes and the real-writing gate is backed by
-specific evidence rather than a wrapper exit code.
+specific seeded evidence rather than a wrapper exit code or vacuous PASS.
 
 - [ ] **Step 6: Commit**
 

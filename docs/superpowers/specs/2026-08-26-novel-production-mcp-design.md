@@ -1,6 +1,6 @@
 # Novel Production MCP Design Specification
 
-**Status:** Phase 1 implemented and merged; Phase 2 implementation contract approved
+**Status:** Phase 1 and Phase 2 implemented and merged; Phase 3 implementation contract approved
 
 **Date:** 2026-08-26
 
@@ -12,10 +12,11 @@ operations over story canon, historical chronology, narrative structure,
 character state, information disclosure, and append-only episode drafts.
 
 This specification defines the Phase 1–3 architecture and the invariants that
-implementation must preserve. Phase 1 is implemented and merged on `main` at
-`a57a0e38fef211866270e8787cf92473601a2203`. This document now also fixes the
-Phase 2 implementation contract. Phase 3 runtime code, migration, and tools
-remain out of scope for this implementation cycle.
+implementation must preserve. Phase 1 and Phase 2 are implemented and merged
+on `main` at `0a10faf6b8c1ba9c838e6aea1cd0ab84cdb51ef6`. This document fixes
+the Phase 2 contract and the approved Phase 3 implementation contract. Phase 3
+is the current implementation scope; Phase 4 and later runtime features
+remain deferred.
 
 ## Architecture
 
@@ -90,10 +91,15 @@ the runtime architecture:
   limits; SHOULD thresholds are advisory.
 - Repository GitHub Actions checks run on pushes and pull requests. They cover
   dependency synchronization, Ruff, mypy, pytest, and the source-size gate.
-- Phase 1 is implemented and merged. `001_initial.sql` and `002_search.sql`
-  are immutable and must not be changed in Phase 2. `003_narrative.sql` is the
-  sole Phase 2 migration and becomes immutable after application. `004_drafts.sql`
-  is reserved for Phase 3 and must not be created in this cycle.
+- Phase 1 and Phase 2 are implemented and merged on `main` at
+  `0a10faf6b8c1ba9c838e6aea1cd0ab84cdb51ef6`. `001_initial.sql`,
+  `002_search.sql`, and `003_narrative.sql` are immutable for Phase 3. The
+  only migration added by Phase 3 is `004_drafts.sql`; `005_*` and later
+  migrations are forbidden.
+- Phase 3 is implemented sequentially by Codex Luna in the approved worktree.
+  Subagent dispatch and model escalation are forbidden. Architecture and
+  product decisions follow this approved contract; implementation may not
+  silently simplify or redesign it.
 
 ## Status Models
 
@@ -546,6 +552,10 @@ scenes
 participants[]
   profile
   effective_state
+    physical_state
+    emotional_state
+    beliefs
+    location_world_fact_id
   effective_relationships
   known_information
 
@@ -585,6 +595,23 @@ character knowledge, future reader disclosures, deprecated canon, and data
 belonging to another work. If future information is relevant as an authoring
 constraint, the result may contain an `authoring_guard` describing the guard,
 but must not return the secret's protected body.
+
+Noncritical `known_before_episode` information candidates are relevance-bound
+to explicit current-episode `episode_information` references and effective
+knowledge of current participants. Phase 3 performs no vector or whole-database
+semantic scan for those candidates. This bound does not apply to canonical
+current reveals: every active information item whose `reader_disclosures`
+boundary targets the current episode is relevant to
+`reader_context.reveal_this_episode` even when it has no episode reference and
+no participant knowledge. Current reveals are deduplicated, exclude deprecated
+information, are critical data, and are not truncated by
+`information_items_max`.
+
+Effective character state is the latest state change at or before the target
+according to chapter/episode narrative order, never episode ID ordering. The
+Phase 3 safe projection parses `character_states.beliefs_json` and returns it
+as structured `beliefs` together with physical/emotional state and location.
+Future beliefs are excluded and raw `state_json` is not exposed.
 
 ## Error Model
 
@@ -653,6 +680,119 @@ episode context, leakage hardening, and the real-writing acceptance gate.
 The corresponding plans specify files, interfaces, failing tests, execution,
 implementation steps, validation, and independent commits for each task.
 
+## Phase 3 Implementation Contract
+
+Phase 3 implementation starts from merged Phase 2 at
+`0a10faf6b8c1ba9c838e6aea1cd0ab84cdb51ef6`. The three existing migrations are
+byte-for-byte immutable. `004_drafts.sql` is the only new migration, and no
+`005_*` migration may be created.
+
+### Append-only episode drafts
+
+`drafts` contains `id`, `work_id`, `episode_id`, `revision`,
+`parent_draft_id`, `body`, `source_agent`, `change_summary`, `content_hash`,
+and `created_at`. It enforces positive revisions, unique
+`(episode_id, revision)`, non-empty bodies, a 64-character hash, configured
+work/episode composite integrity, and same-episode parent lineage. Database
+`BEFORE UPDATE` and `BEFORE DELETE` triggers abort all in-place changes.
+
+Draft save preserves the exact input string, including leading/trailing
+whitespace and newlines. `content_hash` is lower-case SHA-256 over the exact
+UTF-8 body bytes. A save runs in a `BEGIN IMMEDIATE`-equivalent transaction,
+checks the latest revision and `expected_parent_draft_id`, allocates the next
+revision, and inserts one row. The first revision has a NULL parent; every
+later revision must point to the current latest row. A stale parent returns
+`VERSION_CONFLICT` without a partial write. Draft history is metadata-only;
+full bodies are returned only by an exact/latest draft get.
+
+### Safe outline and context projections
+
+`episode_outline_get` and `episode_context` use explicit projections rather
+than raw database row dumps. Participant profiles may contain only `id`,
+`character_key`, `display_name`, `entity_type`, `description`, `birth_date`,
+`physical_description`, `occupation`, `core_beliefs`, `goals`, `fears`,
+`personality`, `speech_style`, `ai_attitude`,
+`genetic_modification_attitude`, and `canon_status`. They must not expose
+`private_notes`, `profile_json`, or `death_date`. World facts omit
+`details_json`; timeline events are limited to the approved safe projection.
+
+For noncritical `known_before_episode`, episode references are the relevance
+boundary: candidates come from current `episode_information` references plus
+effective knowledge of current participants. Phase 3 performs no vector or
+whole-database semantic search for those candidates. Current reveals are the
+explicit exception: an active `information_item` with a `reader_disclosures`
+boundary at the target episode is canonical current-reveal relevance by itself,
+requires neither an episode reference nor participant knowledge, and is
+critical/non-truncated. Deprecated target episodes fail with
+`DEPRECATED_CANON_FORBIDDEN`; deprecated referenced or current-reveal entities
+are excluded. `idea`, `draft`, and `canon` remain distinct status values and
+are not implicitly promoted.
+
+Any narrative proposition that must not yet be disclosed to the reader is
+stored in `information_items`. `character.private_notes`,
+`character.profile_json`, and `world_fact.details_json` are not substitutes
+for the normalized disclosure model. Narrative-boundary reads use
+`information_items`, `reader_disclosures`, and
+`character_knowledge_events` to decide what may be shown.
+
+Information statements are governed by `reader_disclosures`: disclosures
+before the target are `known_before_episode`, and disclosures at the target
+are `reveal_this_episode`. Undisclosed or future information never exposes its
+statement, notes, or other secret body, even when a character already knows
+it. Such relevant items produce only a safe `protected_information_guards`
+entry with IDs, reason, guard text, and reveal boundary positions. A stored
+`authoring_guard` is used only when it does not contain the protected
+statement; otherwise a generic safe guard is returned.
+
+Effective participant state uses the latest `character_states` row at or before
+the target by chapter/episode narrative order. Its safe Phase 3 projection
+includes physical state, emotional state, structured `beliefs` parsed from
+`beliefs_json`, and location. Future state and future beliefs are excluded;
+raw `state_json` is not returned.
+
+The context has fixed server-side limits: two previous episode summaries,
+4000 characters of the previous episode's latest draft tail, 30 referenced
+world facts, 30 referenced timeline events, and 50 distinct noncritical
+reader-safe `known_before_episode` information items. Current episode data,
+participants, scenes, all active current reveals, and safe guards are not
+silently dropped by those limits. Selection and ordering are deterministic,
+narrative order uses chapter and episode positions, and context metadata
+reports limits, returned counts, omitted counts, and truncation flags without
+secret text. Context assembly is strictly read-only and performs no mutation,
+migration, auto-canon, auto-summary, or draft save.
+
+### Phase 3 MCP surface and acceptance
+
+Phase 3 adds exactly these five tools to the existing 23 Phase 1 and 27 Phase
+2 tools, for exactly 55 tools total:
+
+```text
+episode_outline_get
+episode_context
+episode_draft_get
+episode_draft_save
+episode_draft_history
+```
+
+All five descriptions begin with `Use this when ...`. The four read tools use
+`readOnlyHint=true`, `destructiveHint=false`, and `openWorldHint=false`.
+`episode_draft_save` uses `readOnlyHint=false`,
+`destructiveHint=false`, and `openWorldHint=false`. The handlers remain thin
+and delegate to services through `phase3_tools.py`.
+
+The internal real-writing acceptance gate records individual booleans for
+migration order, append-only drafts, parent CAS, hash correctness, safe
+outline, bounded/read-only context, all future/deprecated/cross-work/private
+field leakage categories, guard presence, exact tool inventory, and
+`writing_ready`. It is an active-probe gate: the qualification database seeds
+hazardous sentinels for future episode/state/knowledge/disclosure,
+deprecated and cross-work data, private fields, protected statements, and data
+beyond every context bound before evaluating the corresponding invariant.
+Missing hazardous source data cannot produce a vacuous PASS. Every reader-safe
+statement returned by the probe must have a reader-disclosure boundary at or
+before the target. `writing_ready` is true only when every required active
+assertion is true; a process exit code alone is not evidence.
+
 ## Acceptance Criteria
 
 The architecture is accepted when the future implementation and repository
@@ -710,25 +850,7 @@ The following are deliberately excluded from this design cycle:
 - release and deployment automation;
 - automatic work creation at MCP startup;
 - generated story databases or sample story content;
-- implementation of Phase 3 runtime code in this cycle.
-
-These exclusions keep the initial commit limited to repository structure,
-architecture documentation, implementation plans, and project metadata.
-
-## Implementation Detail
-
-The following choices are intentionally implementation-level and are governed
-by the plans rather than by additional product behavior:
-
-- Python package layout uses `MCP/src/novel_mcp`.
-- SQLite access uses standard-library `sqlite3` connections created by the
-  database lifecycle boundary.
-- The official Python MCP SDK v2 is declared as `mcp>=2.0,<3.0` without a
-  patch-level pin in the bootstrap metadata.
-- The stdio adapter is the first transport; tool payloads are structured JSON.
-- Each task adds focused tests before the smallest implementation needed to
-  satisfy them and ends with an independently reviewable commit.
-
-Implementation details may refine internal modules and SQL indexes, but they
-must not alter the status values, table inventory, migration sequence,
-layering, temporal boundaries, or leakage rules defined above.
+- Phase 4 continuity checks, story-thread engines, automatic contradiction
+  repair, automatic canon mutation/promotion, vector or graph databases,
+  automatic prose or outline generation, web/widgets/Apps UI, Docker,
+  deployment, production story data, and migrations after `004_drafts.sql`.

@@ -64,6 +64,17 @@ class WorkScopeError(NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class DeprecatedCanonForbiddenError(NovelMcpError):
+    """Raised when a narrative-boundary read targets deprecated canon."""
+
+    code = "DEPRECATED_CANON_FORBIDDEN"
+
+    def __init__(
+        self, message: str = "deprecated canon cannot be used as active context"
+    ) -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class ValidationError(ValueError, NovelMcpError):
     """Raised for invalid input with a stable machine-readable code."""
 
