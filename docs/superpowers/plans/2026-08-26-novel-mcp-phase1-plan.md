@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the foundational Novel Production MCP database lifecycle, core canon repositories and services, Japanese search baseline, and Phase 1 stdio tools.
+**Goal:** Build the foundational Novel Production MCP database lifecycle, core canon repositories and services, Japanese search baseline, and Phase 1 stdio tools on a reproducible repository development foundation.
 
 **Architecture:** Keep MCP handlers thin and delegate to services, which own validation and transactions, while repositories own SQLite queries. One configured MCP instance uses one story database, and all implementation files remain under `MCP/`.
 
-**Tech Stack:** Python 3.10+, official MCP Python SDK v2, standard-library `sqlite3`, explicit SQL migrations, pytest, and stdio transport.
+**Tech Stack:** Python 3.10+, the concrete CI Python version in `.python-version`, `uv`, official MCP Python SDK v2, standard-library `sqlite3`, explicit SQL migrations, pytest/pytest-cov, Ruff, mypy, pre-commit, and stdio transport.
 
 **Spec:** `docs/superpowers/specs/2026-08-26-novel-production-mcp-design.md`
 
@@ -22,16 +22,32 @@
 - Preserve the independent `CanonStatus` and `ProductionStatus` value sets.
 - Require `expected_version` for mutable-entity updates and reject stale values with `VERSION_CONFLICT`.
 - Require a reason for protected canon transitions and canonical content changes.
+- Use `MCP/pyproject.toml` and `MCP/uv.lock` as the authoritative Python dependency files; `uv sync --all-groups` must reproduce the development environment.
+- Keep the repository Python version concrete and synchronized between `.python-version` and GitHub Actions.
+- Use Ruff for linting and formatting, strict-by-default mypy with only narrowly justified exceptions, pytest with an 80% Phase 1 coverage target, and lightweight pre-commit checks.
+- Keep repository text files UTF-8 with LF endings, final newlines, and no trailing whitespace through `.editorconfig` and validation.
+- Use standard-library `logging` for diagnostic events without logging novel prose, secret settings, episode context, private notes, or draft bodies.
+- Production Python modules under `MCP/src/**/*.py` must be at most 600 lines and 40 KiB; test modules under `MCP/tests/**/*.py` must be at most 800 lines. The SHOULD limits are 400 and 500 lines respectively. Generated files, `uv.lock`, migration SQL, fixtures, snapshots, and vendored code are exempt from the automated size gate.
+- The source-size hard limits must be enforced by a small repository script in CI; SHOULD-limit exceedance is a warning.
+- GitHub Actions must validate `uv sync`, Ruff check/format, mypy, pytest, and the source-size gate on pushes and pull requests.
 - Commit every task independently after its focused test suite passes.
 
-### Task 1: Repository bootstrap, configuration, and database lifecycle
+### Task 1: Repository Development Foundation, configuration, and SQLite database lifecycle
 
 **Files:**
 - Create: `MCP/migrations/001_initial.sql`
+- Create: `.editorconfig`
+- Create: `.python-version`
+- Create: `.github/workflows/mcp-ci.yml`
+- Create: `MCP/.pre-commit-config.yaml`
+- Create: `MCP/scripts/check_source_size.py`
+- Modify: `MCP/pyproject.toml`
 - Create: `MCP/src/novel_mcp/config.py`
 - Create: `MCP/src/novel_mcp/database.py`
 - Create: `MCP/src/novel_mcp/errors.py`
+- Create: `MCP/src/novel_mcp/__init__.py`
 - Create: `MCP/tests/test_database_lifecycle.py`
+- Create: `MCP/tests/test_development_foundation.py`
 
 **Interfaces:**
 - Consumes: database path and migration directory supplied by `DatabaseConfig`.
@@ -39,6 +55,9 @@
   `open_database(config: DatabaseConfig) -> sqlite3.Connection`,
   `apply_migrations(connection: sqlite3.Connection, migration_dir: Path) -> tuple[str, ...]`,
   and the Phase 1 core tables listed by the design specification.
+- Produces a reproducible `uv.lock`, concrete Python version declaration,
+  Ruff/mypy/pytest/pre-commit configuration, GitHub Actions checks, diagnostic
+  logging setup, and the source-size hard-limit checker.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -56,7 +75,7 @@ def test_open_database_applies_connection_defaults_and_migrations(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest MCP/tests/test_database_lifecycle.py::test_open_database_applies_connection_defaults_and_migrations -q`
+Run: `cd MCP; uv run pytest tests/test_database_lifecycle.py::test_open_database_applies_connection_defaults_and_migrations -q`
 
 Expected: FAIL because the lifecycle module and `001_initial.sql` do not yet exist.
 
@@ -70,24 +89,23 @@ different bytes. Keep `001_initial.sql` limited to Phase 1 core schema.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `python -m pytest MCP/tests/test_database_lifecycle.py -q`
+Run: `cd MCP; uv run pytest tests/test_database_lifecycle.py -q`
 
 Expected: PASS, including a second-open idempotency test and a migration
 failure rollback test.
 
 - [ ] **Step 5: Validation**
 
-Run: `python -m compileall MCP/src` and inspect the migration inventory with
-`Get-ChildItem MCP/migrations`.
+Run: `cd MCP; uv run pytest tests/test_development_foundation.py -q; uv run ruff check .; uv run ruff format --check .; uv run mypy src; uv run pre-commit run --all-files`; then run `python MCP/scripts/check_source_size.py` from the repository root and inspect the migration inventory with `Get-ChildItem MCP/migrations`.
 
-Expected: compilation succeeds and only `001_initial.sql` is present for this
-task.
+Expected: development checks and source-size validation succeed, and only
+`001_initial.sql` is present for this task.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add MCP/migrations/001_initial.sql MCP/src/novel_mcp/config.py MCP/src/novel_mcp/database.py MCP/src/novel_mcp/errors.py MCP/tests/test_database_lifecycle.py
-git commit -m "feat: establish SQLite database lifecycle"
+git add .editorconfig .python-version .github/workflows/mcp-ci.yml MCP/.pre-commit-config.yaml MCP/pyproject.toml MCP/uv.lock MCP/scripts/check_source_size.py MCP/migrations/001_initial.sql MCP/src/novel_mcp MCP/tests/test_database_lifecycle.py MCP/tests/test_development_foundation.py
+git commit -m "chore: establish MCP development foundation"
 ```
 
 ### Task 2: Work metadata repository, service, and novel-init

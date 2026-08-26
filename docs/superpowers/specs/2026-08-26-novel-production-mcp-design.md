@@ -62,11 +62,33 @@ In scope for the Phase 1–3 design:
 Out of scope:
 
 - Web UI, widgets, ChatGPT Apps UI, or a browser client.
-- Production deployment, CI/CD, Docker, release management, and hosting.
+- Production deployment, production CI/CD, Docker, release management, and hosting.
 - ORM, vector search, embeddings, or an external search service.
 - Automatic story creation during ordinary MCP startup.
 - A generated `story.db` in the repository.
 - Any live writing workflow before the Phase 3 acceptance gate.
+
+## Development Constraints
+
+Phase 1 uses a reproducible repository development foundation in addition to
+the runtime architecture:
+
+- `MCP/pyproject.toml` and `MCP/uv.lock` are the authoritative Python
+  dependency files. `uv sync --all-groups` is the supported environment setup.
+- `.python-version` contains the concrete Python version used by CI. Ruff is
+  the lint and formatter, mypy is strict by default, pytest/pytest-cov provide
+  the test and coverage baseline, and pre-commit runs lightweight checks.
+- Repository text files use UTF-8, LF endings, final newlines, and no trailing
+  whitespace. Standard-library `logging` may record diagnostic events, but it
+  must not record novel prose, secret settings, episode context, private notes,
+  or draft bodies.
+- Production Python modules under `MCP/src/**/*.py` must not exceed 600 lines
+  or 40 KiB. Test modules under `MCP/tests/**/*.py` must not exceed 800 lines.
+  Generated files, `uv.lock`, migration SQL, fixtures, snapshots, and vendored
+  code are exempt. A small automated source-size check enforces the hard
+  limits; SHOULD thresholds are advisory.
+- Repository GitHub Actions checks run on pushes and pull requests. They cover
+  dependency synchronization, Ruff, mypy, pytest, and the source-size gate.
 
 ## Status Models
 
@@ -506,7 +528,7 @@ The following are deliberately excluded from this design cycle:
 - vector databases and embeddings;
 - ORM abstractions;
 - external search services;
-- Docker and CI/CD configuration;
+- Production Docker and CI/CD configuration;
 - release and deployment automation;
 - automatic work creation at MCP startup;
 - generated story databases or sample story content;
