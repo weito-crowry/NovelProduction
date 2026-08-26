@@ -6,6 +6,7 @@ import pytest
 
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
+from novel_mcp.repositories.work_repository import WorkRepository
 from novel_mcp.services.work_service import WorkService
 
 
@@ -39,11 +40,21 @@ def test_normal_open_does_not_create_a_work(tmp_path: Path) -> None:
     connection = open_test_database(tmp_path / "story.db")
 
     try:
-        assert WorkService(connection).get() is None
+        assert WorkRepository(connection).get() is None
         assert (
             connection.execute("SELECT COUNT(*) FROM works").fetchone()
             == (0,)
         )
+    finally:
+        connection.close()
+
+
+def test_service_get_raises_when_no_work_exists(tmp_path: Path) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+
+    try:
+        with pytest.raises(RuntimeError, match="WORK_NOT_FOUND"):
+            WorkService(connection).get()
     finally:
         connection.close()
 

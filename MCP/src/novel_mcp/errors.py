@@ -15,3 +15,7 @@ class VersionConflictError(NovelMcpError):
 
 class WorkExistsError(NovelMcpError):
     """Raised when explicit initialization is attempted twice."""
+
+
+class WorkNotFoundError(NovelMcpError):
+    """Raised when a requested work record does not exist."""
