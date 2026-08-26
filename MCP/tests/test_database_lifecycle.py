@@ -28,7 +28,12 @@ def test_open_database_applies_connection_defaults_and_migrations(
             for row in connection.execute(
                 "SELECT version FROM schema_migrations ORDER BY version"
             ).fetchall()
-        ) == ("001_initial.sql", "002_search.sql", "003_narrative.sql")
+        ) == (
+            "001_initial.sql",
+            "002_search.sql",
+            "003_narrative.sql",
+            "004_drafts.sql",
+        )
     finally:
         connection.close()
 
@@ -56,6 +61,10 @@ def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> 
         assert second_connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
             ("003_narrative.sql",),
+        ).fetchone() == (1,)
+        assert second_connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+            ("004_drafts.sql",),
         ).fetchone() == (1,)
     finally:
         second_connection.close()
