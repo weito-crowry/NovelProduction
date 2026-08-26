@@ -31,10 +31,11 @@ def apply_migrations(
     applied = _load_applied_migrations(connection)
     applied_versions: list[str] = []
     for migration_path in sorted(migration_dir.glob("*.sql")):
-        checksum = _checksum_for_path(migration_path)
+        checksum_candidates = _checksum_candidates_for_path(migration_path)
+        checksum = checksum_candidates[1]
         existing_checksum = applied.get(migration_path.name)
         if existing_checksum is not None:
-            if existing_checksum != checksum:
+            if existing_checksum not in checksum_candidates:
                 raise MigrationError(
                     f"Applied migration bytes changed for {migration_path.name}"
                 )
@@ -84,8 +85,15 @@ def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
     return row is not None
 
 
-def _checksum_for_path(path: Path) -> str:
-    return sha256(path.read_bytes()).hexdigest()
+def _checksum_candidates_for_path(path: Path) -> tuple[str, str, str]:
+    raw = path.read_bytes()
+    canonical_lf = raw.replace(b"\r\n", b"\n")
+    canonical_crlf = canonical_lf.replace(b"\n", b"\r\n")
+    return (
+        sha256(raw).hexdigest(),
+        sha256(canonical_lf).hexdigest(),
+        sha256(canonical_crlf).hexdigest(),
+    )
 
 
 def _iter_statements(script: str) -> tuple[str, ...]:
