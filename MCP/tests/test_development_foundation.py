@@ -38,7 +38,8 @@ def test_development_foundation_enforces_phase1_coverage_and_ruff_rules() -> Non
     assert '"UP"' in pyproject_text
     assert '"B"' in pyproject_text
     assert (
-        "uv run pytest --cov=src/novel_mcp --cov-report=term-missing" in workflow_text
+        "uv run pytest -W error --cov=src/novel_mcp --cov-report=term-missing"
+        in workflow_text
     )
 
 

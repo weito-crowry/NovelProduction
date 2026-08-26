@@ -8,7 +8,7 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
-from novel_mcp.mcp_server import create_server
+from novel_mcp.mcp_server import PHASE2_TOOL_NAMES, create_server
 
 
 def _config(tmp_path: Path) -> DatabaseConfig:
@@ -129,10 +129,10 @@ def test_timeline_event_get_missing_event_returns_stable_not_found(
     }
 
 
-def test_server_inventory_has_no_phase_two_or_three_names(server) -> None:
+def test_server_inventory_has_phase_two_names_but_no_phase_three_names(server) -> None:
     names = server.tool_names()
 
-    assert not names & {"chapter_create", "episode_create", "scene_create"}
+    assert PHASE2_TOOL_NAMES <= names
     assert not names & {"episode_context", "episode_draft_get", "episode_draft_save"}
 
 

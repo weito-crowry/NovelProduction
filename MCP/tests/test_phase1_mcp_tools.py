@@ -9,7 +9,7 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
-from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, create_server
+from novel_mcp.mcp_server import PHASE1_TOOL_NAMES, PHASE2_TOOL_NAMES, create_server
 
 
 def _config(tmp_path: Path) -> DatabaseConfig:
@@ -36,7 +36,7 @@ def _structured(result: CallToolResult) -> dict[str, object]:
     return json.loads(text)
 
 
-def test_phase1_server_registers_only_planned_tools(server) -> None:
+def test_server_preserves_phase1_tools_and_adds_phase2_tools(server) -> None:
     expected_tool_names = {
         "work_get",
         "work_update",
@@ -63,8 +63,9 @@ def test_phase1_server_registers_only_planned_tools(server) -> None:
         "canon_decision_search",
     }
 
-    assert server.tool_names() == expected_tool_names
-    assert len(expected_tool_names) == 23
+    assert server.tool_names() == expected_tool_names | PHASE2_TOOL_NAMES
+    assert expected_tool_names == PHASE1_TOOL_NAMES
+    assert len(server.tool_names()) == 50
 
 
 def test_read_and_mutation_annotations_match_tool_effects(server) -> None:
@@ -96,7 +97,8 @@ def test_read_and_mutation_annotations_match_tool_effects(server) -> None:
         "canon_decision_search": (True, False),
     }
 
-    assert set(tools) == set(expected_annotations)
+    assert set(expected_annotations) == PHASE1_TOOL_NAMES
+    assert PHASE1_TOOL_NAMES <= set(tools)
     for name, (read_only, destructive) in expected_annotations.items():
         annotations = tools[name].annotations
         assert annotations is not None
@@ -111,7 +113,7 @@ def test_all_phase1_tools_have_actionable_descriptions_and_schema_bounds(
     server,
 ) -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
-    assert set(tools) == PHASE1_TOOL_NAMES
+    assert PHASE1_TOOL_NAMES <= set(tools)
     for tool in tools.values():
         assert tool.description
         assert tool.description.startswith("Use this when")

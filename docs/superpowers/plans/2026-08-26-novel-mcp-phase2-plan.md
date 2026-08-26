@@ -583,12 +583,12 @@ git commit -m "feat: extend canon policy to Phase 2 entities"
 - Create: `MCP/src/novel_mcp/phase1_tools.py` if needed for a
   behavior-preserving registration split
 - Create: `MCP/tests/test_phase2_mcp_tools.py`
-- Create: `MCP/tests/test_phase2_acceptance.py`
+- Extend: `MCP/tests/test_phase2_mcp_tools.py` with Phase 2 acceptance coverage
 - Modify: `.github/workflows/mcp-ci.yml` to run pytest with `-W error` while
   retaining push and pull_request triggers
 
 **Interfaces:**
-- Consumes: Phase 1 server factory and Phase 2 services from Tasks 1–6.
+- Consumes: Phase 1 server factory and Phase 2 services from Tasks 1–7.
 - Produces: registrations for the exact Phase 2 tool list in the design
   specification, including `episode_reference_add`,
   `episode_reference_remove`, and `episode_reference_list`. Every new tool has
