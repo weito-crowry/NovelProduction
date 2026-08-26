@@ -271,9 +271,7 @@ class ContextService:
             reveal[database_item.id] = safe_information(database_item)
 
         for referenced_item in outline.references.information:
-            disclosure_record = self._repository.disclosure(
-                work_id, referenced_item.id
-            )
+            disclosure_record = self._repository.disclosure(work_id, referenced_item.id)
             boundary = self._disclosure_order(work_id, disclosure_record)
             if boundary is None:
                 continue
