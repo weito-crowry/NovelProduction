@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync --all-groups
+      - name: Verify installed CORE wheel
+        run: uv run pytest -W error tests/test_installed_wheel.py -q
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src

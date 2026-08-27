@@ -1,6 +1,7 @@
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+build-backend = "backend"
+backend-path = ["_custom_build"]
 
 [project]
 name = "novel-production-core"
@@ -25,7 +26,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-novel_core = ["py.typed"]
+novel_core = ["py.typed", "migrations/*.sql"]
 
 [tool.mypy]
 python_version = "3.13"

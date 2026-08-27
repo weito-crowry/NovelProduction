@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from hashlib import sha256
+from importlib import resources
 from pathlib import Path
 
 from novel_core.config import DatabaseConfig
@@ -12,7 +13,16 @@ LOGGER = logging.getLogger(__name__)
 
 
 def default_migration_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "migrations"
+    checkout_dir = Path(__file__).resolve().parents[2] / "migrations"
+    if checkout_dir.is_dir():
+        return checkout_dir
+
+    packaged_dir = resources.files("novel_core").joinpath("migrations")
+    if not packaged_dir.is_dir():
+        raise MigrationError("Packaged migrations are unavailable")
+    if isinstance(packaged_dir, Path):
+        return packaged_dir
+    raise MigrationError("Packaged migrations are not available as filesystem paths")
 
 
 def open_database(config: DatabaseConfig) -> sqlite3.Connection:
