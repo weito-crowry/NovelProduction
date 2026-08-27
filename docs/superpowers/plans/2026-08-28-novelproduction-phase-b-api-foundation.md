@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add the shared FastAPI `/api/v1` backend, multi-project registry, request-scoped SQLite access, complete Phase 1–3 HTTP surface, and initial derived WEBUI views without changing the existing MCP tool interface or touching the real production story database.
+**Goal:** Add the shared FastAPI `/api/v1` backend, multi-project registry, request-scoped SQLite execution, complete Phase 1–3 HTTP surface, and initial derived WEBUI views without changing the existing MCP tool interface or touching the real production story database.
 
-**Architecture:** `API/` is a transport/orchestration package that depends on `novel_core`; it does not own story SQL or duplicate domain validation. Every project-scoped request resolves an immutable `project_id`, opens one SQLite connection through CORE, constructs CORE services on that connection, executes the request, and closes the connection. Project discovery/creation/archive is filesystem metadata around `data/<project_id>/story.db`; MCP remains CORE-direct during Phase B and is converted to HTTP only in Phase C.
+**Architecture:** `API/` is a transport/orchestration package that depends on `novel_core`; it does not own story SQL or duplicate domain validation. A project-scoped request resolves immutable `project_id` first, then the synchronous route handler opens one CORE SQLite connection inside that same handler/thread, constructs CORE services, performs all reads/writes for the request, and closes the connection before returning. Project discovery/create/archive is filesystem metadata around `data/<project_id>/story.db`. MCP remains CORE-direct during Phase B and is converted to HTTP only in Phase C.
 
 **Tech Stack:** Python 3.10+ runtime, Python 3.13 CI/type-check target, FastAPI, Pydantic v2, Uvicorn, stdlib `sqlite3` through `novel_core`, setuptools, uv, pytest, httpx/FastAPI TestClient, Ruff, mypy, pre-commit.
 
@@ -14,35 +14,35 @@
 
 ## Global Constraints
 
-- Base the implementation on the latest `origin/main`; the reviewed Phase A + invariant-fix baseline is merge commit `0b4bd432771c9a9cbb8f30870511df1aec9ae6f2`.
-- Phase B adds `API/` but **does not** convert MCP to HTTP. Existing MCP remains CORE-direct until Phase C.
-- Do not change any of the 55 existing MCP tool names, input schemas, output semantics, or stdio behavior in Phase B.
-- Do not add `project_id` to MCP tools in Phase B.
-- Do not add `project_select` or any hidden current-project state.
-- Do not add WEBUI/React/Vite/TipTap code in Phase B.
-- Do not add migration `005`; migrations `001`–`004` remain byte/blob-identical and the existing Phase A invariant must stay green.
-- Do not modify, initialize, migrate, delete, replace, vacuum, repair, or seed the real `data/2126/story.db` or any other stable/production DB during implementation/tests.
-- All API tests must use temporary data roots and temporary story databases.
-- All story writes go through CORE services. API route handlers must not issue story SQL directly.
-- CORE continues to own SQLite lifecycle, migrations, repositories, services, transaction behavior, version checks, and domain validation.
-- Each project-scoped HTTP request uses one project-specific SQLite connection and closes it at request completion; do not share a mutable connection across unrelated requests.
-- Preserve `PRAGMA foreign_keys = ON`, WAL, `busy_timeout = 5000`, explicit short transactions, and optimistic concurrency.
-- Preserve the search -> write regression fix.
-- API success responses for project-scoped operations always include the addressed `project_id`.
-- API errors use one structured contract under `/api/v1`; no HTML errors for API paths.
-- Project discovery is based on immediate `data/*/story.db`; the directory name is immutable `project_id`.
-- Project IDs are lowercase ASCII letters/digits/hyphens only, 1–64 characters, no leading/trailing hyphen, no traversal, slash, whitespace, or Unicode lookalikes.
-- `project.json` contains only outer metadata: `project_id`, `status`, `created_at`, `updated_at`.
-- Initial project statuses are exactly `active` and `archived`.
-- Archived projects are omitted from normal project lists but remain fully readable/writable when explicitly addressed.
-- Do not expose project deletion.
-- Missing `project.json` must not make an existing `story.db` disappear from discovery; synthesize active metadata in memory and mark the metadata state as missing. Do not write metadata merely by listing.
-- Malformed/mismatched `project.json` must not silently hide the story DB; keep the project discoverable as degraded metadata and do not auto-rewrite it on read.
-- Project creation is staged under the data root and finalized by same-filesystem rename only after migrations, work initialization, integrity verification, and metadata write succeed.
-- Default API bind is `0.0.0.0:8765`; the port is configurable. Do not silently choose another port when binding fails.
-- Initial deployment is trusted-LAN only: no authentication/user system and no direct-public-Internet support.
-- Development CORS may allow one configured Vite origin (normally `http://localhost:5173`); do not enable wildcard production CORS.
-- FastAPI static WEBUI serving is Phase D. Phase B may run API-only when no frontend build exists.
+- Base work on latest `origin/main`; the reviewed Phase A + invariant-fix baseline is `0b4bd432771c9a9cbb8f30870511df1aec9ae6f2`.
+- Phase B adds `API/` but does **not** convert MCP to HTTP. Existing MCP remains CORE-direct until Phase C.
+- Do not change any of the 55 existing MCP tool names, input schemas, output semantics, or stdio behavior.
+- Do not add `project_id` to MCP tools and do not add `project_select` hidden state.
+- Do not add WEBUI/React/Vite/TipTap code.
+- Do not add migration `005`; migrations `001`–`004` remain exact canonical blobs and existing invariant checks remain green.
+- Do not modify, initialize, migrate, delete, replace, vacuum, repair, seed, or hash-lock the real `data/2126/story.db` or any stable/production DB during implementation/tests.
+- All API tests use temporary data roots and temporary story DBs.
+- All story writes go through CORE services. API routes do not issue story SQL directly.
+- CORE owns SQLite lifecycle, migrations, repositories, services, transaction behavior, version checks, and domain validation.
+- Every project-scoped route uses exactly one project SQLite connection per request and closes it before returning.
+- Do **not** create a SQLite connection in an async/sync FastAPI dependency and then use it in a different execution thread. Project DB routes are synchronous `def` handlers; the connection is opened/used/closed inside the same handler call through a local context manager.
+- Do not change CORE to `check_same_thread=False` merely to accommodate FastAPI; preserve the current SQLite connection behavior.
+- Preserve `PRAGMA foreign_keys = ON`, WAL, `busy_timeout = 5000`, explicit short transactions, optimistic concurrency, and search -> write safety.
+- Every project-scoped success response includes the addressed `project_id`.
+- API failures use one JSON error contract under `/api/v1`; no HTML error body for API failures.
+- Project discovery is immediate `data/*/story.db`; directory name is immutable `project_id`.
+- Project IDs match `^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`, length 1–64.
+- `project.json` persists only `project_id`, `status`, `created_at`, `updated_at`.
+- Status values are exactly `active` and `archived`.
+- Archived projects are hidden from default lists but remain fully readable/writable by explicit `project_id`.
+- No project-delete endpoint.
+- Missing `project.json` does not hide an existing `story.db`: synthesize active metadata in memory with `metadata_state="missing"`; listing must not write metadata.
+- Malformed/mismatched `project.json` does not hide an existing `story.db`: synthesize active metadata in memory with `metadata_state="invalid"`; listing must not rewrite metadata.
+- Project creation stages under `data/.staging/` and finalizes by same-filesystem rename only after migrations, work initialization, integrity verification, and metadata write succeed.
+- Default API bind is `0.0.0.0:8765`; port is configurable. Bind failure must fail explicitly, never silently select another port.
+- Initial deployment is trusted-LAN only: no authentication/user system and no direct-public-Internet scope.
+- Development CORS may allow one configured Vite origin; no wildcard production CORS.
+- FastAPI static WEBUI serving belongs to Phase D; Phase B is API-only.
 - Issue #5 and Phase 4 continuity/inconsistency work remain out of scope.
 
 ---
@@ -54,15 +54,16 @@ API/
 ├─ pyproject.toml
 ├─ src/novel_api/
 │  ├─ __init__.py
-│  ├─ app.py                  # app factory + router registration
-│  ├─ cli.py                  # novel-api entry point, host/port/data-root
-│  ├─ config.py               # immutable runtime settings
-│  ├─ dependencies.py         # registry/project request dependencies
-│  ├─ errors.py               # common API error contract/mappers
-│  ├─ project_registry.py     # discovery/create/archive filesystem logic
-│  ├─ serialization.py        # JSON-safe dataclass/tuple conversion helpers
-│  ├─ service_container.py    # per-connection CORE service composition
+│  ├─ app.py
+│  ├─ cli.py
+│  ├─ config.py
+│  ├─ dependencies.py
+│  ├─ errors.py
+│  ├─ project_registry.py
+│  ├─ serialization.py
+│  ├─ service_container.py
 │  ├─ routes/
+│  │  ├─ __init__.py
 │  │  ├─ health.py
 │  │  ├─ projects.py
 │  │  ├─ work.py
@@ -75,6 +76,7 @@ API/
 │  │  ├─ authoring.py
 │  │  └─ views.py
 │  └─ schemas/
+│     ├─ __init__.py
 │     ├─ common.py
 │     ├─ projects.py
 │     ├─ work.py
@@ -84,10 +86,12 @@ API/
 │     ├─ canon.py
 │     ├─ narrative.py
 │     ├─ information.py
-│     └─ authoring.py
+│     ├─ authoring.py
+│     └─ views.py
 └─ tests/
    ├─ conftest.py
    ├─ test_health.py
+   ├─ test_cli.py
    ├─ test_projects.py
    ├─ test_project_atomicity.py
    ├─ test_request_connections.py
@@ -98,43 +102,30 @@ API/
    ├─ test_views.py
    └─ test_multi_project_e2e.py
 
-CORE/
-└─ src/novel_core/
-   ├─ database.py             # add integrity assertion helper only
-   └─ errors.py               # add DatabaseIntegrityError only if needed
-
-.github/workflows/mcp-ci.yml  # add API job; keep CORE/MCP/invariants
+CORE/src/novel_core/database.py
+CORE/src/novel_core/errors.py
+CORE/tests/test_database_lifecycle.py
+.github/workflows/mcp-ci.yml
 MCP/scripts/check_source_size.py
 README.md
 ```
 
-The exact route/schema split may be adjusted only to satisfy existing source-size rules; dependency direction and endpoint semantics below must not change.
-
 ---
 
-### Task 1: Create the installable API package, settings, app factory, health endpoint, and CLI
+### Task 1: Create API package, settings, app factory, health endpoint, and CLI
 
 **Files:**
-- Create: `API/pyproject.toml`
-- Create: `API/src/novel_api/__init__.py`
-- Create: `API/src/novel_api/config.py`
-- Create: `API/src/novel_api/app.py`
-- Create: `API/src/novel_api/cli.py`
-- Create: `API/src/novel_api/routes/__init__.py`
-- Create: `API/src/novel_api/routes/health.py`
-- Create: `API/tests/test_health.py`
-- Create: `API/tests/test_cli.py`
+- Create all Task 1 files shown above: `API/pyproject.toml`, `__init__.py`, `config.py`, `app.py`, `cli.py`, `routes/__init__.py`, `routes/health.py`, `tests/test_health.py`, `tests/test_cli.py`.
 
 **Interfaces:**
-- Produces: `novel_api.config.ApiSettings`
-- Produces: `novel_api.app.create_app(settings: ApiSettings) -> FastAPI`
-- Produces: `novel_api.cli.main(argv: list[str] | None = None) -> None`
-- Produces: `GET /api/v1/health`
-- Consumes: `novel-production-core` as an editable local package during repository development.
+- `ApiSettings(data_root: Path, host: str = "0.0.0.0", port: int = 8765, dev_cors_origin: str | None = None)`
+- `create_app(settings: ApiSettings) -> FastAPI`
+- `main(argv: list[str] | None = None) -> None`
+- `GET /api/v1/health`
 
-- [ ] **Step 1: Create API package metadata**
+- [ ] **Step 1: Create `API/pyproject.toml`**
 
-Use the same packaging/quality conventions as CORE/MCP:
+Use:
 
 ```toml
 [build-system]
@@ -170,7 +161,7 @@ dev = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src" }
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -197,14 +188,12 @@ target-version = "py313"
 select = ["E", "F", "I", "UP", "B"]
 ```
 
-If dependency resolution requires newer compatible minimums at implementation time, update only the minimums necessary and record the reason in the PR; do not perform unrelated dependency churn.
+- [ ] **Step 2: Write failing health/CLI tests**
 
-- [ ] **Step 2: Write failing health/settings tests**
-
-`API/tests/test_health.py` must construct an app with a temporary data root and assert exactly:
+Health test:
 
 ```python
-def test_health_is_api_only_and_does_not_require_a_project(tmp_path: Path) -> None:
+def test_health_is_api_only_and_does_not_require_project(tmp_path: Path) -> None:
     app = create_app(ApiSettings(data_root=tmp_path))
     with TestClient(app) as client:
         response = client.get("/api/v1/health")
@@ -212,9 +201,9 @@ def test_health_is_api_only_and_does_not_require_a_project(tmp_path: Path) -> No
     assert response.json() == {"status": "ok", "api_version": "v1"}
 ```
 
-`API/tests/test_cli.py` must assert the parser defaults to host `0.0.0.0`, port `8765`, and accepts explicit `--host`, `--port`, and `--data-root`.
+CLI tests assert default host `0.0.0.0`, port `8765`, explicit `--host`, `--port`, `--data-root`, and environment variables `NOVEL_DATA_ROOT`, `NOVEL_API_HOST`, `NOVEL_API_PORT`, `NOVEL_DEV_CORS_ORIGIN`.
 
-Run before implementation:
+Run and confirm RED before implementation:
 
 ```bash
 cd API
@@ -222,49 +211,20 @@ uv sync --all-groups
 uv run pytest tests/test_health.py tests/test_cli.py -q
 ```
 
-Expected: FAIL because `novel_api` app/settings/CLI are not implemented.
+- [ ] **Step 3: Implement `ApiSettings` and deterministic data-root resolution**
 
-- [ ] **Step 3: Implement immutable runtime settings**
+Resolution order:
 
-Use an immutable dataclass; do not add `pydantic-settings` solely for configuration:
+1. explicit CLI value;
+2. environment value;
+3. source-checkout root only when `Path(__file__).resolve().parents[3]` contains both `CORE/` and `MCP/`, then `<root>/data`;
+4. otherwise `Path.cwd()/data`.
 
-```python
-@dataclass(frozen=True, slots=True)
-class ApiSettings:
-    data_root: Path
-    host: str = "0.0.0.0"
-    port: int = 8765
-    dev_cors_origin: str | None = None
-```
+- [ ] **Step 4: Implement app factory, `/api/v1/health`, and CLI**
 
-Resolution rules for the CLI:
+Health must not discover/open DBs. CLI creates the app object and calls `uvicorn.run(app, host=..., port=...)`; do not probe for a free alternate port.
 
-1. explicit CLI argument;
-2. `NOVEL_DATA_ROOT`, `NOVEL_API_HOST`, `NOVEL_API_PORT`, `NOVEL_DEV_CORS_ORIGIN` when present;
-3. repository checkout `data/` when the package can positively identify the checkout root containing both `CORE/` and `MCP/`;
-4. otherwise `Path.cwd() / "data"`.
-
-Never guess a different port if `8765` is occupied.
-
-- [ ] **Step 4: Implement app factory and health route**
-
-The app factory must store settings on `app.state.settings`, install only explicit routers, and return the FastAPI instance. The health endpoint must not open/discover any story DB.
-
-Initial route:
-
-```python
-@router.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "api_version": "v1"}
-```
-
-Mount the router under `/api/v1` from `create_app`.
-
-- [ ] **Step 5: Implement CLI entry point**
-
-Use `argparse`; construct `ApiSettings`, construct the app object, and call `uvicorn.run(app, host=settings.host, port=settings.port)`. Uvicorn bind failure must propagate/exit rather than selecting another port.
-
-- [ ] **Step 6: Run tests/static checks and commit**
+- [ ] **Step 5: Verify and commit**
 
 ```bash
 cd API
@@ -274,45 +234,29 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-Expected: PASS.
-
-Commit:
-
-```bash
-git add API
-git commit -m "feat: add FastAPI application foundation"
-```
+Commit: `feat: add FastAPI application foundation`.
 
 ---
 
-### Task 2: Add CORE integrity verification and the filesystem project registry
+### Task 2: Add CORE integrity verification and filesystem project registry
 
 **Files:**
-- Modify: `CORE/src/novel_core/database.py`
-- Modify: `CORE/src/novel_core/errors.py` only if adding `DatabaseIntegrityError`
-- Add/modify CORE tests for integrity verification
-- Create: `API/src/novel_api/project_registry.py`
-- Create: `API/src/novel_api/schemas/projects.py`
-- Create: `API/src/novel_api/routes/projects.py`
-- Create: `API/tests/conftest.py`
-- Create: `API/tests/test_projects.py`
-- Create: `API/tests/test_project_atomicity.py`
+- Modify `CORE/src/novel_core/database.py`, `CORE/src/novel_core/errors.py`, `CORE/tests/test_database_lifecycle.py`.
+- Create `API/src/novel_api/project_registry.py`, `schemas/projects.py`, `routes/projects.py`, `tests/conftest.py`, `tests/test_projects.py`, `tests/test_project_atomicity.py`.
 
 **Interfaces:**
-- Produces: `novel_core.database.assert_database_integrity(connection: sqlite3.Connection) -> None`
-- Produces: `ProjectRegistry(data_root: Path)` with `list`, `get`, `create`, `set_status`
-- Produces: project routes under `/api/v1/projects`
-- Consumes: `novel_core.initialization.initialize_work`, `open_database`, `WorkService`.
+- `DatabaseIntegrityError`
+- `assert_database_integrity(connection: sqlite3.Connection) -> None`
+- `ProjectRegistry(data_root: Path)`
+- `ProjectNotFoundError`, `ProjectConflictError`
+- `ProjectRegistry.list(include_archived: bool = False)`
+- `ProjectRegistry.get(project_id: str)`
+- `ProjectRegistry.create(working_title: str, project_id: str | None = None)`
+- `ProjectRegistry.set_status(project_id: str, status: Literal["active", "archived"])`
 
-- [ ] **Step 1: Write failing CORE integrity tests**
+- [ ] **Step 1: Write failing CORE integrity tests, then implement CORE helper**
 
-Add a test that migrates/initializes a temp DB, opens it through CORE, runs `assert_database_integrity(connection)`, and passes. Add a unit case that makes the helper observe a non-`ok` integrity result via a test double and raises a CORE-owned error rather than returning a false success.
-
-The implementation must execute exactly `PRAGMA integrity_check` in CORE, not in API.
-
-- [ ] **Step 2: Implement `assert_database_integrity` in CORE**
-
-The helper must treat the one-row value `ok` as success and all other/no-result states as failure. If a dedicated exception is added, make it a CORE exception and do not change existing exception classes/strings.
+`assert_database_integrity` executes `PRAGMA integrity_check`; only one-row `ok` succeeds. All other/no-result states raise `DatabaseIntegrityError`. Keep existing DB/migration behavior unchanged.
 
 Run:
 
@@ -321,19 +265,9 @@ cd CORE
 uv run pytest -W error
 ```
 
-Expected: existing 134+ tests plus the new integrity tests PASS.
+- [ ] **Step 2: Define project metadata models exactly**
 
-- [ ] **Step 3: Define project metadata and validation**
-
-Use these stable rules:
-
-```text
-project_id regex: ^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$
-length: 1..64
-status: active | archived
-```
-
-`project.json` written by the API is exactly conceptually:
+Persisted JSON:
 
 ```json
 {
@@ -344,100 +278,57 @@ status: active | archived
 }
 ```
 
-Use UTC timestamps with a `Z` suffix. `project_id` is immutable.
-
-Project response metadata includes a derived `metadata_state` with values `ok`, `missing`, `invalid`. This state is not persisted in `project.json`.
-
-- [ ] **Step 4: Write failing discovery tests**
-
-Tests must cover:
-
-1. `data/alpha/story.db` created via CORE but no `project.json` -> listed as active with `metadata_state="missing"`;
-2. default list hides an archived project;
-3. `include_archived=true` includes it;
-4. malformed JSON or mismatched `project_id` does not hide `story.db`; it is discoverable with `metadata_state="invalid"`;
-5. a directory without `story.db` is not a project;
-6. nested staging DBs under `data/.staging/<token>/story.db` are not immediate `data/*/story.db` projects;
-7. explicit get of unknown valid ID raises project-not-found;
-8. traversal/Unicode/whitespace IDs are rejected before filesystem resolution.
-
-- [ ] **Step 5: Implement `ProjectRegistry.list` and `get`**
-
-Discovery iterates only immediate child directories containing `story.db`. Never discover recursively.
-
-Missing metadata behavior:
+Derived API summary fields:
 
 ```text
-story.db exists + no project.json
-=> status active in memory
-=> created_at/updated_at null in API summary
-=> metadata_state missing
-=> no file write
+project_id: str
+status: active | archived
+metadata_state: ok | missing | invalid
+working_title: str | null
+created_at: str | null
+updated_at: str | null
+health: ok | degraded
 ```
 
-Invalid metadata behavior:
+`health` and `metadata_state` are never persisted.
+
+- [ ] **Step 3: Write discovery tests before implementation**
+
+Cover: missing metadata, archived filtering, include-archived, malformed/mismatched metadata still visible, no-story.db ignored, `.staging/<token>/story.db` not discovered as immediate project, unknown project 404 path, invalid/traversal/Unicode IDs rejected.
+
+- [ ] **Step 4: Implement immediate-child discovery and read-only summary hydration**
+
+Missing/invalid metadata defaults to active in memory. Project-list hydration opens each story DB through CORE only long enough to call `WorkService.get`, closes it immediately, and reports `health="degraded"`, `working_title=null` if that DB cannot be read. Listing never edits project metadata or story data intentionally.
+
+- [ ] **Step 5: Write atomic-create failure/success tests**
+
+Cover explicit ID, auto ID `project-YYYYMMDD-HHMMSS`, collision suffix `-2/-3`, no title translation, duplicate conflict, failure cleanup, exact migrations 001–004, one work row, valid project.json, no path outside temp data root.
+
+- [ ] **Step 6: Implement staged creation with exclusive per-project lock**
+
+Flow:
 
 ```text
-story.db exists + malformed/mismatched project.json
-=> keep project visible
-=> status active in memory
-=> metadata_state invalid
-=> no file rewrite
-```
-
-Because archive is organizational, falling back to active for broken metadata is acceptable; it must never be treated as an authorization boundary.
-
-- [ ] **Step 6: Write failing atomic project-creation tests**
-
-Cover:
-
-- explicit valid ID creates `story.db`, migrations 001–004, one `works` row, and valid `project.json`;
-- omitted ID generates `project-YYYYMMDD-HHMMSS`, with `-2`, `-3`, ... suffix on collision;
-- title is not translated or slugified into the generated ID;
-- duplicate explicit ID returns a conflict and leaves the existing project untouched;
-- injected failure during initialize/integrity/metadata write leaves no `data/<project_id>` directory;
-- staging directory is cleaned after failure;
-- project creation never touches any path outside the supplied temp data root.
-
-- [ ] **Step 7: Implement staged creation**
-
-Creation order is fixed:
-
-```text
-validate/generate project_id
--> acquire per-project exclusive creation lock under data/.locks/
+validate/generate ID
+-> acquire data/.locks/<project_id>.lock using O_CREAT|O_EXCL
 -> create data/.staging/<uuid>/
 -> initialize_work(staging/story.db, working_title=...)
--> open through CORE and assert_database_integrity
+-> open staging DB through CORE
+-> assert_database_integrity
+-> close DB
 -> write staging/project.json
--> verify final data/<project_id> is still absent
--> same-filesystem rename staging dir to final dir
--> release lock
+-> verify final path absent
+-> Path.rename(staging_dir, data/<project_id>) on same filesystem
+-> remove lock in finally
 ```
 
-Use an exclusive lock file (`os.open` with `O_CREAT | O_EXCL`) or an equivalently tested cross-request mechanism. Never replace an existing final project directory.
+Never overwrite an existing final directory.
 
-- [ ] **Step 8: Implement atomic archive/restore metadata updates**
+- [ ] **Step 7: Implement archive/restore with atomic metadata replace**
 
-`PATCH /api/v1/projects/{project_id}` accepts only:
+`PATCH /api/v1/projects/{project_id}` accepts only `{"status":"active"}` or `{"status":"archived"}`. Write a same-directory temporary metadata file then `os.replace`. Explicit update repairs missing/invalid metadata; when no valid prior `created_at` exists, set it to the update time.
 
-```json
-{"status": "active"}
-```
-
-or:
-
-```json
-{"status": "archived"}
-```
-
-Write `project.json` through a temporary file in the same directory followed by `os.replace`. If metadata was missing/invalid, this explicit update repairs it and establishes fresh `created_at` when no valid prior value exists.
-
-Archived projects remain addressable and writable.
-
-- [ ] **Step 9: Implement project HTTP routes**
-
-Required routes:
+- [ ] **Step 8: Implement project routes**
 
 ```text
 GET   /api/v1/projects?include_archived=false
@@ -446,155 +337,78 @@ GET   /api/v1/projects/{project_id}
 PATCH /api/v1/projects/{project_id}
 ```
 
-Create input:
+POST body: required non-empty `working_title`, optional `project_id`.
 
-```json
-{
-  "working_title": "2126",
-  "project_id": "2126"
-}
-```
+- [ ] **Step 9: Verify and commit**
 
-`project_id` is optional; `working_title` is required/non-empty.
-
-Project summaries include at least: `project_id`, `status`, `metadata_state`, `working_title`, `created_at`, `updated_at`. Read `working_title` from `story.db` through CORE/`WorkService`; never duplicate it into `project.json`.
-
-If one discovered DB cannot be opened/read, list it with a degraded/null title rather than silently deleting the project from the list; explicit project data routes may then return a structured server/database error.
-
-- [ ] **Step 10: Run focused tests and commit**
-
-```bash
-cd CORE
-uv run pytest -W error
-cd ../API
-uv run pytest tests/test_projects.py tests/test_project_atomicity.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-Commit:
-
-```bash
-git add CORE API
-git commit -m "feat: add atomic multi-project registry"
-```
+Run full CORE plus focused API project tests, Ruff/format/mypy. Commit: `feat: add atomic multi-project registry`.
 
 ---
 
-### Task 3: Add request-scoped project connections and CORE service composition
+### Task 3: Add thread-affine per-request CORE service execution
 
 **Files:**
-- Create: `API/src/novel_api/service_container.py`
-- Create: `API/src/novel_api/dependencies.py`
-- Create: `API/tests/test_request_connections.py`
+- Create `API/src/novel_api/service_container.py`, `API/src/novel_api/dependencies.py`, `API/tests/test_request_connections.py`.
 
 **Interfaces:**
-- Produces: `ServiceContainer` containing the same current CORE services MCP wires today.
-- Produces: `ProjectRequestContext(project_id, project, connection, services)`.
-- Produces: FastAPI dependency that yields exactly one context/connection per project-scoped request.
+- `ServiceContainer` with all current 16 CORE services.
+- `ProjectTarget(project_id, descriptor)`; contains no open SQLite connection.
+- `resolve_project_target(...) -> ProjectTarget`; filesystem/registry lookup only.
+- `open_project_services(target: ProjectTarget) -> ContextManager[ServiceContainer]`.
 
-- [ ] **Step 1: Implement a typed service container factory**
+- [ ] **Step 1: Implement typed service container**
 
-Compose the current services on one connection:
+Compose exactly:
 
 ```text
-WorkService
-WorldFactService
-TimelineService
-CharacterService
-RelationshipService
-CanonService
-SearchService
-NarrativeService
-CharacterStateService
-InformationService
-DisclosureService
-KnowledgeService
-EpisodeReferenceService
-DraftService
-OutlineService
-ContextService
+WorkService, WorldFactService, TimelineService, CharacterService,
+RelationshipService, CanonService, SearchService, NarrativeService,
+CharacterStateService, InformationService, DisclosureService,
+KnowledgeService, EpisodeReferenceService, DraftService,
+OutlineService, ContextService
 ```
 
-Do not move business logic into the container.
+- [ ] **Step 2: Write connection/thread-lifecycle tests before implementation**
 
-- [ ] **Step 2: Write failing connection-lifecycle tests**
+Prove that:
 
-Tests must prove:
+1. `resolve_project_target` does not open SQLite;
+2. each project-scoped HTTP request opens exactly one connection;
+3. all CORE services in that request share that same connection;
+4. next request gets a different connection;
+5. success and exception paths close it;
+6. archived project executes normally;
+7. unknown project fails before DB open.
 
-- two separate HTTP requests for the same project receive different SQLite connection objects;
-- one request uses one connection for all services in its container;
-- the connection is closed after response completion;
-- an exception path also closes the connection;
-- archived project lookup still yields a normal connection;
-- unknown project fails before any DB path is opened.
+- [ ] **Step 3: Implement local context-manager execution**
 
-Use instrumentation/test doubles around `novel_core.database.open_database`; never inspect the real DB.
-
-- [ ] **Step 3: Implement the project dependency**
-
-The dependency flow is:
+`open_project_services` does:
 
 ```text
-path project_id
--> ProjectRegistry.get(project_id)
--> DatabaseConfig(project.story_db, default_migration_dir())
--> open_database(config)
+open_database(DatabaseConfig(target.story_db, default_migration_dir()))
 -> build ServiceContainer(connection)
--> yield ProjectRequestContext
--> close in finally
+-> yield services
+-> connection.close() in finally
 ```
 
-Do not cache the SQLite connection in app state, registry state, thread-local state, or a global.
+All project DB route functions introduced in Tasks 5–8 are synchronous `def` and enter this context manager inside the route function itself. Do not yield an open connection/service container from a FastAPI dependency.
 
-- [ ] **Step 4: Add search -> write HTTP regression**
+- [ ] **Step 4: Add HTTP search -> write regression**
 
-On a temp project:
+On a temp project perform one search request followed by a write request; assert write succeeds and no transaction state leaks.
 
-1. create a world fact through API setup/CORE;
-2. call world-fact search request;
-3. issue a subsequent write request;
-4. assert the write succeeds and no stale transaction state crosses requests.
+- [ ] **Step 5: Verify and commit**
 
-This supplements, not replaces, the CORE regression.
-
-- [ ] **Step 5: Run tests and commit**
-
-```bash
-cd API
-uv run pytest tests/test_request_connections.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-Commit:
-
-```bash
-git add API
-git commit -m "feat: add request scoped project services"
-```
+Run focused tests/Ruff/format/mypy. Commit: `feat: add request scoped project services`.
 
 ---
 
-### Task 4: Implement the common success/error contract and conflict snapshots
+### Task 4: Implement common success/error contract and conflict snapshots
 
 **Files:**
-- Create: `API/src/novel_api/schemas/common.py`
-- Create: `API/src/novel_api/serialization.py`
-- Create: `API/src/novel_api/errors.py`
-- Modify: `API/src/novel_api/app.py`
-- Create: `API/tests/test_errors.py`
+- Create `API/src/novel_api/schemas/common.py`, `serialization.py`, `errors.py`, `tests/test_errors.py`; modify `app.py`.
 
 **Interfaces:**
-- Produces project success envelope: `{"project_id": <id>, "data": ...}`.
-- Produces API error envelope: `{"error": {"code", "message", "project_id", "details"}}`.
-- Produces helper for version conflicts that can attach a safe latest-resource snapshot.
-
-- [ ] **Step 1: Define stable response models**
-
-Use a generic Pydantic v2 model:
 
 ```python
 T = TypeVar("T")
@@ -604,58 +418,42 @@ class ProjectEnvelope(BaseModel, Generic[T]):
     data: T
 ```
 
-CORE stdlib dataclasses may be used directly as `T`; avoid duplicating every CORE record into transport-only response classes.
+Error contract:
 
-Define errors conceptually as:
-
-```python
-class ApiError(BaseModel):
-    code: str
-    message: str
-    project_id: str | None = None
-    details: dict[str, Any] = Field(default_factory=dict)
-
-class ApiErrorEnvelope(BaseModel):
-    error: ApiError
+```json
+{
+  "error": {
+    "code": "VERSION_CONFLICT",
+    "message": "The resource was modified by another client.",
+    "project_id": "2126",
+    "details": {}
+  }
+}
 ```
 
-- [ ] **Step 2: Write failing mapping tests**
-
-Test exact HTTP/code behavior:
+- [ ] **Step 1: Write exact mapping tests**
 
 ```text
-Pydantic/FastAPI request validation -> 400 VALIDATION_ERROR
-CORE ValidationError / ValueError     -> 400 VALIDATION_ERROR
-ProjectNotFound                       -> 404 PROJECT_NOT_FOUND
-CORE *NotFoundError                   -> 404 NOT_FOUND
-CORE WorkScopeError                   -> 404 NOT_FOUND
-VersionConflictError                  -> 409 VERSION_CONFLICT
-OrderConflictError                    -> 409 ORDER_CONFLICT
-RelationshipIntegrity/IntegrityError  -> 409 DEPENDENCY_CONFLICT
-Canon policy conflicts                -> 409 DEPENDENCY_CONFLICT
-locked sqlite OperationalError        -> 503 DATABASE_BUSY
-unexpected exception                  -> 500 INTERNAL_ERROR
+RequestValidationError / CORE ValidationError / ValueError -> 400 VALIDATION_ERROR
+ProjectNotFoundError                                  -> 404 PROJECT_NOT_FOUND
+CORE *NotFoundError / WorkScopeError                  -> 404 NOT_FOUND
+VersionConflictError                                  -> 409 VERSION_CONFLICT
+OrderConflictError                                    -> 409 ORDER_CONFLICT
+RelationshipIntegrityError / sqlite IntegrityError    -> 409 DEPENDENCY_CONFLICT
+CanonPolicyError                                      -> 409 DEPENDENCY_CONFLICT
+locked sqlite OperationalError                        -> 503 DATABASE_BUSY
+unexpected exception                                  -> 500 INTERNAL_ERROR
 ```
 
-For domain-specific errors normalized to a common code, preserve the original CORE class/code in `details.domain_code` when useful; clients must still key primarily on the common API `code`.
+For every normalized domain-specific error, include `details.domain_code` with the CORE class/code name. Never expose raw SQLite messages/tracebacks.
 
-Never expose raw SQLite error text or traceback in the JSON body.
+- [ ] **Step 2: Implement one exception-handler installation function**
 
-- [ ] **Step 3: Implement one exception-handler installation function**
+Install handlers from `create_app` for request validation, project exceptions, CORE errors, SQLite errors, fallback exceptions. API paths return JSON only.
 
-`create_app` installs handlers for:
+- [ ] **Step 3: Implement reusable conflict helper**
 
-- `RequestValidationError`;
-- project-registry API exceptions;
-- CORE base/domain exceptions;
-- `sqlite3.Error`;
-- fallback `Exception`.
-
-Log server-side unexpected errors; return safe client messages.
-
-- [ ] **Step 4: Add reusable VERSION_CONFLICT context helper**
-
-For update/reorder/save routes that know `expected_version`/parent and can safely re-read the target after the CORE service has rolled back, attach:
+Routes that know the entity and can re-read after the CORE service rollback attach:
 
 ```json
 {
@@ -663,322 +461,162 @@ For update/reorder/save routes that know `expected_version`/parent and can safel
   "entity_id": 14,
   "expected_version": 4,
   "current_version": 5,
-  "current_resource": {"...": "latest record"}
+  "current_resource": {}
 }
 ```
 
-The global fallback handler may return a smaller `VERSION_CONFLICT` when a safe latest snapshot is not available. Do not parse version numbers from exception strings.
+Do not parse versions from exception strings. Global fallback VERSION_CONFLICT may omit snapshot details when no safe read function exists.
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **Step 4: Verify and commit**
 
-```bash
-cd API
-uv run pytest tests/test_errors.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-Commit:
-
-```bash
-git add API
-git commit -m "feat: add shared API error contract"
-```
+Run `tests/test_errors.py`, Ruff/format/mypy. Commit: `feat: add shared API error contract`.
 
 ---
 
-### Task 5: Expose the complete Phase 1 HTTP surface
+### Task 5: Expose all 23 Phase 1 operations over HTTP
 
 **Files:**
-- Create: `API/src/novel_api/schemas/work.py`
-- Create: `API/src/novel_api/schemas/world.py`
-- Create: `API/src/novel_api/schemas/timeline.py`
-- Create: `API/src/novel_api/schemas/characters.py`
-- Create: `API/src/novel_api/schemas/canon.py`
-- Create: `API/src/novel_api/routes/work.py`
-- Create: `API/src/novel_api/routes/world.py`
-- Create: `API/src/novel_api/routes/timeline.py`
-- Create: `API/src/novel_api/routes/characters.py`
-- Create: `API/src/novel_api/routes/canon.py`
-- Modify: `API/src/novel_api/app.py`
-- Create: `API/tests/test_phase1_api.py`
+- Create `schemas/work.py`, `world.py`, `timeline.py`, `characters.py`, `canon.py`; create matching route files; create `tests/test_phase1_api.py`; modify `app.py`.
 
-**Interfaces:**
-- Consumes only the `ProjectRequestContext.services` CORE services.
-- Produces HTTP equivalents of all 23 Phase 1 MCP operations.
-
-- [ ] **Step 1: Define the exact Phase 1 route inventory**
-
-Implement all routes below:
+**Route inventory:**
 
 ```text
 GET   /api/v1/projects/{project_id}/work
 PATCH /api/v1/projects/{project_id}/work
-
 POST  /api/v1/projects/{project_id}/world-facts
+GET   /api/v1/projects/{project_id}/world-facts/search?query=&limit=20
 GET   /api/v1/projects/{project_id}/world-facts/{fact_id}
 PATCH /api/v1/projects/{project_id}/world-facts/{fact_id}
-GET   /api/v1/projects/{project_id}/world-facts/search?query=&limit=20
-
 POST  /api/v1/projects/{project_id}/timeline/events
+GET   /api/v1/projects/{project_id}/timeline/events/search?query=&limit=20
 GET   /api/v1/projects/{project_id}/timeline/events/{event_id}
 PATCH /api/v1/projects/{project_id}/timeline/events/{event_id}
-GET   /api/v1/projects/{project_id}/timeline/events/search?query=&limit=20
 GET   /api/v1/projects/{project_id}/timeline/range?start=&end=&limit=20
 POST  /api/v1/projects/{project_id}/timeline/events/{event_id}/move
 POST  /api/v1/projects/{project_id}/timeline/relations
-
 POST  /api/v1/projects/{project_id}/characters
+GET   /api/v1/projects/{project_id}/characters/search?query=&limit=20
 GET   /api/v1/projects/{project_id}/characters/{character_id}
 PATCH /api/v1/projects/{project_id}/characters/{character_id}
-GET   /api/v1/projects/{project_id}/characters/search?query=&limit=20
-
 POST  /api/v1/projects/{project_id}/relationships
 PATCH /api/v1/projects/{project_id}/relationships/{relationship_id}
 GET   /api/v1/projects/{project_id}/relationships?character_id=&limit=20
-
 POST  /api/v1/projects/{project_id}/canon/status
-GET   /api/v1/projects/{project_id}/canon/decisions/{decision_id}
 GET   /api/v1/projects/{project_id}/canon/decisions/search?query=&limit=20
+GET   /api/v1/projects/{project_id}/canon/decisions/{decision_id}
 ```
 
-These correspond exactly to Phase 1 tool behavior; do not silently add different domain semantics.
+**Static-route ordering rule:** register `/search` routes before dynamic `/{id}` routes in the same router so literal `search` is never captured as an integer ID path.
 
-- [ ] **Step 2: Define request schemas with the existing tool fields**
-
-Transport schemas must contain these fields:
+**Request fields:**
 
 ```text
-WorkUpdate:
-  working_title, expected_version, genre?, premise?, themes_json?, description?, production_status?
-
-WorldFactCreate:
-  statement, valid_from?, valid_to?, topic_key?, category="general", title?, details_json={}, importance=0
-WorldFactUpdate:
-  statement, expected_version, reason?, topic_key?, category?, title?, details_json?, valid_from?, valid_to?, importance?
-
-TimelineParticipant:
-  character_id, role
-TimelineEventCreate:
-  title, event_date?, participants?, event_key?, time_start?, time_end?, date_precision?,
-  date_display?, description="", category="general", location_world_fact_id?,
-  cause_summary="", consequence_summary="", importance=0
-TimelineEventUpdate:
-  expected_version, title?, new_date?, participants?, reason?, time_start?, time_end?,
-  date_precision?, date_display?, description?, category?, location_world_fact_id?,
-  cause_summary?, consequence_summary?, importance?
-TimelineMove:
-  expected_version, new_date, reason?
-TimelineRelationCreate:
-  source_id, target_id, relation_type
-
-CharacterCreate:
-  display_name, character_key?, entity_type="human", description="", birth_date?, death_date?,
-  physical_description="", occupation="", core_beliefs="", goals="", fears="",
-  personality="", speech_style="", ai_attitude="", genetic_modification_attitude="",
-  private_notes="", profile_json={}
-CharacterUpdate:
-  expected_version, display_name?, description?, reason?, character_key?, entity_type?,
-  birth_date?, death_date?, physical_description?, occupation?, core_beliefs?, goals?, fears?,
-  personality?, speech_style?, ai_attitude?, genetic_modification_attitude?, private_notes?, profile_json?
-
-RelationshipCreate:
-  source_character_id, target_character_id, relationship_type, description="",
-  valid_from_episode_id?, valid_to_episode_id?
-RelationshipUpdate:
-  expected_version, relationship_type, description?, reason?, valid_from_episode_id?,
-  valid_to_episode_id?, clear_valid_from=false, clear_valid_to=false
-
-CanonStatusSet:
-  entity_type, entity_id, target_status, expected_version, reason?
+WorkUpdate: working_title, expected_version, genre?, premise?, themes_json?, description?, production_status?
+WorldFactCreate: statement, valid_from?, valid_to?, topic_key?, category="general", title?, details_json={}, importance=0
+WorldFactUpdate: statement, expected_version, reason?, topic_key?, category?, title?, details_json?, valid_from?, valid_to?, importance?
+TimelineParticipant: character_id, role
+TimelineEventCreate: title, event_date?, participants?, event_key?, time_start?, time_end?, date_precision?, date_display?, description="", category="general", location_world_fact_id?, cause_summary="", consequence_summary="", importance=0
+TimelineEventUpdate: expected_version, title?, new_date?, participants?, reason?, time_start?, time_end?, date_precision?, date_display?, description?, category?, location_world_fact_id?, cause_summary?, consequence_summary?, importance?
+TimelineMove: expected_version, new_date, reason?
+TimelineRelationCreate: source_id, target_id, relation_type
+CharacterCreate: display_name, character_key?, entity_type="human", description="", birth_date?, death_date?, physical_description="", occupation="", core_beliefs="", goals="", fears="", personality="", speech_style="", ai_attitude="", genetic_modification_attitude="", private_notes="", profile_json={}
+CharacterUpdate: expected_version, display_name?, description?, reason?, character_key?, entity_type?, birth_date?, death_date?, physical_description?, occupation?, core_beliefs?, goals?, fears?, personality?, speech_style?, ai_attitude?, genetic_modification_attitude?, private_notes?, profile_json?
+RelationshipCreate: source_character_id, target_character_id, relationship_type, description="", valid_from_episode_id?, valid_to_episode_id?
+RelationshipUpdate: expected_version, relationship_type, description?, reason?, valid_from_episode_id?, valid_to_episode_id?, clear_valid_from=false, clear_valid_to=false
+CanonStatusSet: entity_type, entity_id, target_status, expected_version, reason?
 ```
 
-Use Pydantic for transport shape/bounds but leave domain policy to CORE. JSON-valued transport fields may accept real JSON values; convert them to the compact string form CORE currently expects only at the route/adapter boundary. A helper equivalent to current MCP `json_text` is allowed in `serialization.py`.
+- [ ] **Step 1: Write table-driven failing tests covering all 23 operations**
 
-- [ ] **Step 3: Write table-driven Phase 1 API tests before route implementation**
+Include Japanese search, timeline range/move/relation, relationship validation, canon policy, stale update 409/current snapshot, and cross-project isolation.
 
-At minimum verify:
+- [ ] **Step 2: Implement thin synchronous route handlers**
 
-- each route exists and returns project envelope with correct `project_id`;
-- create/get/update/search happy paths;
-- Japanese world-fact/character search behavior remains intact;
-- timeline range/move/relation behavior;
-- relationship temporal validation maps to structured API error;
-- canon reason/policy errors are structured;
-- stale work/world/character update yields HTTP 409 and latest snapshot where implemented;
-- project A IDs never resolve against project B DB.
+Each route resolves `ProjectTarget`, enters `open_project_services(target)` exactly once, calls CORE service(s), wraps result. JSON-like request values are converted at transport boundary to compact JSON strings only where current CORE expects strings.
 
-- [ ] **Step 4: Implement thin route handlers**
+- [ ] **Step 3: Verify and commit**
 
-Handlers may transform HTTP request models into existing CORE service arguments, call the service, and wrap the returned value. They must not recreate CORE validation, call repository SQL directly, or commit/rollback themselves.
-
-- [ ] **Step 5: Run Phase 1 tests and commit**
-
-```bash
-cd API
-uv run pytest tests/test_phase1_api.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-Commit:
-
-```bash
-git add API
-git commit -m "feat: expose Phase 1 HTTP API"
-```
+Run Phase 1 tests/Ruff/format/mypy. Commit: `feat: expose Phase 1 HTTP API`.
 
 ---
 
-### Task 6: Expose the complete Phase 2 HTTP surface
+### Task 6: Expose all 27 Phase 2 operations over HTTP
 
 **Files:**
-- Create: `API/src/novel_api/schemas/narrative.py`
-- Create: `API/src/novel_api/schemas/information.py`
-- Create: `API/src/novel_api/routes/narrative.py`
-- Create: `API/src/novel_api/routes/information.py`
-- Modify: `API/src/novel_api/app.py`
-- Create: `API/tests/test_phase2_api.py`
+- Create `schemas/narrative.py`, `schemas/information.py`, `routes/narrative.py`, `routes/information.py`, `tests/test_phase2_api.py`; modify `app.py`.
 
-**Interfaces:**
-- Produces HTTP equivalents of all 27 Phase 2 MCP operations.
-
-- [ ] **Step 1: Implement the exact narrative/reference/state routes**
+**Route inventory:**
 
 ```text
 POST  /api/v1/projects/{project_id}/chapters
 GET   /api/v1/projects/{project_id}/chapters
 PATCH /api/v1/projects/{project_id}/chapters/{chapter_id}
 POST  /api/v1/projects/{project_id}/chapters/{chapter_id}/reorder
-
 POST  /api/v1/projects/{project_id}/chapters/{chapter_id}/episodes
 GET   /api/v1/projects/{project_id}/chapters/{chapter_id}/episodes
 GET   /api/v1/projects/{project_id}/episodes/{episode_id}
 PATCH /api/v1/projects/{project_id}/episodes/{episode_id}
 POST  /api/v1/projects/{project_id}/episodes/{episode_id}/reorder
-
 POST  /api/v1/projects/{project_id}/episodes/{episode_id}/scenes
 GET   /api/v1/projects/{project_id}/episodes/{episode_id}/scenes
 GET   /api/v1/projects/{project_id}/scenes/{scene_id}
 PATCH /api/v1/projects/{project_id}/scenes/{scene_id}
 POST  /api/v1/projects/{project_id}/scenes/{scene_id}/reorder
-
 POST   /api/v1/projects/{project_id}/episodes/{episode_id}/references
 DELETE /api/v1/projects/{project_id}/episodes/{episode_id}/references/{reference_type}/{target_id}
 GET    /api/v1/projects/{project_id}/episodes/{episode_id}/references?reference_type=
-
 PUT /api/v1/projects/{project_id}/characters/{character_id}/states/{episode_id}
 GET /api/v1/projects/{project_id}/characters/{character_id}/states/{episode_id}
 GET /api/v1/projects/{project_id}/characters/{character_id}/states
-```
-
-The reference DELETE is only the already-existing `episode_reference_remove` semantic; it is not general entity deletion and must not be expanded.
-
-- [ ] **Step 2: Implement the exact information/disclosure/knowledge routes**
-
-```text
 POST  /api/v1/projects/{project_id}/information
+GET   /api/v1/projects/{project_id}/information/search?query=&limit=20
 GET   /api/v1/projects/{project_id}/information/{information_item_id}
 PATCH /api/v1/projects/{project_id}/information/{information_item_id}
-GET   /api/v1/projects/{project_id}/information/search?query=&limit=20
-
 PUT /api/v1/projects/{project_id}/information/{information_item_id}/reader-disclosure
-
 PUT /api/v1/projects/{project_id}/characters/{character_id}/knowledge/{information_item_id}
 GET /api/v1/projects/{project_id}/characters/{character_id}/knowledge?episode_id=
 ```
 
-- [ ] **Step 3: Define exact Phase 2 request fields**
+Register information `/search` before dynamic `/{information_item_id}`.
+
+**Request fields:**
 
 ```text
-ChapterCreate:
-  title, summary="", purpose="", production_status="planned", canon_status="draft"
-ChapterUpdate:
-  expected_version, title?, summary?, purpose?, production_status?, canon_status?, reason?
-Reorder:
-  target_position, expected_version
-
-EpisodeCreate:
-  title, summary="", purpose="", foreshadowing_notes?, production_status="planned", canon_status="draft"
-EpisodeUpdate:
-  expected_version, title?, summary?, purpose?, foreshadowing_notes?, production_status?, canon_status?, reason?
-
-SceneCreate:
-  title, summary="", purpose="", production_status="planned", canon_status="draft"
-SceneUpdate:
-  expected_version, title?, summary?, purpose?, production_status?, canon_status?, reason?
-
-EpisodeReferenceAdd:
-  reference_type, target_id, role="participant"
-
-CharacterStateSet:
-  physical_state?, emotional_state?, beliefs_json?, location_world_fact_id?, state_json?, expected_version?
-
-InformationCreate:
-  statement, truth_status="uncertain", authoring_guard="", notes_json?, canon_status="draft", importance=0
-InformationUpdate:
-  expected_version, statement?, truth_status?, authoring_guard?, notes_json?, importance?, canon_status?, reason?
-
-ReaderDisclosureSet:
-  episode_id, expected_version?
-
-CharacterKnowledgeSet:
-  episode_id, knowledge_state, note="", expected_version?
+ChapterCreate: title, summary="", purpose="", production_status="planned", canon_status="draft"
+ChapterUpdate: expected_version, title?, summary?, purpose?, production_status?, canon_status?, reason?
+Reorder: target_position, expected_version
+EpisodeCreate: title, summary="", purpose="", foreshadowing_notes?, production_status="planned", canon_status="draft"
+EpisodeUpdate: expected_version, title?, summary?, purpose?, foreshadowing_notes?, production_status?, canon_status?, reason?
+SceneCreate: title, summary="", purpose="", production_status="planned", canon_status="draft"
+SceneUpdate: expected_version, title?, summary?, purpose?, production_status?, canon_status?, reason?
+EpisodeReferenceAdd: reference_type, target_id, role="participant"
+CharacterStateSet: physical_state?, emotional_state?, beliefs_json?, location_world_fact_id?, state_json?, expected_version?
+InformationCreate: statement, truth_status="uncertain", authoring_guard="", notes_json?, canon_status="draft", importance=0
+InformationUpdate: expected_version, statement?, truth_status?, authoring_guard?, notes_json?, importance?, canon_status?, reason?
+ReaderDisclosureSet: episode_id, expected_version?
+CharacterKnowledgeSet: episode_id, knowledge_state, note="", expected_version?
 ```
 
-Path IDs are not duplicated in request bodies unless the existing operation truly needs a distinct target ID.
+- [ ] **Step 1: Write failing tests covering all 27 operations**
 
-- [ ] **Step 4: Write Phase 2 regression tests before implementation**
+Include hierarchy reorder, reference add/list/remove, state history/effective lookup, information search, disclosure, knowledge, stale versions, cross-project IDs, deprecated/canon guards.
 
-Cover all 27 operations at least once across table-driven/integration scenarios, including:
+- [ ] **Step 2: Implement thin synchronous handlers**
 
-- chapter/episode/scene create/list/get/update/reorder;
-- optimistic reorder conflict;
-- reference add/list/remove;
-- character state effective lookup/history;
-- information create/get/update/search;
-- disclosure set;
-- character knowledge set/get;
-- cross-project IDs fail closed;
-- deprecated/canon guards preserve CORE behavior.
+Narrative update/reorder conflict handlers re-read current entity after CORE rollback and attach latest snapshot. The reference DELETE implements only existing `episode_reference_remove`; do not add chapter/episode/scene deletion or Issue #5 semantics.
 
-- [ ] **Step 5: Implement thin handlers and conflict snapshots**
+- [ ] **Step 3: Verify and commit**
 
-For narrative update/reorder, re-read the current entity after `VersionConflictError` and attach `current_resource/current_version` through the Task 4 helper. Do not implement Issue #5 retirement semantics here; current list behavior remains unchanged.
-
-- [ ] **Step 6: Run Phase 2 tests and commit**
-
-```bash
-cd API
-uv run pytest tests/test_phase2_api.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-Commit:
-
-```bash
-git add API
-git commit -m "feat: expose Phase 2 HTTP API"
-```
+Run Phase 2 tests/Ruff/format/mypy. Commit: `feat: expose Phase 2 HTTP API`.
 
 ---
 
-### Task 7: Expose the complete Phase 3 authoring HTTP surface
+### Task 7: Expose all 5 Phase 3 authoring operations over HTTP
 
 **Files:**
-- Create: `API/src/novel_api/schemas/authoring.py`
-- Create: `API/src/novel_api/routes/authoring.py`
-- Modify: `API/src/novel_api/app.py`
-- Create: `API/tests/test_phase3_api.py`
+- Create `schemas/authoring.py`, `routes/authoring.py`, `tests/test_phase3_api.py`; modify `app.py`.
 
-**Interfaces:**
-- Produces HTTP equivalents of all 5 Phase 3 MCP operations.
-
-- [ ] **Step 1: Define exact routes**
+**Routes:**
 
 ```text
 GET  /api/v1/projects/{project_id}/episodes/{episode_id}/outline
@@ -988,257 +626,119 @@ POST /api/v1/projects/{project_id}/episodes/{episode_id}/drafts
 GET  /api/v1/projects/{project_id}/episodes/{episode_id}/drafts?limit=20
 ```
 
-`GET .../draft` returns HTTP 200 with `data: null` when the CORE service returns no draft, preserving current service semantics.
-
-- [ ] **Step 2: Define draft-save request**
+Draft-save body:
 
 ```text
 body: non-empty string
-expected_parent_draft_id?: positive integer
+expected_parent_draft_id?: positive int
 source_agent?: 1..120 chars
 change_summary: max 1000 chars, default ""
 ```
 
-Do not add structured draft JSON in Phase B.
+- [ ] **Step 1: Write failing tests**
 
-- [ ] **Step 3: Write Phase 3 tests**
+Cover outline/context, future/disclosure guards, absent draft returns `data:null`, first/second saves, history, stale parent returns 409 + latest draft snapshot, append-only behavior, cross-project failure.
 
-Cover:
+- [ ] **Step 2: Implement synchronous handlers**
 
-- outline and context outputs;
-- context future/disclosure guards remain intact;
-- draft absent -> `data: null`;
-- first save, get, second save, history;
-- stale `expected_parent_draft_id` -> 409 VERSION_CONFLICT with latest draft ID/resource when available;
-- append-only history remains unchanged;
-- cross-project episode IDs fail closed.
+Do not add structured JSON draft support or migration 005.
 
-- [ ] **Step 4: Implement handlers and run tests**
+- [ ] **Step 3: Verify and commit**
 
-```bash
-cd API
-uv run pytest tests/test_phase3_api.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add API
-git commit -m "feat: expose Phase 3 authoring API"
-```
+Run Phase 3 tests/Ruff/format/mypy. Commit: `feat: expose Phase 3 authoring API`.
 
 ---
 
-### Task 8: Add initial read-only WEBUI aggregate views without alternate storage
+### Task 8: Add initial derived WEBUI read views
 
 **Files:**
-- Create: `API/src/novel_api/routes/views.py`
-- Add view response models to `API/src/novel_api/schemas/common.py` or a focused `schemas/views.py` if size requires
-- Create: `API/tests/test_views.py`
-- Modify: `API/src/novel_api/app.py`
+- Create `schemas/views.py`, `routes/views.py`, `tests/test_views.py`; modify `app.py`.
 
-**Interfaces:**
-- Produces derived read-only views; all data comes from the same request-scoped CORE services.
-
-- [ ] **Step 1: Add full outline view**
-
-Route:
+**Routes:**
 
 ```text
 GET /api/v1/projects/{project_id}/views/outline
-```
-
-Response data is deterministic hierarchy order:
-
-```json
-{
-  "chapters": [
-    {
-      "chapter": {"...": "ChapterRecord"},
-      "episodes": [
-        {
-          "episode": {"...": "EpisodeRecord"},
-          "scenes": [{"...": "SceneRecord"}]
-        }
-      ]
-    }
-  ]
-}
-```
-
-Construct using `NarrativeService.list_chapters`, `list_episodes`, and `list_scenes`. Do not query story tables from API.
-
-- [ ] **Step 2: Add dashboard view**
-
-Route:
-
-```text
 GET /api/v1/projects/{project_id}/views/dashboard
-```
-
-Return at least:
-
-```text
-work
-chapter_count
-episode_count
-scene_count
-```
-
-Counts are derived from the same hierarchy read, not stored separately.
-
-- [ ] **Step 3: Add episode aggregate view**
-
-Route:
-
-```text
 GET /api/v1/projects/{project_id}/views/episodes/{episode_id}
 ```
 
-Return:
+- [ ] **Step 1: Write failing deterministic view tests**
 
-```text
-episode
-scenes
-episode_references
-outline
-context
-latest_draft
-recent_draft_history (limit 20)
+Use a temp project with multiple chapters/episodes/scenes. Reads must not change versions or write DB state.
+
+- [ ] **Step 2: Implement `/views/outline`**
+
+Return hierarchy ordered by existing CORE list semantics:
+
+```json
+{"chapters":[{"chapter":{},"episodes":[{"episode":{},"scenes":[]}]}]}
 ```
 
-A missing draft is represented as null. This view is read-only and must preserve the same context leakage/canon guards as the fine-grained context endpoint.
+Use `NarrativeService.list_chapters/list_episodes/list_scenes`; no API SQL.
 
-- [ ] **Step 4: Write deterministic view tests**
+- [ ] **Step 3: Implement `/views/dashboard`**
 
-Build a temp project with two chapters/episodes/scenes in nontrivial order and verify ordered hierarchy, correct counts, project identity, and no writes/version changes caused by reading views.
+Return `work`, `chapter_count`, `episode_count`, `scene_count`, with counts derived from the same hierarchy read.
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **Step 4: Implement `/views/episodes/{episode_id}`**
 
-```bash
-cd API
-uv run pytest tests/test_views.py -q
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-```
+Return `episode`, `scenes`, `episode_references`, `outline`, `context`, `latest_draft`, `recent_draft_history` (20). Missing draft is null. Context guards remain identical to fine-grained context endpoint.
 
-Commit:
+- [ ] **Step 5: Verify and commit**
 
-```bash
-git add API
-git commit -m "feat: add derived authoring API views"
-```
+Run view tests/Ruff/format/mypy. Commit: `feat: add derived authoring API views`.
 
 ---
 
-### Task 9: Add multi-project/concurrency E2E coverage and LAN runtime guardrails
+### Task 9: Add multi-project/concurrency E2E and LAN runtime guardrails
 
 **Files:**
-- Create: `API/tests/test_multi_project_e2e.py`
-- Modify: `API/src/novel_api/app.py` for optional development CORS
-- Modify: `README.md`
+- Create `tests/test_multi_project_e2e.py`; modify `app.py`, `README.md`.
 
-**Interfaces:**
-- Proves the shared backend boundary is safe before Phase C points MCP at it.
+- [ ] **Step 1: Multi-project isolation E2E**
 
-- [ ] **Step 1: Write end-to-end multi-project isolation test**
+Create `alpha`/`beta`, create colliding numeric IDs in both, verify explicit project routing never leaks content and every project response reports the addressed ID.
 
-Scenario:
+- [ ] **Step 2: Optimistic concurrency E2E**
 
-1. create `alpha` and `beta` via `POST /projects`;
-2. create a world fact/character/chapter in each so numeric IDs may collide;
-3. read each by explicit project route;
-4. verify `alpha` never returns `beta` content and vice versa;
-5. verify every response carries the addressed `project_id`.
+Read version N, client A writes expected N -> N+1, client B writes expected N -> 409 with expected/current/latest snapshot, final GET remains A's value.
 
-- [ ] **Step 2: Write optimistic-concurrency HTTP test**
+- [ ] **Step 3: Archive semantics E2E**
 
-Scenario:
+Archive -> hidden by default list -> shown with include-archived -> explicit read/write succeeds -> restore -> default list includes again.
 
-1. GET work or episode at version N;
-2. PATCH from client A with expected N -> success/version N+1;
-3. PATCH from client B with expected N -> HTTP 409 VERSION_CONFLICT;
-4. verify error details contain expected N, current N+1, and safe latest snapshot;
-5. GET latest remains client A's version, proving no silent last-write-wins.
+- [ ] **Step 4: Development CORS**
 
-- [ ] **Step 3: Write archive semantics E2E test**
+Install CORS middleware only when `dev_cors_origin` is non-null and allow exactly that origin. No wildcard origin.
 
-Scenario:
+- [ ] **Step 5: README runtime docs**
 
-1. archive `alpha`;
-2. default project list omits it;
-3. `include_archived=true` returns it;
-4. explicit GET work succeeds;
-5. explicit PATCH work succeeds while archived;
-6. restore active and default list returns it again.
+State: default `0.0.0.0:8765`, trusted LAN/no auth, MCP still CORE-direct in Phase B, Phase C future API URL `http://127.0.0.1:8765/api/v1`, WEBUI static serving deferred to Phase D. Development examples must use a temp/sandbox data root, not stable `data/2126`.
 
-- [ ] **Step 4: Add optional development CORS only**
+- [ ] **Step 6: Verify and commit**
 
-When `dev_cors_origin` is non-null, configure exactly that origin for development browser requests. When null, install no broad CORS policy. Never use `*` with credentials.
-
-- [ ] **Step 5: Document runtime boundary**
-
-README must state:
-
-```text
-API default: 0.0.0.0:8765
-LAN trusted only; no authentication
-MCP remains CORE-direct during Phase B
-Phase C will switch MCP to http://127.0.0.1:8765/api/v1
-WEBUI static serving is not implemented until Phase D
-```
-
-Show an explicit temp/sandbox startup example for development; do not instruct Phase B verification to point at the stable `data/2126/story.db`.
-
-- [ ] **Step 6: Run E2E and commit**
-
-```bash
-cd API
-uv run pytest tests/test_multi_project_e2e.py -q
-```
-
-Commit:
-
-```bash
-git add API README.md
-git commit -m "test: verify multi-project API isolation"
-```
+Run E2E; commit `test: verify multi-project API isolation`.
 
 ---
 
-### Task 10: Integrate API quality gates into repository CI and verify the complete Phase B boundary
+### Task 10: Integrate API CI and perform complete Phase B verification
 
 **Files:**
-- Modify: `.github/workflows/mcp-ci.yml`
-- Modify: `MCP/scripts/check_source_size.py` (or move to a shared root script only if the existing policy remains identical)
-- Modify: `docs/superpowers/plans/2026-08-28-novelproduction-delivery-plan-index.md`
-- Modify Issue #8/PR documentation as part of delivery
+- Modify `.github/workflows/mcp-ci.yml`, `MCP/scripts/check_source_size.py`, `docs/superpowers/plans/2026-08-28-novelproduction-delivery-plan-index.md`.
 
-**Interfaces:**
-- CI must independently verify CORE, API, MCP, and migration/tool invariants.
+- [ ] **Step 1: Extend existing source-size script without relaxing policy**
 
-- [ ] **Step 1: Extend source-size coverage without relaxing limits**
-
-The existing source-size policy must inspect:
+Inspect exactly:
 
 ```text
-CORE/src
-CORE/tests
-API/src
-API/tests
-MCP/src
-MCP/tests
+CORE/src, CORE/tests, API/src, API/tests, MCP/src, MCP/tests
 ```
 
-Do not raise file-size thresholds just because API was added. Split oversized files by responsibility instead.
+Split oversized files; do not raise thresholds.
 
-- [ ] **Step 2: Add an `api` GitHub Actions job**
+- [ ] **Step 2: Add `api` CI job**
 
-Use Python 3.13 and run from `API/`:
+Python 3.13, working directory `API`:
 
 ```text
 uv sync --all-groups
@@ -1249,25 +749,13 @@ uv run pytest -W error
 uv run pytest -W error --cov=src/novel_api --cov-report=term-missing
 ```
 
-Keep existing `core`, `mcp`, and `invariants` jobs. Preserve installed CORE wheel smoke, exact migration blob checks, no-005 inventory, and MCP tool count 55.
+Keep existing CORE wheel smoke, MCP checks, tool count 55, and exact migration/invariant job.
 
-- [ ] **Step 3: Add dependency-boundary invariants**
+- [ ] **Step 3: Add dependency-boundary checks**
 
-CI/tests must fail if:
+Fail if API imports `novel_mcp`/`mcp`, CORE imports API/FastAPI/MCP, API route modules contain direct story SQL execution, migration 005 appears, or MCP tool inventory differs from 55. `sqlite3` is permitted only in API error/type plumbing, not as story persistence logic.
 
-```text
-API imports novel_mcp or mcp
-CORE imports novel_api / FastAPI / MCP
-API route modules execute direct story SQL
-migration 005 appears
-MCP tool inventory differs from 55
-```
-
-`sqlite3` may appear in API error/type plumbing, but story `execute(...)` SQL belongs to CORE; enforce the meaningful boundary rather than a brittle blanket import ban.
-
-- [ ] **Step 4: Run full local verification from a clean worktree**
-
-Run all applicable commands:
+- [ ] **Step 4: Run full clean-worktree verification**
 
 ```bash
 cd CORE
@@ -1301,11 +789,11 @@ git diff --check
 git status --short
 ```
 
-Also verify the current invariant logic still reports exactly migrations 001–004 with the canonical blobs and that `MCP/migrations` remains absent.
+Also execute the Phase A migration invariant logic and verify exact 001–004 canonical blobs, no 005, no `MCP/migrations`, MCP tool count 55.
 
-- [ ] **Step 5: Explicitly verify scope/safety before PR creation**
+- [ ] **Step 5: Verify scope/safety**
 
-Confirm and report:
+Report exactly:
 
 ```text
 real data/2126/story.db touched: NO
@@ -1319,89 +807,38 @@ migration 005: absent
 WEBUI code: absent
 ```
 
-- [ ] **Step 6: Update the delivery-plan index**
+- [ ] **Step 6: Update delivery index**
 
-Change Phase B from “plan to be written” to:
+Phase B plan path becomes `docs/superpowers/plans/2026-08-28-novelproduction-phase-b-api-foundation.md`. Leave Phase C plan unwritten until Phase B API contract is merged/reviewed.
 
-```text
-docs/superpowers/plans/2026-08-28-novelproduction-phase-b-api-foundation.md
-```
+- [ ] **Step 7: Push and open Draft PR**
 
-Do not write Phase C implementation details yet; its plan must target the API contract actually merged from Phase B.
+Title: `[Issue #8] Add shared FastAPI v1 backend and project registry`.
 
-- [ ] **Step 7: Push and open a Draft PR**
-
-Suggested title:
-
-```text
-[Issue #8] Add shared FastAPI v1 backend and project registry
-```
-
-PR body must include:
-
-- `Refs #8` / parent #6;
-- API architecture and endpoint coverage summary;
-- project registry/discovery/create/archive semantics;
-- one-request/one-connection evidence;
-- error contract and conflict evidence;
-- Phase 1–3 endpoint coverage count;
-- aggregate views implemented;
-- CORE/API/MCP test counts and coverage;
-- CI results;
-- explicit statement that production DB/Tunnel/Connector were untouched;
-- explicit statement that MCP remains CORE-direct and Phase C is not implemented.
-
-Do not merge the PR. Return it for review.
+PR body includes `Refs #8`, parent #6, endpoint coverage (23+27+5 = 55 existing operations), project registry semantics, one-request/one-connection evidence, error/conflict evidence, aggregate views, test/coverage/CI results, and explicit no-production-DB/Tunnel/Connector/no-Phase-C statements. Do not merge.
 
 ---
 
-## Phase B Endpoint Coverage Checklist
+## Endpoint Coverage Gate
 
-A reviewer must be able to map every existing MCP operation to at least one HTTP endpoint before Phase B is accepted.
+Before accepting Phase B, reviewer must map all existing operations:
 
 ```text
-Phase 1 (23)
-  work_get / work_update
-  world_fact_create / update / get / search
-  timeline_event_create / update / get / search
-  timeline_range / timeline_move / timeline_relation_create
-  character_create / update / get / search
-  relationship_create / update / search
-  canon_status_set / canon_decision_get / canon_decision_search
-
-Phase 2 (27)
-  chapter_create / update / reorder / list
-  episode_create / update / get / reorder / list
-  scene_create / update / get / reorder / list
-  episode_reference_add / remove / list
-  character_state_set / get / history
-  information_create / update / get / search
-  reader_disclosure_set
-  character_knowledge_set / get
-
-Phase 3 (5)
-  episode_outline_get
-  episode_context
-  episode_draft_get
-  episode_draft_save
-  episode_draft_history
-
-Total existing project-data operations covered by HTTP: 55
+Phase 1: 23
+Phase 2: 27
+Phase 3: 5
+Total existing project-data operations exposed over HTTP: 55
 ```
 
-Project-management routes are additional and are not counted in the 55.
+Project-management and derived-view endpoints are additional and are not counted in the 55.
 
 ## Phase B Exit State
 
-After the Phase B PR is reviewed and merged:
-
 ```text
-Browser/future WEBUI ─HTTP─┐
-                            ↓
-                         FastAPI ──> CORE ──> project SQLite DB
+Future WEBUI/browser ─HTTP─> API/FastAPI ─> CORE ─> project SQLite DB
 
-MCP ───────────────────────> CORE ──> configured SQLite DB
-        (temporary Phase B state only)
+MCP ───────────────────────> CORE ─> configured SQLite DB
+      temporary Phase B compatibility path only
 ```
 
-Phase C then removes the lower direct MCP→CORE runtime path and adds explicit `project_id` to MCP tools. Do not pre-implement that cutover in Phase B.
+Phase C removes the direct MCP→CORE runtime path and adds explicit `project_id` to MCP tools. Phase B must not pre-implement that cutover.
