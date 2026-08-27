@@ -28,9 +28,17 @@ def _collect_failures(
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
-    mcp_root = repo_root / "MCP"
-    src_files = sorted(mcp_root.glob("src/**/*.py"))
-    test_files = sorted(mcp_root.glob("tests/**/*.py"))
+    component_roots = (repo_root / "CORE", repo_root / "MCP")
+    src_files = sorted(
+        path
+        for component_root in component_roots
+        for path in component_root.glob("src/**/*.py")
+    )
+    test_files = sorted(
+        path
+        for component_root in component_roots
+        for path in component_root.glob("tests/**/*.py")
+    )
     failures = _collect_failures(
         src_files, line_limit=SRC_LINE_LIMIT, size_limit=SRC_SIZE_LIMIT
     )
