@@ -10,11 +10,12 @@
 
 1. **Phase A — CORE extraction**
    - Plan: `docs/superpowers/plans/2026-08-28-novelproduction-phase-a-core-extraction.md`
+   - Status: complete. PR #12 merged; post-merge invariant follow-up PR #13 merged and main CI green.
    - Exit state: reusable `novel_core`, MCP still CORE-direct, migrations 001–004 owned by CORE.
 
 2. **Phase B — API foundation**
-   - Plan: to be written after Phase A implementation/review, against the actual extracted CORE interfaces.
-   - Exit state: FastAPI `/api/v1`, project discovery/create/archive, fine-grained API, aggregated view API, request-scoped SQLite connections.
+   - Plan: `docs/superpowers/plans/2026-08-28-novelproduction-phase-b-api-foundation.md`
+   - Exit state: FastAPI `/api/v1`, project discovery/create/archive, fine-grained Phase 1–3 API, aggregated view API, request-scoped SQLite connections.
 
 3. **Phase C — MCP HTTP adapter**
    - Plan: to be written after Phase B API contract is implemented/reviewed.
