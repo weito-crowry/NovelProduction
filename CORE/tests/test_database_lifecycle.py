@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from novel_mcp.database import DatabaseConfig, open_database
-from novel_mcp.errors import MigrationError
+from novel_core.config import DatabaseConfig
+from novel_core.database import open_database
+from novel_core.errors import MigrationError
 
 MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
 MIGRATION_NAMES = (

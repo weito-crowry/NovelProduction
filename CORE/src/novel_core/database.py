@@ -5,10 +5,14 @@ import sqlite3
 from hashlib import sha256
 from pathlib import Path
 
-from novel_mcp.config import DatabaseConfig
-from novel_mcp.errors import MigrationError
+from novel_core.config import DatabaseConfig
+from novel_core.errors import MigrationError
 
 LOGGER = logging.getLogger(__name__)
+
+
+def default_migration_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "migrations"
 
 
 def open_database(config: DatabaseConfig) -> sqlite3.Connection:
