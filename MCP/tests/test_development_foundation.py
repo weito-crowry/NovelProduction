@@ -7,20 +7,22 @@ from pathlib import Path
 def test_development_foundation_files_and_constraints_exist() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     mcp_root = repo_root / "MCP"
+    core_root = repo_root / "CORE"
 
     assert (repo_root / ".editorconfig").read_text(encoding="utf-8").strip()
     assert (repo_root / ".python-version").read_text(encoding="utf-8").strip() == "3.13"
     assert (repo_root / ".github" / "workflows" / "mcp-ci.yml").is_file()
     assert (mcp_root / ".pre-commit-config.yaml").is_file()
     assert (mcp_root / "scripts" / "check_source_size.py").is_file()
-    migrations = sorted(path.name for path in (mcp_root / "migrations").glob("*.sql"))
+    migrations = sorted(path.name for path in (core_root / "migrations").glob("*.sql"))
     assert migrations == [
         "001_initial.sql",
         "002_search.sql",
         "003_narrative.sql",
         "004_drafts.sql",
     ]
-    assert not list((mcp_root / "migrations").glob("005_*.sql"))
+    assert not list((core_root / "migrations").glob("005_*.sql"))
+    assert not (mcp_root / "migrations").exists()
 
     pyproject_text = (mcp_root / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.10"' in pyproject_text
@@ -50,9 +52,10 @@ def test_development_foundation_enforces_phase1_coverage_and_ruff_rules() -> Non
 
 
 def test_services_and_cli_contain_no_raw_sql_statements() -> None:
-    source_root = Path(__file__).resolve().parents[1] / "src" / "novel_mcp"
+    repo_root = Path(__file__).resolve().parents[2]
+    source_root = repo_root / "CORE" / "src" / "novel_core"
     source_paths = sorted((source_root / "services").glob("*.py")) + [
-        source_root / "cli.py"
+        repo_root / "MCP" / "src" / "novel_mcp" / "cli.py"
     ]
     sql_tokens = re.compile(
         r"\b(?:SELECT|INSERT|UPDATE|DELETE|BEGIN|COMMIT|ROLLBACK)\b"

@@ -3,21 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from novel_core.services.canon_service import CanonService
+from novel_core.services.information_service import InformationService
+from novel_core.services.narrative_service import NarrativeService
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
 from novel_mcp.errors import CanonReasonRequired
-from novel_mcp.services.canon_service import CanonService
-from novel_mcp.services.information_service import InformationService
-from novel_mcp.services.narrative_service import NarrativeService
 
 
 def open_test_database(db_path: Path):
     return open_database(
         DatabaseConfig(
             db_path=db_path,
-            migration_dir=Path(__file__).resolve().parents[1] / "migrations",
+            migration_dir=Path(__file__).resolve().parents[2] / "CORE" / "migrations",
         )
     )
 

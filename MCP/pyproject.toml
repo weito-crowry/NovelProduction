@@ -9,7 +9,11 @@ description = "Novel Production MCP component"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=2.0,<3.0",
+    "novel-production-core",
 ]
+
+[tool.uv.sources]
+novel-production-core = { path = "../CORE", editable = true }
 
 [project.scripts]
 novel-init = "novel_mcp.cli:main"

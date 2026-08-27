@@ -1,27 +1,31 @@
 # NovelProduction
 
-NovelProduction is the repository for the future novel-production system. It is
-organized as a monorepo so the MCP component and a future web component can be
-developed alongside the shared story database and project documentation.
+NovelProduction is the repository for the novel-production system. It is
+organized as a monorepo so shared domain logic, the MCP adapter, future API and
+web components, the story database, and project documentation can evolve
+together.
 
 ## Directory structure
 
 ```text
-MCP/       Novel Production MCP component
+CORE/      shared domain, database, and application services
+MCP/       MCP adapter and stdio runtime
+API/       reserved for the Phase B HTTP API
+WEBUI/     reserved for the Phase D web UI
 data/      repository-wide story database location
 docs/      design specifications and implementation plans
-WEB/       reserved for a future web component
 ```
 
-The Phase 1 MCP foundation is implemented under `MCP/`. It provides the
-SQLite lifecycle and immutable Phase 1 migrations, explicit work
-initialization, canon-aware CRUD for the Phase 1 entities, bounded Japanese
-search, and exactly 23 stdio MCP tools. The configured work scope is fixed per
-MCP instance and no repository story database or generated artifacts are
-committed.
+Phase A is implemented. `CORE/` owns the SQLite lifecycle, immutable migrations
+001–004, configuration, errors, models, repositories, initialization, and
+domain services. `MCP/` is the current direct adapter over CORE and preserves
+the existing 55-tool stdio interface and behavior. The configured work scope
+is fixed per MCP instance, and no repository story database or generated
+artifacts are committed.
 
-Phase 2 and Phase 3 tools and runtime workflows remain intentionally deferred;
-the future web component is not implemented.
+The Phase B HTTP API and Phase D WEBUI are not implemented yet. MCP will move
+behind that API in a later phase; this extraction intentionally keeps the
+current MCP runtime direct-to-CORE.
 
 ## Data ownership
 

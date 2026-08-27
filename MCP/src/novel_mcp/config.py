@@ -1,10 +1,3 @@
-from __future__ import annotations
+from novel_core.config import DatabaseConfig
 
-from dataclasses import dataclass
-from pathlib import Path
-
-
-@dataclass(frozen=True, slots=True)
-class DatabaseConfig:
-    db_path: Path
-    migration_dir: Path
+__all__ = ["DatabaseConfig"]

@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
-from novel_mcp.errors import (
+from novel_core.errors import (
     CanonPolicyError,
     CanonReasonRequired,
     DeprecatedCanonForbiddenError,

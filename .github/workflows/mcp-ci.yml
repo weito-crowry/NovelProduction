@@ -5,6 +5,28 @@ on:
   push:
 
 jobs:
+  core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CORE
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-groups
+      - name: Verify installed CORE wheel
+        run: uv run pytest -W error tests/test_installed_wheel.py -q
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest -W error
+      - run: uv run pytest -W error --cov=src/novel_core --cov-report=term-missing
+
   mcp:
     runs-on: ubuntu-latest
     defaults:
@@ -28,29 +50,38 @@ jobs:
       - name: Verify source size from repository root
         working-directory: .
         run: python MCP/scripts/check_source_size.py
-      - name: Verify Phase 3 repository invariants
+      - name: Verify MCP tool inventory
+        run: >-
+          uv run python -c
+          "from novel_mcp.mcp_server import ALL_TOOL_NAMES;
+          assert len(ALL_TOOL_NAMES) == 55, len(ALL_TOOL_NAMES)"
+
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify Phase A repository invariants
         working-directory: .
         shell: bash
         run: |
           set -euo pipefail
           git diff --check
           git fetch origin main --depth=1
-          git diff --exit-code origin/main -- \
-            MCP/migrations/001_initial.sql \
-            MCP/migrations/002_search.sql \
-            MCP/migrations/003_narrative.sql
 
-          actual_migrations="$(find MCP/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)"
+          actual_migrations="$(find CORE/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)"
           expected_migrations="$(printf '%s\n' \
             001_initial.sql \
             002_search.sql \
             003_narrative.sql \
             004_drafts.sql)"
           test "${actual_migrations}" = "${expected_migrations}"
+          test ! -d MCP/migrations
+          base="$(git merge-base HEAD origin/main)"
+          for migration in ${expected_migrations}; do
+            test "$(git rev-parse "HEAD:CORE/migrations/${migration}")" = \
+              "$(git rev-parse "${base}:MCP/migrations/${migration}")"
+          done
           test ! -f data/story.db
           test -z "$(git status --porcelain)"
-      - name: Verify Phase 3 tool inventory
-        run: >-
-          uv run python -c
-          "from novel_mcp.mcp_server import ALL_TOOL_NAMES;
-          assert len(ALL_TOOL_NAMES) == 55, len(ALL_TOOL_NAMES)"

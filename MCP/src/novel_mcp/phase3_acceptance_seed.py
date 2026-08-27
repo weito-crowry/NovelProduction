@@ -4,18 +4,18 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from novel_mcp.repositories.context_repository import ContextRepository
-from novel_mcp.repositories.work_repository import WorkRepository
-from novel_mcp.services.character_service import CharacterService
-from novel_mcp.services.character_state_service import CharacterStateService
-from novel_mcp.services.disclosure_service import DisclosureService
-from novel_mcp.services.draft_service import DraftService
-from novel_mcp.services.episode_reference_service import EpisodeReferenceService
-from novel_mcp.services.information_service import InformationService
-from novel_mcp.services.knowledge_service import KnowledgeService
-from novel_mcp.services.narrative_service import NarrativeService
-from novel_mcp.services.timeline_service import TimelineService
-from novel_mcp.services.world_fact_service import WorldFactService
+from novel_core.repositories.context_repository import ContextRepository
+from novel_core.repositories.work_repository import WorkRepository
+from novel_core.services.character_service import CharacterService
+from novel_core.services.character_state_service import CharacterStateService
+from novel_core.services.disclosure_service import DisclosureService
+from novel_core.services.draft_service import DraftService
+from novel_core.services.episode_reference_service import EpisodeReferenceService
+from novel_core.services.information_service import InformationService
+from novel_core.services.knowledge_service import KnowledgeService
+from novel_core.services.narrative_service import NarrativeService
+from novel_core.services.timeline_service import TimelineService
+from novel_core.services.world_fact_service import WorldFactService
 
 
 @dataclass(frozen=True, slots=True)

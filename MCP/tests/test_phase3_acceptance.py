@@ -13,7 +13,7 @@ from novel_mcp.phase3_acceptance import run_phase3_acceptance
 def _config(tmp_path: Path) -> DatabaseConfig:
     return DatabaseConfig(
         db_path=tmp_path / "acceptance" / "story.db",
-        migration_dir=Path(__file__).resolve().parents[1] / "migrations",
+        migration_dir=Path(__file__).resolve().parents[2] / "CORE" / "migrations",
     )
 
 
