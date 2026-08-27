@@ -19,7 +19,7 @@ def test_novel_init_cli_creates_exactly_one_work(tmp_path: Path) -> None:
     connection = open_database(
         DatabaseConfig(
             db_path=db_path,
-            migration_dir=Path(__file__).resolve().parents[1] / "migrations",
+            migration_dir=Path(__file__).resolve().parents[2] / "CORE" / "migrations",
         )
     )
     try:

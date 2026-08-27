@@ -5,7 +5,11 @@ import sqlite3
 from dataclasses import dataclass, fields
 from typing import Any
 
-from novel_mcp.errors import VersionConflictError
+from novel_core.errors import VersionConflictError
+from novel_core.services.context_service import ContextService
+from novel_core.services.draft_service import DraftService
+from novel_core.services.outline_service import OutlineService
+
 from novel_mcp.phase2_tool_descriptions import PHASE2_TOOL_DESCRIPTIONS
 from novel_mcp.phase3_acceptance_probes import (
     evaluate_active_probes,
@@ -15,9 +19,6 @@ from novel_mcp.phase3_acceptance_probes import (
 )
 from novel_mcp.phase3_acceptance_seed import seed_active_probes
 from novel_mcp.phase3_tool_descriptions import PHASE3_TOOL_DESCRIPTIONS
-from novel_mcp.services.context_service import ContextService
-from novel_mcp.services.draft_service import DraftService
-from novel_mcp.services.outline_service import OutlineService
 from novel_mcp.tool_descriptions import TOOL_DESCRIPTIONS
 from novel_mcp.tool_errors import json_value
 

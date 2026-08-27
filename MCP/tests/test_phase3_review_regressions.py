@@ -5,24 +5,24 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from novel_core.models.context import ReaderContext
+from novel_core.models.outline import SafeInformationItem
+from novel_core.services.character_service import CharacterService
+from novel_core.services.character_state_service import CharacterStateService
+from novel_core.services.context_service import ContextService
+from novel_core.services.disclosure_service import DisclosureService
+from novel_core.services.episode_reference_service import EpisodeReferenceService
+from novel_core.services.information_service import InformationService
+from novel_core.services.narrative_service import NarrativeService
 
 from novel_mcp.cli import initialize_work
 from novel_mcp.config import DatabaseConfig
 from novel_mcp.database import open_database
-from novel_mcp.models.context import ReaderContext
-from novel_mcp.models.outline import SafeInformationItem
 from novel_mcp.phase3_acceptance import (
     _future_disclosure_ok,
     _has_deprecated,
     run_phase3_acceptance,
 )
-from novel_mcp.services.character_service import CharacterService
-from novel_mcp.services.character_state_service import CharacterStateService
-from novel_mcp.services.context_service import ContextService
-from novel_mcp.services.disclosure_service import DisclosureService
-from novel_mcp.services.episode_reference_service import EpisodeReferenceService
-from novel_mcp.services.information_service import InformationService
-from novel_mcp.services.narrative_service import NarrativeService
 from novel_mcp.tool_errors import json_value
 
 
@@ -33,7 +33,7 @@ def services(tmp_path: Path):
     connection = open_database(
         DatabaseConfig(
             db_path=db_path,
-            migration_dir=Path(__file__).resolve().parents[1] / "migrations",
+            migration_dir=Path(__file__).resolve().parents[2] / "CORE" / "migrations",
         )
     )
     try:

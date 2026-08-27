@@ -24,6 +24,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+novel_core = ["py.typed"]
+
 [tool.mypy]
 python_version = "3.13"
 strict = true

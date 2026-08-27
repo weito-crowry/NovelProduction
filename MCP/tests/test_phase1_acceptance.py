@@ -14,7 +14,7 @@ from novel_mcp.mcp_server import PHASE2_TOOL_NAMES, PHASE3_TOOL_NAMES, create_se
 def _config(tmp_path: Path) -> DatabaseConfig:
     return DatabaseConfig(
         db_path=tmp_path / "acceptance" / "story.db",
-        migration_dir=Path(__file__).resolve().parents[1] / "migrations",
+        migration_dir=Path(__file__).resolve().parents[2] / "CORE" / "migrations",
     )
 
 

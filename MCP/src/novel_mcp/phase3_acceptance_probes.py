@@ -5,11 +5,12 @@ import sqlite3
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
-from novel_mcp.errors import WorkScopeError
+from novel_core.errors import WorkScopeError
+from novel_core.repositories.context_repository import ContextRepository
+from novel_core.repositories.work_repository import WorkRepository
+from novel_core.services.outline_service import OutlineService
+
 from novel_mcp.phase3_acceptance_seed import ActiveProbeScenario
-from novel_mcp.repositories.context_repository import ContextRepository
-from novel_mcp.repositories.work_repository import WorkRepository
-from novel_mcp.services.outline_service import OutlineService
 from novel_mcp.tool_errors import json_value
 
 

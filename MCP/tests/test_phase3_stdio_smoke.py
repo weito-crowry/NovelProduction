@@ -13,8 +13,8 @@ from mcp.types import CallToolResult
 
 from novel_mcp.cli import initialize_work
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MIGRATIONS = PROJECT_ROOT / "migrations"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MIGRATIONS = PROJECT_ROOT / "CORE" / "migrations"
 
 
 def _data(result: CallToolResult) -> Any:
