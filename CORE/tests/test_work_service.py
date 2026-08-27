@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from novel_mcp.config import DatabaseConfig
-from novel_mcp.database import open_database
-from novel_mcp.repositories.work_repository import WorkRepository
-from novel_mcp.services.work_service import WorkService
+from novel_core.config import DatabaseConfig
+from novel_core.database import open_database
+from novel_core.repositories.work_repository import WorkRepository
+from novel_core.services.work_service import WorkService
 
 
 def open_test_database(db_path: Path):
@@ -22,7 +22,7 @@ def open_test_database(db_path: Path):
 def test_initialize_work_is_explicit_and_update_requires_version(
     tmp_path: Path,
 ) -> None:
-    from novel_mcp.cli import initialize_work
+    from novel_core.initialization import initialize_work
 
     record = initialize_work(tmp_path / "story.db", "2126")
 
@@ -76,7 +76,7 @@ def test_service_get_raises_when_no_work_exists(tmp_path: Path) -> None:
 
 
 def test_initialize_work_rejects_duplicate_initialization(tmp_path: Path) -> None:
-    from novel_mcp.cli import initialize_work
+    from novel_core.initialization import initialize_work
 
     db_path = tmp_path / "story.db"
     initialize_work(db_path, "2126")
@@ -86,7 +86,7 @@ def test_initialize_work_rejects_duplicate_initialization(tmp_path: Path) -> Non
 
 
 def test_update_rejects_stale_version_and_empty_title(tmp_path: Path) -> None:
-    from novel_mcp.cli import initialize_work
+    from novel_core.initialization import initialize_work
 
     db_path = tmp_path / "story.db"
     initialize_work(db_path, "2126")
@@ -105,7 +105,7 @@ def test_update_rejects_stale_version_and_empty_title(tmp_path: Path) -> None:
 def test_work_repository_update_does_not_commit_service_owned_transaction(
     tmp_path: Path,
 ) -> None:
-    from novel_mcp.cli import initialize_work
+    from novel_core.initialization import initialize_work
 
     db_path = tmp_path / "story.db"
     initialize_work(db_path, "2126")
@@ -127,7 +127,7 @@ def test_work_repository_update_does_not_commit_service_owned_transaction(
 
 
 def test_work_service_rejects_invalid_themes_and_status(tmp_path: Path) -> None:
-    from novel_mcp.cli import initialize_work
+    from novel_core.initialization import initialize_work
 
     db_path = tmp_path / "story.db"
     initialize_work(db_path, "2126")
