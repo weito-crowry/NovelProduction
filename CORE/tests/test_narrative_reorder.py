@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support import initialize_test_work
 
-from novel_mcp.cli import initialize_work
-from novel_mcp.config import DatabaseConfig
-from novel_mcp.database import open_database
-from novel_mcp.errors import OrderConflictError, VersionConflictError
-from novel_mcp.services.narrative_service import NarrativeService
+from novel_core.config import DatabaseConfig
+from novel_core.database import open_database
+from novel_core.errors import OrderConflictError, VersionConflictError
+from novel_core.services.narrative_service import NarrativeService
 
 
 def open_test_database(db_path: Path):
@@ -23,9 +23,9 @@ def open_test_database(db_path: Path):
 @pytest.fixture
 def service(tmp_path: Path):
     db_path = tmp_path / "story.db"
-    initialize_work(db_path, "2126")
     connection = open_test_database(db_path)
     try:
+        initialize_test_work(connection, "2126")
         yield NarrativeService(connection)
     finally:
         connection.close()

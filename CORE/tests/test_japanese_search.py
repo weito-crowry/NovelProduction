@@ -4,16 +4,16 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from _support import initialize_test_work
 
-from novel_mcp.cli import initialize_work
-from novel_mcp.config import DatabaseConfig
-from novel_mcp.database import open_database
-from novel_mcp.repositories.search_repository import SearchRepository
-from novel_mcp.services.character_service import CharacterService
-from novel_mcp.services.narrative_service import NarrativeService
-from novel_mcp.services.search_service import SearchService
-from novel_mcp.services.work_service import WorkService
-from novel_mcp.services.world_fact_service import WorldFactService
+from novel_core.config import DatabaseConfig
+from novel_core.database import open_database
+from novel_core.repositories.search_repository import SearchRepository
+from novel_core.services.character_service import CharacterService
+from novel_core.services.narrative_service import NarrativeService
+from novel_core.services.search_service import SearchService
+from novel_core.services.work_service import WorkService
+from novel_core.services.world_fact_service import WorldFactService
 
 
 def open_test_database(db_path: Path) -> sqlite3.Connection:
@@ -28,9 +28,9 @@ def open_test_database(db_path: Path) -> sqlite3.Connection:
 @pytest.fixture
 def database(tmp_path: Path) -> sqlite3.Connection:
     db_path = tmp_path / "story.db"
-    initialize_work(db_path, "2126")
     connection = open_test_database(db_path)
     try:
+        initialize_test_work(connection, "2126")
         yield connection
     finally:
         connection.close()

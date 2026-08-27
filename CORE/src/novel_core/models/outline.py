@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from novel_mcp.repositories.narrative_repository import EpisodeRecord, SceneRecord
+from novel_core.repositories.narrative_repository import EpisodeRecord, SceneRecord
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from novel_mcp.config import DatabaseConfig
-from novel_mcp.database import open_database
+from novel_core.config import DatabaseConfig
+from novel_core.database import open_database
 
 MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
 

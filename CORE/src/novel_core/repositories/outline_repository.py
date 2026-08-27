@@ -2,32 +2,32 @@ from __future__ import annotations
 
 import sqlite3
 
-from novel_mcp.repositories.character_repository import (
+from novel_core.repositories.character_repository import (
     CharacterRecord,
     CharacterRepository,
 )
-from novel_mcp.repositories.disclosure_repository import (
+from novel_core.repositories.disclosure_repository import (
     DisclosureRepository,
     ReaderDisclosureRecord,
 )
-from novel_mcp.repositories.episode_reference_repository import (
+from novel_core.repositories.episode_reference_repository import (
     EpisodeReferenceRecord,
     EpisodeReferenceRepository,
 )
-from novel_mcp.repositories.information_repository import (
+from novel_core.repositories.information_repository import (
     InformationItemRecord,
     InformationRepository,
 )
-from novel_mcp.repositories.narrative_repository import (
+from novel_core.repositories.narrative_repository import (
     EpisodeRecord,
     NarrativeRepository,
     SceneRecord,
 )
-from novel_mcp.repositories.timeline_repository import (
+from novel_core.repositories.timeline_repository import (
     TimelineEventRecord,
     TimelineRepository,
 )
-from novel_mcp.repositories.world_fact_repository import (
+from novel_core.repositories.world_fact_repository import (
     WorldFactRecord,
     WorldFactRepository,
 )

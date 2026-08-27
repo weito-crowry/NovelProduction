@@ -3,14 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from novel_mcp.models.outline import (
+from novel_core.models.outline import (
     ProtectedInformationGuard,
     SafeCharacterProfile,
     SafeInformationItem,
     SafeTimelineEvent,
     SafeWorldFact,
 )
-from novel_mcp.repositories.narrative_repository import EpisodeRecord, SceneRecord
+from novel_core.repositories.narrative_repository import EpisodeRecord, SceneRecord
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-from novel_mcp.repositories.character_repository import CharacterRecord
-from novel_mcp.repositories.world_fact_repository import WorldFactRecord
+from novel_core.repositories.character_repository import CharacterRecord
+from novel_core.repositories.world_fact_repository import WorldFactRecord
 
 
 @dataclass(frozen=True, slots=True)
