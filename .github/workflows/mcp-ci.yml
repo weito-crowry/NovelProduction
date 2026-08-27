@@ -78,10 +78,13 @@ jobs:
             004_drafts.sql)"
           test "${actual_migrations}" = "${expected_migrations}"
           test ! -d MCP/migrations
-          base="$(git merge-base HEAD origin/main)"
-          for migration in ${expected_migrations}; do
-            test "$(git rev-parse "HEAD:CORE/migrations/${migration}")" = \
-              "$(git rev-parse "${base}:MCP/migrations/${migration}")"
-          done
+          test "$(git rev-parse HEAD:CORE/migrations/001_initial.sql)" = \
+            "94ef881c163e6661622fcf842faee34230f9fb9b"
+          test "$(git rev-parse HEAD:CORE/migrations/002_search.sql)" = \
+            "db22e0d501f5279834ba486ee5913884a2da7701"
+          test "$(git rev-parse HEAD:CORE/migrations/003_narrative.sql)" = \
+            "5ac6cd8b1ec370bf228a5e4056f93f20bfd22ecb"
+          test "$(git rev-parse HEAD:CORE/migrations/004_drafts.sql)" = \
+            "1817edf2d51e5c91eae61205890a83f2347e88d7"
           test ! -f data/story.db
           test -z "$(git status --porcelain)"
