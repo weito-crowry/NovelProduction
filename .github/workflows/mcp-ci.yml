@@ -27,6 +27,26 @@ jobs:
       - run: uv run pytest -W error
       - run: uv run pytest -W error --cov=src/novel_core --cov-report=term-missing
 
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: API
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src
+      - run: uv run pytest -W error
+      - run: uv run pytest -W error --cov=src/novel_api --cov-report=term-missing
+
   mcp:
     runs-on: ubuntu-latest
     defaults:
@@ -50,6 +70,8 @@ jobs:
       - name: Verify source size from repository root
         working-directory: .
         run: python MCP/scripts/check_source_size.py
+      - name: Verify repository boundaries
+        run: uv run python scripts/check_repository_boundaries.py
       - name: Verify MCP tool inventory
         run: >-
           uv run python -c
