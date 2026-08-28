@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
-from novel_core.repositories.search_repository import SearchRepository
 
 import novel_api.project_registry as project_registry_module
 import novel_api.service_container as service_container_module
 from novel_api.app import create_app
 from novel_api.config import ApiSettings
 from novel_api.dependencies import resolve_project_target
+from novel_api.project_registry import ProjectRegistry
 from novel_api.service_container import ServiceContainer, open_project_services
 
 SERVICE_FIELDS = (
@@ -98,10 +98,12 @@ def _create_test_app(data_root: Path) -> FastAPI:
     def search_project(request: Request, project_id: str) -> dict[str, object]:
         target = resolve_project_target(request, project_id)
         with open_project_services(target) as services:
-            rows = services.search.search_world_facts("検索対象", 10)
+            diagnostic = services.search.diagnose_world_facts("検索", 10)
             connection = _service_connection(services.search)
             return {
-                "count": len(rows),
+                "count": diagnostic.match_count,
+                "query": diagnostic.query,
+                "strategy": diagnostic.strategy,
                 "connection_id": id(connection),
                 "in_transaction": bool(connection.in_transaction),
             }
@@ -159,6 +161,21 @@ def test_resolve_project_target_returns_filesystem_metadata_without_opening_sqli
     assert target.descriptor.story_db == data_root / "winter-tokyo" / "story.db"
     assert not hasattr(target, "connection")
     assert not hasattr(target.descriptor, "connection")
+
+
+def test_project_registry_resolve_path_validates_without_opening_sqlite(
+    data_root: Path, project_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_factory("winter-tokyo", working_title="Winter Tokyo")
+
+    def fail_open_database(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("ProjectRegistry.resolve_path must not open SQLite")
+
+    monkeypatch.setattr(project_registry_module, "open_database", fail_open_database)
+
+    project_dir = ProjectRegistry(data_root).resolve_path("winter-tokyo")
+
+    assert project_dir == data_root / "winter-tokyo"
 
 
 def test_project_requests_open_one_connection_share_it_across_all_services_and_close(
@@ -275,8 +292,6 @@ def test_test_only_routes_search_then_write_succeeds_in_fresh_request_contexts(
     project_factory("winter-tokyo", working_title="Winter Tokyo")
     target = resolve_project_target(_request_for(data_root), "winter-tokyo")
     with open_project_services(target) as services:
-        if not SearchRepository(_service_connection(services.search)).supports_trigram:
-            pytest.skip("SQLite build does not provide FTS5 trigram")
         services.world_fact.create("検索対象の設定")
 
     observed = _install_connection_tracker(monkeypatch)
@@ -291,6 +306,8 @@ def test_test_only_routes_search_then_write_succeeds_in_fresh_request_contexts(
     search_body = search_response.json()
     write_body = write_response.json()
     assert search_body["count"] == 1
+    assert search_body["query"] == "検索"
+    assert search_body["strategy"] == "parameterized_like"
     assert search_body["in_transaction"] is False
     assert write_body["statement"] == "新しい設定"
     assert search_body["connection_id"] != write_body["connection_id"]

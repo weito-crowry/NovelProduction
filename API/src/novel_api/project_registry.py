@@ -72,6 +72,9 @@ class ProjectRegistry:
         return projects
 
     def get(self, project_id: str) -> ProjectSummary:
+        return self._summarize(self.resolve_path(project_id))
+
+    def resolve_path(self, project_id: str) -> Path:
         self._validate_project_id(project_id)
         project_dir = self._data_root / project_id
         if (
@@ -80,7 +83,7 @@ class ProjectRegistry:
             or not (project_dir / "story.db").is_file()
         ):
             raise ProjectNotFoundError("PROJECT_NOT_FOUND")
-        return self._summarize(project_dir)
+        return project_dir
 
     def create(
         self, working_title: str, project_id: str | None = None
