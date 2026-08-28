@@ -5,7 +5,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from novel_api.config import ApiSettings
 from novel_api.errors import install_exception_handlers
-from novel_api.routes import health_router, projects_router
+from novel_api.routes import (
+    canon_router,
+    characters_router,
+    health_router,
+    projects_router,
+    relationships_router,
+    timeline_router,
+    work_router,
+    world_router,
+)
 
 
 def create_app(settings: ApiSettings) -> FastAPI:
@@ -14,6 +23,12 @@ def create_app(settings: ApiSettings) -> FastAPI:
     install_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(projects_router)
+    app.include_router(work_router)
+    app.include_router(world_router)
+    app.include_router(timeline_router)
+    app.include_router(characters_router)
+    app.include_router(relationships_router)
+    app.include_router(canon_router)
 
     if settings.dev_cors_origin is not None:
         app.add_middleware(

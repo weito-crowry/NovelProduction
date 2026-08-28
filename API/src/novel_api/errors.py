@@ -86,6 +86,14 @@ _INTERNAL_ERROR = _ErrorSpec(
 )
 
 
+class ApiVersionConflictError(VersionConflictError):
+    code = "VersionConflictError"
+
+    def __init__(self, details: dict[str, Any]) -> None:
+        self.details = details
+        super().__init__("VERSION_CONFLICT")
+
+
 def build_conflict_details(
     *,
     entity_type: str,
@@ -197,7 +205,10 @@ def _domain_details(exc: Exception) -> dict[str, Any]:
     if not isinstance(exc, NovelMcpError):
         return {}
     code = getattr(exc, "code", type(exc).__name__)
-    return {"domain_code": code if isinstance(code, str) else type(exc).__name__}
+    domain_code = code if isinstance(code, str) else type(exc).__name__
+    if isinstance(exc, ApiVersionConflictError):
+        return {**exc.details, "domain_code": domain_code}
+    return {"domain_code": domain_code}
 
 
 def _error_response(
