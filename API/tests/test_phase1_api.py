@@ -507,7 +507,10 @@ def test_public_character_search_uses_search_service_and_supports_write(
     updated = _data(
         client.patch(
             f"{base}/characters/{character['id']}",
-            json={"display_name": "検索研究者改", "expected_version": character["version"]},
+            json={
+                "display_name": "検索研究者改",
+                "expected_version": character["version"],
+            },
         )
     )
     assert updated["display_name"] == "検索研究者改"
