@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -35,9 +35,7 @@ class ParticipantInput(BaseModel):
 
 def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
     async def work_get(project_id: ProjectId) -> dict[str, Any]:
-        return await _call(
-            client, "GET", _path(project_id, "work"), project_id=project_id
-        )
+        return await _get(client, project_id, "work")
 
     async def work_update(
         project_id: ProjectId,
@@ -150,21 +148,15 @@ def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
         )
 
     async def world_fact_get(project_id: ProjectId, fact_id: int) -> dict[str, Any]:
-        return await _call(
-            client,
-            "GET",
-            _path(project_id, f"world-facts/{fact_id}"),
-            project_id=project_id,
-        )
+        return await _get(client, project_id, f"world-facts/{fact_id}")
 
     async def world_fact_search(
         project_id: ProjectId, query: str, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(
+        return await _get(
             client,
-            "GET",
-            _path(project_id, "world-facts/search"),
-            project_id=project_id,
+            project_id,
+            "world-facts/search",
             params={"query": query, "limit": limit},
         )
 
@@ -256,32 +248,25 @@ def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
     async def timeline_event_get(
         project_id: ProjectId, event_id: int
     ) -> dict[str, Any]:
-        return await _call(
-            client,
-            "GET",
-            _path(project_id, f"timeline/events/{event_id}"),
-            project_id=project_id,
-        )
+        return await _get(client, project_id, f"timeline/events/{event_id}")
 
     async def timeline_event_search(
         project_id: ProjectId, query: str, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(
+        return await _get(
             client,
-            "GET",
-            _path(project_id, "timeline/events/search"),
-            project_id=project_id,
+            project_id,
+            "timeline/events/search",
             params={"query": query, "limit": limit},
         )
 
     async def timeline_range(
         project_id: ProjectId, start: str, end: str, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(
+        return await _get(
             client,
-            "GET",
-            _path(project_id, "timeline/range"),
-            project_id=project_id,
+            project_id,
+            "timeline/range",
             params={"start": start, "end": end, "limit": limit},
         )
 
@@ -430,21 +415,15 @@ def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
         )
 
     async def character_get(project_id: ProjectId, character_id: int) -> dict[str, Any]:
-        return await _call(
-            client,
-            "GET",
-            _path(project_id, f"characters/{character_id}"),
-            project_id=project_id,
-        )
+        return await _get(client, project_id, f"characters/{character_id}")
 
     async def character_search(
         project_id: ProjectId, query: str, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(
+        return await _get(
             client,
-            "GET",
-            _path(project_id, "characters/search"),
-            project_id=project_id,
+            project_id,
+            "characters/search",
             params={"query": query, "limit": limit},
         )
 
@@ -504,11 +483,10 @@ def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
     async def relationship_search(
         project_id: ProjectId, character_id: int | None = None, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(
+        return await _get(
             client,
-            "GET",
-            _path(project_id, "relationships"),
-            project_id=project_id,
+            project_id,
+            "relationships",
             params=_compact(character_id=character_id, limit=limit),
         )
 
@@ -537,21 +515,15 @@ def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
     async def canon_decision_get(
         project_id: ProjectId, decision_id: int
     ) -> dict[str, Any]:
-        return await _call(
-            client,
-            "GET",
-            _path(project_id, f"canon/decisions/{decision_id}"),
-            project_id=project_id,
-        )
+        return await _get(client, project_id, f"canon/decisions/{decision_id}")
 
     async def canon_decision_search(
         project_id: ProjectId, query: str, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(
+        return await _get(
             client,
-            "GET",
-            _path(project_id, "canon/decisions/search"),
-            project_id=project_id,
+            project_id,
+            "canon/decisions/search",
             params={"query": query, "limit": limit},
         )
 
@@ -598,6 +570,14 @@ async def _call(
     )
 
 
+def _get(
+    client: ApiClient, project_id: str, suffix: str, params: Any = None
+) -> Awaitable[dict[str, Any]]:
+    return call_api(
+        client, "GET", _path(project_id, suffix), project_id=project_id, params=params
+    )
+
+
 def _path(project_id: str, suffix: str) -> str:
     return f"/api/v1/projects/{project_id}/{suffix}"
 
@@ -607,15 +587,14 @@ def _compact(**values: Any) -> dict[str, Any]:
 
 
 def _participants(items: list[ParticipantInput] | None) -> list[dict[str, Any]] | None:
-    if items is None:
-        return None
-    return [{"character_id": item.character_id, "role": item.role} for item in items]
+    return (
+        None
+        if items is None
+        else [{"character_id": item.character_id, "role": item.role} for item in items]
+    )
 
 
 def _json_value(value: Any) -> Any:
     if not isinstance(value, str):
         return value
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ValueError from exc
+    return json.loads(value)
