@@ -7,7 +7,7 @@ from importlib import resources
 from pathlib import Path
 
 from novel_core.config import DatabaseConfig
-from novel_core.errors import MigrationError
+from novel_core.errors import DatabaseIntegrityError, MigrationError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +37,12 @@ def open_database(config: DatabaseConfig) -> sqlite3.Connection:
         connection.close()
         raise
     return connection
+
+
+def assert_database_integrity(connection: sqlite3.Connection) -> None:
+    rows = tuple(connection.execute("PRAGMA integrity_check;").fetchall())
+    if rows != (("ok",),):
+        raise DatabaseIntegrityError("DATABASE_INTEGRITY_ERROR")
 
 
 def apply_migrations(
