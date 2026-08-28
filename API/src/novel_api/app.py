@@ -38,6 +38,8 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(authoring_router)
     app.include_router(views_router)
 
+    if settings.dev_cors_origin == "*":
+        raise ValueError("development CORS origin cannot be a wildcard")
     if settings.dev_cors_origin is not None:
         app.add_middleware(
             CORSMiddleware,
