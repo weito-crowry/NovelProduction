@@ -53,6 +53,19 @@ def test_development_foundation_enforces_phase1_coverage_and_ruff_rules() -> Non
     )
 
 
+def test_phase_c_cutover_runbook_uses_module_entrypoint() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    runbook_path = repo_root / "docs" / "runbooks" / "phase-c-mcp-http-cutover.md"
+    runbook = runbook_path.read_text(encoding="utf-8")
+
+    assert "uv run python -m novel_mcp.mcp_server\n" in runbook
+    assert (
+        "uv run python -m novel_mcp.mcp_server --api-url http://127.0.0.1:8765"
+        in runbook
+    )
+    assert "uv run novel-mcp" not in runbook
+
+
 def test_services_and_cli_contain_no_raw_sql_statements() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     source_root = repo_root / "CORE" / "src" / "novel_core"

@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
+import novel_mcp.mcp_server as mcp_server
 from novel_mcp.config import McpSettings
 from novel_mcp.mcp_server import (
     ALL_TOOL_NAMES,
@@ -56,3 +57,23 @@ def test_server_cli_accepts_api_url_and_rejects_database_arguments() -> None:
 
     with pytest.raises(SystemExit):
         parser().parse_args(["--db", "story.db"])
+
+
+def test_main_preserves_registration_failure_and_closes_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+
+    async def close(_: Any) -> None:
+        closed.append(True)
+
+    def fail_registration(*_: Any, **__: Any) -> None:
+        raise ValueError("registration boom")
+
+    monkeypatch.setattr(mcp_server.ApiClient, "aclose", close)
+    monkeypatch.setattr(mcp_server, "register_phase1_tools", fail_registration)
+
+    with pytest.raises(ValueError, match="registration boom"):
+        mcp_server.main(["--api-url", "http://api.example"])
+
+    assert closed == [True]

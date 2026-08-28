@@ -37,13 +37,13 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    ```powershell
    Set-Location MCP
    $env:NOVEL_API_URL = "http://127.0.0.1:8765"
-   uv run novel-mcp
+   uv run python -m novel_mcp.mcp_server
    ```
 
    An explicit CLI override is equivalent:
 
    ```powershell
-   uv run novel-mcp --api-url http://127.0.0.1:8765
+   uv run python -m novel_mcp.mcp_server --api-url http://127.0.0.1:8765
    ```
 
 5. Refresh or reconnect the ChatGPT Connector. Confirm that the MCP server

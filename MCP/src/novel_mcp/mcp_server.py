@@ -94,8 +94,7 @@ def parser() -> argparse.ArgumentParser:
     return value
 
 
-async def _run(settings: McpSettings) -> None:
-    server = create_server(settings)
+async def _run(server: NovelMCPServer) -> None:
     try:
         await server.run_stdio_async()
     finally:
@@ -104,7 +103,8 @@ async def _run(settings: McpSettings) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
-    asyncio.run(_run(resolve_settings(args.api_url)))
+    server = create_server(resolve_settings(args.api_url))
+    asyncio.run(_run(server))
 
 
 if __name__ == "__main__":
