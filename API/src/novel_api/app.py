@@ -9,6 +9,8 @@ from novel_api.routes import (
     canon_router,
     characters_router,
     health_router,
+    information_router,
+    narrative_router,
     projects_router,
     relationships_router,
     timeline_router,
@@ -29,6 +31,8 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(characters_router)
     app.include_router(relationships_router)
     app.include_router(canon_router)
+    app.include_router(narrative_router)
+    app.include_router(information_router)
 
     if settings.dev_cors_origin is not None:
         app.add_middleware(
