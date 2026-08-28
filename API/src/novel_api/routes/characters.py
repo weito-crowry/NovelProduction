@@ -63,7 +63,7 @@ def search_characters(
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
     with open_project_services(target) as services:
-        return envelope(project_id, services.character.search(query, limit))
+        return envelope(project_id, services.search.search_characters(query, limit))
 
 
 @characters_router.get("/{character_id}", response_model=ProjectEnvelope[Any])

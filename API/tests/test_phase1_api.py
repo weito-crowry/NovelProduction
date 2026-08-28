@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from novel_core.services.search_service import SearchService
 
 PHASE1_OPERATIONS = {
     ("GET", "/api/v1/projects/{project_id}/work"),
@@ -448,6 +449,68 @@ def test_phase1_cross_project_isolation(client: TestClient) -> None:
     assert search_b == []
     assert get_b.status_code == 404
     assert get_b.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_public_world_fact_search_uses_search_service_and_supports_write(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _create_project(client)
+    base = "/api/v1/projects/phase-one"
+    fact = _data(
+        client.post(f"{base}/world-facts", json={"statement": "検索対象の設定"})
+    )
+    calls: list[tuple[str, int]] = []
+    original = SearchService.search_world_facts
+
+    def search(self: SearchService, query: str, limit: int):
+        calls.append((query, limit))
+        return original(self, query, limit)
+
+    monkeypatch.setattr(SearchService, "search_world_facts", search)
+    found = _data(
+        client.get(f"{base}/world-facts/search", params={"query": "検索", "limit": 20})
+    )
+
+    assert [item["id"] for item in found] == [fact["id"]]
+    assert calls == [("検索", 20)]
+    updated = _data(
+        client.patch(
+            f"{base}/world-facts/{fact['id']}",
+            json={"statement": "検索対象を更新", "expected_version": fact["version"]},
+        )
+    )
+    assert updated["statement"] == "検索対象を更新"
+
+
+def test_public_character_search_uses_search_service_and_supports_write(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _create_project(client)
+    base = "/api/v1/projects/phase-one"
+    character = _data(
+        client.post(f"{base}/characters", json={"display_name": "検索研究者"})
+    )
+    calls: list[tuple[str, int]] = []
+    original = SearchService.search_characters
+
+    def search(self: SearchService, query: str, limit: int):
+        calls.append((query, limit))
+        return original(self, query, limit)
+
+    monkeypatch.setattr(SearchService, "search_characters", search)
+    found = _data(
+        client.get(f"{base}/characters/search", params={"query": "検索", "limit": 20})
+    )
+
+    assert [item["id"] for item in found] == [character["id"]]
+    assert calls == [("検索", 20)]
+    updated = _data(
+        client.patch(
+            f"{base}/characters/{character['id']}",
+            json={"display_name": "検索研究者改", "expected_version": character["version"]},
+        )
+    )
+    assert updated["display_name"] == "検索研究者改"
 
 
 @pytest.mark.parametrize(
