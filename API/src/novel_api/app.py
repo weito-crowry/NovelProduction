@@ -17,6 +17,7 @@ from novel_api.routes import (
     work_router,
     world_router,
 )
+from novel_api.routes.authoring import router as authoring_router
 
 
 def create_app(settings: ApiSettings) -> FastAPI:
@@ -33,6 +34,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(canon_router)
     app.include_router(narrative_router)
     app.include_router(information_router)
+    app.include_router(authoring_router)
 
     if settings.dev_cors_origin is not None:
         app.add_middleware(
