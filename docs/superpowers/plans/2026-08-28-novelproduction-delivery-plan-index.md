@@ -20,15 +20,17 @@
 
 3. **Phase C — MCP HTTP adapter**
    - Plan: `docs/superpowers/plans/2026-08-28-novelproduction-phase-c-mcp-http-adapter.md`
-   - Status: ready for implementation under Issue #9.
-   - Exit state: 55 existing project-data MCP tools adapted to HTTP with required explicit `project_id`, four project-management tools added (59 total), no SQLite/CORE fallback, post-merge Connector/Tunnel/API dogfood completed.
+   - Status: complete. PR #15 MCP HTTP adapter merged; PR #16 SQLite read-only GET path merged; PR #17 read-only certification semantics merged. Post-merge Connector/Tunnel/API read-only dogfood, filesystem invariance gate, `BACKEND_UNAVAILABLE` fail-closed probe, stale `VERSION_CONFLICT`, controlled write, and restore all passed. Issue #9 closed as completed.
+   - Exit state: 55 existing project-data MCP tools adapted to HTTP with required explicit `project_id`, four project-management tools added (59 total), no SQLite/CORE fallback, stable Connector/Tunnel/API dogfood completed.
 
 4. **Phase D — WEBUI**
-   - Plan: to be written after the Phase C MCP contract is implemented/reviewed so the stable API and project identity semantics are fixed for both clients.
-   - Exit state: React/Vite UI covering the Phase 1–3 data surface with explicit save, conflict comparison, project switching, and production static serving through FastAPI.
+   - Plan: `docs/superpowers/plans/2026-08-29-novelproduction-phase-d-webui.md`
+   - Status: planned / awaiting plan review. Implementation is intentionally split into D1–D5 reviewable PRs and has not started.
+   - Exit state: React/Vite UI covering the Phase 1–3 data surface with explicit save, conflict comparison, project switching, production static serving through FastAPI, browser E2E, and post-merge stable dogfood.
 
 5. **Phase E — Structured draft editor**
    - Plan: to be written after the basic WEBUI CRUD/editor shell is stable.
+   - Status: not started.
    - Exit state: NovelProduction Document Schema v1, migration 005, deterministic plain-text rendering, TipTap adapter, block metadata editing, append-only structured draft revisions.
 
 ## Planning rule
