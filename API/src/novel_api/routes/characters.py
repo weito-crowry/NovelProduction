@@ -14,7 +14,10 @@ from novel_api.schemas.characters import (
     RelationshipUpdate,
 )
 from novel_api.schemas.common import ProjectEnvelope
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 characters_router = APIRouter(
     prefix="/api/v1/projects/{project_id}/characters", tags=["characters"]
@@ -62,7 +65,7 @@ def search_characters(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.search.search_characters(query, limit))
 
 
@@ -71,7 +74,7 @@ def get_character(
     request: Request, project_id: str, character_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.character.get(character_id))
 
 
@@ -181,5 +184,5 @@ def search_relationships(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.relationship.search(character_id, limit))

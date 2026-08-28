@@ -121,8 +121,20 @@ def test_each_phase2_handler_resolves_and_opens_services_exactly_once() -> None:
             for node in ast.walk(handler)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         ]
+        methods = {
+            decorator.func.attr.upper()
+            for decorator in handler.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr in {"get", "post", "put", "patch", "delete"}
+        }
         assert calls.count("resolve_project_target") == 1, handler.name
-        assert calls.count("open_project_services") == 1, handler.name
+        expected_context = (
+            "open_project_read_services"
+            if "GET" in methods
+            else "open_project_services"
+        )
+        assert calls.count(expected_context) == 1, handler.name
 
 
 def test_phase2_hierarchy_create_list_get_update_and_reorder(

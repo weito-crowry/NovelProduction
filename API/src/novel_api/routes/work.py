@@ -9,7 +9,10 @@ from novel_api.dependencies import resolve_project_target
 from novel_api.routes._phase1 import compact_json, envelope, raise_version_conflict
 from novel_api.schemas.common import ProjectEnvelope
 from novel_api.schemas.work import WorkUpdate
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/work", tags=["work"])
 
@@ -17,7 +20,7 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}/work", tags=["work"])
 @router.get("", response_model=ProjectEnvelope[Any])
 def get_work(request: Request, project_id: str) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.work.get())
 
 

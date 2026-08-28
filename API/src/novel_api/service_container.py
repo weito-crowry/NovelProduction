@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from novel_core.config import DatabaseConfig
-from novel_core.database import default_migration_dir, open_database
+from novel_core.database import (
+    default_migration_dir,
+    open_database,
+    open_database_readonly,
+)
 from novel_core.services.canon_service import CanonService
 from novel_core.services.character_service import CharacterService
 from novel_core.services.character_state_service import CharacterStateService
@@ -82,6 +86,20 @@ def _build_service_container(connection: sqlite3.Connection) -> ServiceContainer
 @contextmanager
 def open_project_services(target: ProjectTarget) -> Iterator[ServiceContainer]:
     connection = open_database(
+        DatabaseConfig(
+            db_path=target.descriptor.story_db,
+            migration_dir=default_migration_dir(),
+        )
+    )
+    try:
+        yield _build_service_container(connection)
+    finally:
+        connection.close()
+
+
+@contextmanager
+def open_project_read_services(target: ProjectTarget) -> Iterator[ServiceContainer]:
+    connection = open_database_readonly(
         DatabaseConfig(
             db_path=target.descriptor.story_db,
             migration_dir=default_migration_dir(),

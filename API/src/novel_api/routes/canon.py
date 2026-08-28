@@ -9,7 +9,11 @@ from novel_api.dependencies import resolve_project_target
 from novel_api.routes._phase1 import envelope, raise_version_conflict
 from novel_api.schemas.canon import CanonStatusSet
 from novel_api.schemas.common import ProjectEnvelope
-from novel_api.service_container import ServiceContainer, open_project_services
+from novel_api.service_container import (
+    ServiceContainer,
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/canon", tags=["canon"])
 
@@ -64,7 +68,7 @@ def search_canon_decisions(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.canon.search_decisions(query, limit))
 
 
@@ -73,5 +77,5 @@ def get_canon_decision(
     request: Request, project_id: str, decision_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.canon.get_decision(decision_id))

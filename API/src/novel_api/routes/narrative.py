@@ -19,7 +19,10 @@ from novel_api.schemas.narrative import (
     SceneCreate,
     SceneUpdate,
 )
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["narrative"])
 
@@ -47,7 +50,7 @@ def create_chapter(
 @router.get("/chapters", response_model=ProjectEnvelope[Any])
 def list_chapters(request: Request, project_id: str) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.narrative.list_chapters())
 
 
@@ -136,7 +139,7 @@ def list_episodes(
     request: Request, project_id: str, chapter_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.narrative.list_episodes(chapter_id))
 
 
@@ -145,7 +148,7 @@ def get_episode(
     request: Request, project_id: str, episode_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.narrative.get_episode(episode_id))
 
 
@@ -234,14 +237,14 @@ def list_scenes(
     request: Request, project_id: str, episode_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.narrative.list_scenes(episode_id))
 
 
 @router.get("/scenes/{scene_id}", response_model=ProjectEnvelope[Any])
 def get_scene(request: Request, project_id: str, scene_id: int) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.narrative.get_scene(scene_id))
 
 
@@ -349,7 +352,7 @@ def list_episode_references(
     reference_type: str | None = Query(default=None),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         references = services.episode_reference.list(
             episode_id, reference_type=reference_type
         )
@@ -393,7 +396,7 @@ def get_character_state(
     episode_id: int,
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         state_record = services.character_state.get_effective_state(
             character_id, episode_id
         )
@@ -405,5 +408,5 @@ def get_character_state_history(
     request: Request, project_id: str, character_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.character_state.history(character_id))

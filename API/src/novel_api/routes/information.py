@@ -14,7 +14,10 @@ from novel_api.schemas.information import (
     InformationUpdate,
     ReaderDisclosureSet,
 )
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["information"])
 
@@ -48,7 +51,7 @@ def search_information(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         results = services.information.search_information(query, limit)
         return envelope(project_id, results)
 
@@ -58,7 +61,7 @@ def get_information(
     request: Request, project_id: str, information_item_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         item = services.information.get_information(information_item_id)
         return envelope(project_id, item)
 
@@ -150,6 +153,6 @@ def get_character_knowledge(
     episode_id: int = Query(),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         knowledge = services.knowledge.get_character_knowledge(character_id, episode_id)
         return envelope(project_id, knowledge)
