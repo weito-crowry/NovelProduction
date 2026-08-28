@@ -156,6 +156,49 @@ def test_open_database_readonly_preserves_database_hash(tmp_path: Path) -> None:
     assert sha256(config.db_path.read_bytes()).hexdigest() == before
 
 
+def test_open_database_readonly_allows_empty_runtime_sidecars_after_quiescence(
+    tmp_path: Path,
+) -> None:
+    config = DatabaseConfig(db_path=tmp_path / "story.db", migration_dir=MIGRATION_DIR)
+    writer = open_database(config)
+    assert writer.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    writer.execute(
+        "INSERT INTO works (slug, working_title) VALUES (?, ?)",
+        ("main", "Quiescent read only"),
+    )
+    writer.commit()
+    writer.close()
+
+    wal_path = Path(f"{config.db_path}-wal")
+    shm_path = Path(f"{config.db_path}-shm")
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+    before = (
+        sha256(config.db_path.read_bytes()).hexdigest(),
+        config.db_path.stat().st_size,
+    )
+
+    readonly = database_module.open_database_readonly(config)
+    try:
+        assert readonly.execute("SELECT working_title FROM works").fetchone() == (
+            "Quiescent read only",
+        )
+    finally:
+        readonly.close()
+
+    assert (
+        sha256(config.db_path.read_bytes()).hexdigest(),
+        config.db_path.stat().st_size,
+    ) == before
+    if wal_path.exists():
+        assert wal_path.stat().st_size == 0
+
+    shm_state = (
+        (False, None) if not shm_path.exists() else (True, shm_path.stat().st_size)
+    )
+    assert not shm_state[0] or shm_state[1] is not None
+
+
 def test_open_database_readonly_preserves_wal_while_writer_remains_open(
     tmp_path: Path,
 ) -> None:
