@@ -144,9 +144,9 @@ def test_project_routes_reject_unknown_or_invalid_project_ids(
     invalid_response = client.get("/api/v1/projects/Invalid")
 
     assert missing_response.status_code == 404
-    assert missing_response.json() == {"detail": "PROJECT_NOT_FOUND"}
+    assert missing_response.json()["error"]["code"] == "PROJECT_NOT_FOUND"
     assert invalid_response.status_code == 400
-    assert invalid_response.json() == {"detail": "invalid project_id"}
+    assert invalid_response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_create_project_route_creates_explicit_project(
@@ -185,7 +185,7 @@ def test_create_project_route_rejects_invalid_ids(
     )
 
     assert response.status_code == 400
-    assert response.json() == {"detail": "invalid project_id"}
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
     assert list(data_root.iterdir()) == []
 
 
@@ -209,7 +209,7 @@ def test_create_project_route_reports_duplicate_conflict(
     )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "PROJECT_CONFLICT"}
+    assert response.json()["error"]["code"] == "PROJECT_CONFLICT"
 
 
 def test_patch_project_status_hides_archived_projects_by_default(
