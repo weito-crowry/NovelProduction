@@ -12,7 +12,10 @@ from novel_api.schemas.views import (
     OutlineEpisodeView,
     OutlineView,
 )
-from novel_api.service_container import ServiceContainer, open_project_services
+from novel_api.service_container import (
+    ServiceContainer,
+    open_project_read_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/views", tags=["views"])
 
@@ -35,7 +38,7 @@ def _build_outline(services: ServiceContainer) -> OutlineView:
 @router.get("/outline", response_model=ProjectEnvelope[OutlineView])
 def get_outline_view(request: Request, project_id: str) -> ProjectEnvelope[OutlineView]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, _build_outline(services))
 
 
@@ -44,7 +47,7 @@ def get_dashboard_view(
     request: Request, project_id: str
 ) -> ProjectEnvelope[DashboardView]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         outline = _build_outline(services)
         return envelope(
             project_id,
@@ -68,7 +71,7 @@ def get_episode_view(
     request: Request, project_id: str, episode_id: int
 ) -> ProjectEnvelope[EpisodeView]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         outline = services.outline.get_episode_outline(episode_id)
         return envelope(
             project_id,

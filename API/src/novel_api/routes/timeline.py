@@ -14,7 +14,10 @@ from novel_api.schemas.timeline import (
     TimelineMove,
     TimelineRelationCreate,
 )
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/timeline", tags=["timeline"])
 
@@ -60,7 +63,7 @@ def search_timeline_events(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.timeline.search_events(query, limit))
 
 
@@ -69,7 +72,7 @@ def get_timeline_event(
     request: Request, project_id: str, event_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.timeline.get_event(event_id))
 
 
@@ -121,7 +124,7 @@ def range_timeline_events(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.timeline.range_events(start, end, limit))
 
 

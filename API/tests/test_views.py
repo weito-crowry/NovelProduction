@@ -298,7 +298,7 @@ def test_episode_view_preserves_fine_grained_future_disclosure_guards(
     assert "SECRET_DERIVED_VIEW_BODY" not in json.dumps(view, ensure_ascii=False)
 
 
-def test_each_view_handler_resolves_and_opens_real_services_once(
+def test_each_view_handler_resolves_and_opens_read_services_once(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     try:
@@ -310,7 +310,7 @@ def test_each_view_handler_resolves_and_opens_real_services_once(
     episode_id = hierarchy["episodes"][0]["id"]
     calls = {"resolve": 0, "open": 0}
     original_resolve = views.resolve_project_target
-    original_open = views.open_project_services
+    original_open = views.open_project_read_services
 
     def counting_resolve(*args: Any, **kwargs: Any) -> Any:
         calls["resolve"] += 1
@@ -323,7 +323,7 @@ def test_each_view_handler_resolves_and_opens_real_services_once(
             yield services
 
     monkeypatch.setattr(views, "resolve_project_target", counting_resolve)
-    monkeypatch.setattr(views, "open_project_services", counting_open)
+    monkeypatch.setattr(views, "open_project_read_services", counting_open)
 
     assert client.get(f"{base}/views/outline").status_code == 200
     assert client.get(f"{base}/views/dashboard").status_code == 200

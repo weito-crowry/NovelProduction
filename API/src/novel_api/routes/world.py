@@ -9,7 +9,10 @@ from novel_api.dependencies import resolve_project_target
 from novel_api.routes._phase1 import compact_json, envelope, raise_version_conflict
 from novel_api.schemas.common import ProjectEnvelope
 from novel_api.schemas.world import WorldFactCreate, WorldFactUpdate
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/world-facts", tags=["world"])
 
@@ -43,7 +46,7 @@ def search_world_facts(
     limit: int = Query(default=20),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.search.search_world_facts(query, limit))
 
 
@@ -52,7 +55,7 @@ def get_world_fact(
     request: Request, project_id: str, fact_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.world_fact.get(fact_id))
 
 

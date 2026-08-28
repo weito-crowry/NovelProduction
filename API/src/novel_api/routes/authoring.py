@@ -10,7 +10,10 @@ from novel_api.errors import ApiVersionConflictError, build_conflict_details
 from novel_api.routes._phase1 import envelope
 from novel_api.schemas.authoring import DraftSave
 from novel_api.schemas.common import ProjectEnvelope
-from novel_api.service_container import open_project_services
+from novel_api.service_container import (
+    open_project_read_services,
+    open_project_services,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["authoring"])
 
@@ -23,7 +26,7 @@ def get_episode_outline(
     request: Request, project_id: str, episode_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.outline.get_episode_outline(episode_id))
 
 
@@ -35,7 +38,7 @@ def get_episode_context(
     request: Request, project_id: str, episode_id: int
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.context.build_episode_context(episode_id))
 
 
@@ -50,7 +53,7 @@ def get_episode_draft(
     revision: int | None = Query(default=None, ge=1),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.draft.get_draft(episode_id, revision))
 
 
@@ -102,5 +105,5 @@ def list_episode_drafts(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ProjectEnvelope[Any]:
     target = resolve_project_target(request, project_id)
-    with open_project_services(target) as services:
+    with open_project_read_services(target) as services:
         return envelope(project_id, services.draft.history(episode_id, limit))

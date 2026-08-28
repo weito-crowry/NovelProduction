@@ -15,7 +15,19 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    git pull --ff-only origin main
    ```
 
-2. Start `novel-api` with the intended data root and the established port. Use
+2. Stop the old direct-MCP/runtime process before taking any database
+   baseline. Confirm that no remaining process command line references the
+   target `story.db`, and wait until SQLite is quiescent. A shutdown of the
+   old runtime can checkpoint an already-existing WAL; that checkpoint belongs
+   to the pre-cutover baseline transition, not to the new API read path.
+
+3. Record the quiescent baseline for `story.db` and an existing
+   `story.db-wal`, including content hash, size, and presence. Record
+   `story.db-shm` separately as a SQLite runtime sidecar. Do not repair,
+   migrate, vacuum, seed, replace, or delete any stable database while
+   collecting this baseline.
+
+4. Start `novel-api` with the intended data root and the established port. Use
    `127.0.0.1:8765` for local-only dogfood; use `0.0.0.0:8765` only when the
    trusted-LAN deployment explicitly requires it.
 
@@ -24,14 +36,14 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    uv run novel-api --data-root <intended-data-root> --host 127.0.0.1 --port 8765
    ```
 
-3. In a separate shell, verify API readiness and project discovery.
+5. In a separate shell, verify API readiness and project discovery.
 
    ```powershell
    Invoke-RestMethod http://127.0.0.1:8765/api/v1/health
    Invoke-RestMethod http://127.0.0.1:8765/api/v1/projects
    ```
 
-4. Start MCP with the API URL. The CLI takes precedence over
+6. Start MCP with the API URL. The CLI takes precedence over
    `NOVEL_API_URL`; otherwise the default is `http://127.0.0.1:8765`.
 
    ```powershell
@@ -46,11 +58,11 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    uv run python -m novel_mcp.mcp_server --api-url http://127.0.0.1:8765
    ```
 
-5. Refresh or reconnect the ChatGPT Connector. Confirm that the MCP server
+7. Refresh or reconnect the ChatGPT Connector. Confirm that the MCP server
    exposes exactly 59 tools and that every project-scoped tool schema requires
    `project_id`. There is no project-selection or last-used-project state.
 
-6. Run read-only dogfood in this order:
+8. Run read-only dogfood in this order:
 
    - `project_list`
    - `project_get(project_id="<known-project>")`
@@ -61,11 +73,17 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    MCP response has `project_id` at the top level, alongside `data`, without a
    second nested project envelope.
 
-7. Run a controlled write only when separately approved. Verify the returned
+9. Compare the post-dogfood `story.db` and existing `story.db-wal` content
+   hashes, sizes, and presence with the quiescent baseline. Treat SHM
+   creation/deletion separately; it is a SQLite sidecar and is not by itself
+   domain-data mutation. If the main DB or WAL changes, stop and investigate
+   before any write dogfood.
+
+10. Run a controlled write only when separately approved. Verify the returned
    API/MCP error details for stale versions, including `VERSION_CONFLICT`,
    before considering the write dogfood successful.
 
-8. Keep the current Tunnel route unchanged unless the MCP process address
+11. Keep the current Tunnel route unchanged unless the MCP process address
    actually changes. MCP must remain an HTTP client of the API; it must never
    fall back to CORE or direct SQLite access if the API is unavailable.
 

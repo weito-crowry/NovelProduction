@@ -39,6 +39,46 @@ def open_database(config: DatabaseConfig) -> sqlite3.Connection:
         raise
 
 
+def open_database_readonly(config: DatabaseConfig) -> sqlite3.Connection:
+    database_uri = f"{config.db_path.resolve().as_uri()}?mode=ro"
+    connection = sqlite3.connect(database_uri, uri=True)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON;")
+        connection.execute("PRAGMA busy_timeout = 5000;")
+        assert_migrations_current(connection, config.migration_dir)
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def assert_migrations_current(
+    connection: sqlite3.Connection, migration_dir: Path
+) -> None:
+    if not _table_exists(connection, "schema_migrations"):
+        raise MigrationError("Migration ledger is missing")
+
+    migration_paths = tuple(sorted(migration_dir.glob("*.sql")))
+    expected_versions = {path.name for path in migration_paths}
+    applied = _load_applied_migrations(connection)
+    applied_versions = set(applied)
+
+    missing = sorted(expected_versions - applied_versions)
+    if missing:
+        raise MigrationError(f"Migration is not applied: {missing[0]}")
+    unexpected = sorted(applied_versions - expected_versions)
+    if unexpected:
+        raise MigrationError(f"Applied migration is not in inventory: {unexpected[0]}")
+
+    for migration_path in migration_paths:
+        if applied[migration_path.name] not in _checksum_candidates_for_path(
+            migration_path
+        ):
+            raise MigrationError(
+                f"Applied migration bytes changed for {migration_path.name}"
+            )
+
+
 def assert_database_integrity(connection: sqlite3.Connection) -> None:
     rows = tuple(connection.execute("PRAGMA integrity_check;").fetchall())
     if rows != (("ok",),):

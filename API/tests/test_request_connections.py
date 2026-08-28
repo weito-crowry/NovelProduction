@@ -206,6 +206,62 @@ def test_project_requests_open_one_connection_share_it_across_all_services_and_c
         assert id(observed[0]) != id(observed[1])
 
 
+def test_open_project_read_services_uses_readonly_connection(
+    data_root: Path, project_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_factory("read-only", working_title="Read only")
+    target = resolve_project_target(_request_for(data_root), "read-only")
+    observed: list[ObservedConnection] = []
+    real_open_readonly = service_container_module.open_database_readonly
+
+    def tracking_open_readonly(config: Any) -> ObservedConnection:
+        connection = ObservedConnection(real_open_readonly(config))
+        observed.append(connection)
+        return connection
+
+    def fail_write_open(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("read context must not open a write-capable database")
+
+    monkeypatch.setattr(service_container_module, "open_database", fail_write_open)
+    monkeypatch.setattr(
+        service_container_module, "open_database_readonly", tracking_open_readonly
+    )
+
+    with service_container_module.open_project_read_services(target) as services:
+        assert services.work.get().working_title == "Read only"
+
+    assert len(observed) == 1
+    assert observed[0].closed is True
+
+
+def test_project_registry_summary_uses_readonly_connection(
+    data_root: Path, project_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_factory("read-only", working_title="Read only")
+    observed: list[ObservedConnection] = []
+    real_open_readonly = project_registry_module.open_database_readonly
+
+    def tracking_open_readonly(config: Any) -> ObservedConnection:
+        connection = ObservedConnection(real_open_readonly(config))
+        observed.append(connection)
+        return connection
+
+    def fail_write_open(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("project summary must not open a write-capable database")
+
+    monkeypatch.setattr(project_registry_module, "open_database", fail_write_open)
+    monkeypatch.setattr(
+        project_registry_module, "open_database_readonly", tracking_open_readonly
+    )
+
+    summary = ProjectRegistry(data_root).get("read-only")
+
+    assert summary.working_title == "Read only"
+    assert summary.health == "ok"
+    assert len(observed) == 1
+    assert observed[0].closed is True
+
+
 def test_request_context_closes_connection_on_exception(
     data_root: Path, project_factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:

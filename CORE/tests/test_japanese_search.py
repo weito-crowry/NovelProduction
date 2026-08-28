@@ -7,13 +7,15 @@ import pytest
 from _support import initialize_test_work
 
 from novel_core.config import DatabaseConfig
-from novel_core.database import open_database
+from novel_core.database import open_database, open_database_readonly
 from novel_core.repositories.search_repository import SearchRepository
 from novel_core.services.character_service import CharacterService
 from novel_core.services.narrative_service import NarrativeService
 from novel_core.services.search_service import SearchService
 from novel_core.services.work_service import WorkService
 from novel_core.services.world_fact_service import WorldFactService
+
+MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 
 def open_test_database(db_path: Path) -> sqlite3.Connection:
@@ -45,6 +47,30 @@ def test_japanese_search_matches_substring_and_has_stable_order(
     second = world_facts.create("火山異常は翌日に公表された")
     rows = service.search_world_facts("山異常", 30)
     assert rows == (first, second)
+
+
+def test_japanese_search_works_on_readonly_connection(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "story.db"
+    writer = open_test_database(db_path)
+    initialize_test_work(writer, "Read only search")
+    expected_world_fact = WorldFactService(writer).create("国家AIが観測した異常")
+    expected_character = CharacterService(writer).create("国家AIの調整役", "説明")
+    writer.close()
+
+    readonly = open_database_readonly(
+        DatabaseConfig(db_path=db_path, migration_dir=MIGRATION_DIR)
+    )
+    try:
+        assert SearchService(readonly).search_world_facts("国家AI", 10) == (
+            expected_world_fact,
+        )
+        assert SearchService(readonly).search_characters("国家AI", 10) == (
+            expected_character,
+        )
+    finally:
+        readonly.close()
 
 
 def test_search_is_scoped_and_bounded(database: sqlite3.Connection) -> None:

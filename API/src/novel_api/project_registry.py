@@ -14,6 +14,7 @@ from novel_core.database import (
     assert_database_integrity,
     default_migration_dir,
     open_database,
+    open_database_readonly,
 )
 from novel_core.initialization import initialize_work
 from novel_core.services.work_service import WorkService
@@ -203,7 +204,7 @@ class ProjectRegistry:
         health: ProjectHealth = "degraded"
         connection: sqlite3.Connection | None = None
         try:
-            connection = open_database(
+            connection = open_database_readonly(
                 DatabaseConfig(
                     db_path=project_dir / "story.db",
                     migration_dir=default_migration_dir(),
