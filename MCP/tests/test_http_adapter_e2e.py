@@ -5,6 +5,8 @@ import socket
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from novel_mcp.api_client import ApiClient
 from novel_mcp.config import McpSettings
 from novel_mcp.phase1_tools import register_phase1_tools
@@ -170,9 +172,9 @@ def test_real_mcp_http_e2e_covers_isolation_search_write_conflicts_and_drafts(
 
 
 def test_real_mcp_http_e2e_maps_unreachable_backend_without_db_fallback(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    isolated_root = tmp_path / "must-not-be-created"
+    monkeypatch.chdir(tmp_path)
     client = ApiClient(McpSettings(f"http://127.0.0.1:{_unused_port()}"))
     handlers: dict[str, Any] = {}
     register_project_tools(
@@ -192,7 +194,7 @@ def test_real_mcp_http_e2e_maps_unreachable_backend_without_db_fallback(
             "details": {},
         },
     }
-    assert not isolated_root.exists()
+    assert list(tmp_path.rglob("*.db")) == []
 
 
 def _ok(result: Any) -> Any:
