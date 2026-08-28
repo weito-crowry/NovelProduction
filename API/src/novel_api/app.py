@@ -19,6 +19,7 @@ from novel_api.routes import (
 )
 from novel_api.routes.authoring import router as authoring_router
 from novel_api.routes.views import router as views_router
+from novel_api.static_files import install_webui_routes
 
 
 def create_app(settings: ApiSettings) -> FastAPI:
@@ -37,6 +38,8 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(information_router)
     app.include_router(authoring_router)
     app.include_router(views_router)
+    if settings.webui_dist is not None:
+        install_webui_routes(app, settings.webui_dist)
 
     if settings.dev_cors_origin == "*":
         raise ValueError("development CORS origin cannot be a wildcard")

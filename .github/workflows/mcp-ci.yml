@@ -110,3 +110,23 @@ jobs:
             "1817edf2d51e5c91eae61205890a83f2347e88d7"
           test ! -f data/story.db
           test -z "$(git status --porcelain)"
+
+  webui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: WEBUI/frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: WEBUI/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build
