@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "novel-production-api"
+version = "0.1.0"
+description = "NovelProduction shared FastAPI backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.116,<1.0",
+    "novel-production-core",
+    "pydantic>=2.11,<3.0",
+    "uvicorn>=0.35,<1.0",
+]
+
+[tool.uv.sources]
+novel-production-core = { path = "../CORE", editable = true }
+
+[project.scripts]
+novel-api = "novel_api.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1.0",
+    "mypy>=1.18.0",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.12.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/novel_api"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
