@@ -21,4 +21,26 @@ describe("project query keys", () => {
       projectQueryKeys.dashboard("B"),
     );
   });
+
+  it("provides project-scoped structure query keys", () => {
+    expect(projectQueryKeys.outline("A")).toEqual(["project", "A", "outline"]);
+    expect(projectQueryKeys.episode("A", 1)).toEqual([
+      "project",
+      "A",
+      "episode",
+      1,
+    ]);
+    expect(projectQueryKeys.episodeView("A", 1)).toEqual([
+      "project",
+      "A",
+      "episode-view",
+      1,
+    ]);
+    expect(projectQueryKeys.scene("A", 1)).toEqual([
+      "project",
+      "A",
+      "scene",
+      1,
+    ]);
+  });
 });
