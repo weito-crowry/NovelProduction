@@ -45,6 +45,7 @@ function dashboard(): DashboardView {
 function installWorkFetchMock(options: {
   conflict?: "current" | "missing";
   updatedWork?: WorkRecord;
+  workFailure?: boolean;
 } = {}) {
   let workResponse = initialWork;
   let workReads = 0;
@@ -79,6 +80,19 @@ function installWorkFetchMock(options: {
       return response({ project_id: "A", data: workResponse });
     }
     if (url === "/api/v1/projects/A/work") {
+      if (options.workFailure) {
+        return response(
+          {
+            error: {
+              code: "WORK_UNAVAILABLE",
+              message: "Work is unavailable.",
+              project_id: "A",
+              details: {},
+            },
+          },
+          500,
+        );
+      }
       workReads += 1;
       const readResponse =
         options.conflict === "missing" && workReads > 1 ? latestWork : workResponse;
@@ -90,8 +104,10 @@ function installWorkFetchMock(options: {
   return fetchMock;
 }
 
-function renderWork() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderWork(staleTime = 0) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime } },
+  });
   const router = createMemoryRouter(appRoutes, {
     initialEntries: ["/projects/A/dashboard"],
   });
@@ -210,7 +226,7 @@ describe("Work editor", () => {
 
   it("refetches latest read-only data when conflict details omit current_resource", async () => {
     const fetchMock = installWorkFetchMock({ conflict: "missing" });
-    renderWork();
+    renderWork(10_000);
     const user = userEvent.setup();
     const title = await screen.findByLabelText("Working title");
     await user.clear(title);
@@ -221,8 +237,9 @@ describe("Work editor", () => {
     expect(
       fetchMock.mock.calls.filter(([url, init]) =>
         String(url).endsWith("/work") && (!init || init.method === undefined),
-      ).length,
-    ).toBeGreaterThanOrEqual(2);
+      ),
+    ).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
   });
 
   it("can discard local edits and load the latest conflict resource", async () => {
@@ -260,5 +277,16 @@ describe("Work editor", () => {
     await user.click(screen.getByRole("link", { name: "All projects" }));
     await user.click(screen.getByRole("button", { name: "Discard and leave" }));
     expect(await screen.findByRole("heading", { name: "Projects" })).toBeInTheDocument();
+  });
+
+  it("shows an error instead of loading forever when the work GET fails", async () => {
+    const fetchMock = installWorkFetchMock({ workFailure: true });
+    renderWork();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to load the work editor.",
+    );
+    expect(screen.queryByText("Loading work editor…")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(0);
   });
 });

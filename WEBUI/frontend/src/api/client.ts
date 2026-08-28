@@ -38,42 +38,54 @@ export async function apiRequest<T>(
   }
 
   const text = await response.text();
-  const payload = parseJson(text);
+  const parsed = parseJson(text);
   if (!response.ok) {
-    throw apiErrorFromPayload(response.status, payload);
+    throw apiErrorFromPayload(
+      response.status,
+      parsed.ok ? parsed.value : null,
+    );
   }
-  if (response.status === 204 || payload === null) {
+  if (response.status === 204) {
     return undefined as T;
+  }
+  if (!parsed.ok || parsed.value === null) {
+    throw invalidResponseError(response.status, projectId);
   }
 
   if (projectId !== undefined) {
     if (
-      !isRecord(payload) ||
-      payload.project_id !== projectId ||
-      !("data" in payload)
+      !isRecord(parsed.value) ||
+      parsed.value.project_id !== projectId ||
+      !("data" in parsed.value)
     ) {
-      throw new ApiError(
-        response.status,
-        "PROTOCOL_ERROR",
-        "The API returned data for an unexpected project.",
-        projectId,
-        {},
-      );
+      throw invalidResponseError(response.status, projectId);
     }
-    return payload.data as T;
+    return parsed.value.data as T;
   }
-  return payload as T;
+  return parsed.value as T;
 }
 
-function parseJson(text: string): unknown {
+type ParsedJson = { ok: true; value: unknown } | { ok: false };
+
+function parseJson(text: string): ParsedJson {
   if (!text.trim()) {
-    return null;
+    return { ok: false };
   }
   try {
-    return JSON.parse(text) as unknown;
+    return { ok: true, value: JSON.parse(text) as unknown };
   } catch {
-    return null;
+    return { ok: false };
   }
+}
+
+function invalidResponseError(status: number, projectId?: string): ApiError {
+  return new ApiError(
+    status,
+    "PROTOCOL_ERROR",
+    "The API returned an invalid response.",
+    projectId ?? null,
+    {},
+  );
 }
 
 function apiErrorFromPayload(status: number, payload: unknown): ApiError {

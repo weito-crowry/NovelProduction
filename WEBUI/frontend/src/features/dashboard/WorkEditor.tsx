@@ -40,11 +40,11 @@ export function WorkEditor({ projectId }: { projectId: string }) {
     retry: false,
   });
 
-  if (workQuery.isPending || values === null || baseline === null) {
-    return <p role="status">Loading work editor…</p>;
-  }
   if (workQuery.isError) {
     return <p role="alert">Unable to load the work editor.</p>;
+  }
+  if (workQuery.isPending || values === null || baseline === null) {
+    return <p role="status">Loading work editor…</p>;
   }
 
   async function save() {
@@ -66,10 +66,8 @@ export function WorkEditor({ projectId }: { projectId: string }) {
       if (isApiError(error) && error.status === 409 && error.code === "VERSION_CONFLICT") {
         let latest = asWorkRecord(error.details.current_resource);
         if (latest === null) {
-          latest = await queryClient.fetchQuery({
-            queryKey: projectQueryKeys.work(projectId),
-            queryFn: () => fetchWork(projectId),
-          });
+          latest = await fetchWork(projectId);
+          queryClient.setQueryData(projectQueryKeys.work(projectId), latest);
         }
         setConflictLatest(latest);
         return;

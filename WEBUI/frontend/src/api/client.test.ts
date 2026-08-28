@@ -103,4 +103,76 @@ describe("apiRequest", () => {
       projectId: "A",
     });
   });
+
+  it("rejects an unscoped malformed 2xx response without exposing its body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<html>traceback secret</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }),
+      ),
+    );
+
+    const error = await apiRequest("/api/v1/projects").catch(
+      (caught) => caught,
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 200,
+      code: "PROTOCOL_ERROR",
+      message: "The API returned an invalid response.",
+    });
+    expect((error as Error).message).not.toContain("traceback");
+    expect((error as Error).message).not.toContain("secret");
+  });
+
+  it("rejects a project-scoped malformed 2xx response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("<html>invalid</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }),
+      ),
+    );
+
+    await expect(
+      apiRequest("/api/v1/projects/A/work", { projectId: "A" }),
+    ).rejects.toMatchObject({
+      status: 200,
+      code: "PROTOCOL_ERROR",
+      projectId: "A",
+    });
+  });
+
+  it("rejects an empty non-204 success response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(apiRequest("/api/v1/projects")).rejects.toMatchObject({
+      status: 200,
+      code: "PROTOCOL_ERROR",
+      message: "The API returned an invalid response.",
+    });
+  });
+
+  it("allows body-less HTTP 204 success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 204 })),
+    );
+
+    await expect(apiRequest("/api/v1/projects/A")).resolves.toBeUndefined();
+  });
 });
