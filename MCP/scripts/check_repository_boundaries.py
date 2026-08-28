@@ -125,6 +125,62 @@ def _check_mcp_project_state(
         failures.append("MCP tools missing required project_id: " + ", ".join(missing))
 
 
+def _mapping_keys(path: Path, variable_name: str) -> frozenset[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == variable_name
+            for target in node.targets
+        ) or not isinstance(node.value, ast.Dict):
+            continue
+        return frozenset(
+            key.value
+            for key in node.value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        )
+    return frozenset()
+
+
+def _static_mcp_inventory(
+    mcp_root: Path,
+) -> tuple[dict[str, frozenset[str]], set[str]]:
+    groups = {
+        "project": ("project_tool_descriptions.py", "PROJECT_TOOL_DESCRIPTIONS"),
+        "phase1": ("tool_descriptions.py", "TOOL_DESCRIPTIONS"),
+        "phase2": ("phase2_tool_descriptions.py", "PHASE2_TOOL_DESCRIPTIONS"),
+        "phase3": ("phase3_tool_descriptions.py", "PHASE3_TOOL_DESCRIPTIONS"),
+    }
+    description_root = mcp_root / "src" / "novel_mcp"
+    inventories = {
+        name: _mapping_keys(description_root / filename, variable_name)
+        for name, (filename, variable_name) in groups.items()
+    }
+    required: set[str] = set()
+    tool_roots = {
+        "phase1": "phase1_tools.py",
+        "phase2": "phase2_tools.py",
+        "phase3": "phase3_tools.py",
+    }
+    for group_name, filename in tool_roots.items():
+        tree = ast.parse((description_root / filename).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            if node.name not in inventories[group_name]:
+                continue
+            positional = [*node.args.posonlyargs, *node.args.args]
+            required_positionals = len(positional) - len(node.args.defaults)
+            if (
+                positional
+                and positional[0].arg == "project_id"
+                and required_positionals
+            ):
+                required.add(node.name)
+    return inventories, required
+
+
 def collect_failures(
     repo_root: Path,
     *,
@@ -186,37 +242,50 @@ def main() -> int:
 
     mcp_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(mcp_root / "src"))
-    from novel_mcp.config import McpSettings
-    from novel_mcp.mcp_server import (
-        ALL_TOOL_NAMES,
-        PHASE1_TOOL_NAMES,
-        PHASE2_TOOL_NAMES,
-        PHASE3_TOOL_NAMES,
-        PROJECT_TOOL_NAMES,
-        create_server,
-    )
-
     repo_root = Path(__file__).resolve().parents[2]
+    try:
+        from novel_mcp.config import McpSettings
+        from novel_mcp.mcp_server import (
+            ALL_TOOL_NAMES,
+            PHASE1_TOOL_NAMES,
+            PHASE2_TOOL_NAMES,
+            PHASE3_TOOL_NAMES,
+            PROJECT_TOOL_NAMES,
+            create_server,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.startswith("novel_mcp"):
+            raise
+        group_names, required_project_id_tools = _static_mcp_inventory(mcp_root)
+        all_tool_names = frozenset().union(*group_names.values())
+    else:
 
-    async def inspect_server() -> set[str]:
-        server = create_server(McpSettings("http://127.0.0.1:8765"))
-        try:
-            tools = await server.list_tools()
-            return {
-                tool.name
-                for tool in tools
-                if "project_id" in tool.input_schema.get("required", [])
-            }
-        finally:
-            await server.aclose()
+        async def inspect_server() -> set[str]:
+            server = create_server(McpSettings("http://127.0.0.1:8765"))
+            try:
+                tools = await server.list_tools()
+                return {
+                    tool.name
+                    for tool in tools
+                    if "project_id" in tool.input_schema.get("required", [])
+                }
+            finally:
+                await server.aclose()
 
-    required_project_id_tools = asyncio.run(inspect_server())
+        required_project_id_tools = asyncio.run(inspect_server())
+        all_tool_names = ALL_TOOL_NAMES
+        group_names = {
+            "project": PROJECT_TOOL_NAMES,
+            "phase1": PHASE1_TOOL_NAMES,
+            "phase2": PHASE2_TOOL_NAMES,
+            "phase3": PHASE3_TOOL_NAMES,
+        }
     inventory_failures = []
     expected_group_counts = {
-        "project": (PROJECT_TOOL_NAMES, 4),
-        "phase1": (PHASE1_TOOL_NAMES, 23),
-        "phase2": (PHASE2_TOOL_NAMES, 27),
-        "phase3": (PHASE3_TOOL_NAMES, 5),
+        "project": (group_names["project"], 4),
+        "phase1": (group_names["phase1"], 23),
+        "phase2": (group_names["phase2"], 27),
+        "phase3": (group_names["phase3"], 5),
     }
     for group_name, (names, expected_count) in expected_group_counts.items():
         if len(names) != expected_count:
@@ -226,7 +295,7 @@ def main() -> int:
             )
     failures = collect_failures(
         repo_root,
-        tool_names=ALL_TOOL_NAMES,
+        tool_names=all_tool_names,
         required_project_id_tools=required_project_id_tools,
     )
     failures.extend(inventory_failures)
