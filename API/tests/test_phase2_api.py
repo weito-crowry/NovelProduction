@@ -422,6 +422,59 @@ def test_phase2_stale_narrative_writes_include_safe_current_snapshots(
         assert "sqlite" not in response.text.lower()
 
 
+def test_canon_status_stale_conflicts_include_narrative_and_information_snapshots(
+    client: TestClient,
+) -> None:
+    _create_project(client)
+    base = "/api/v1/projects/phase-two"
+    chapter = _data(client.post(f"{base}/chapters", json={"title": "章"}))
+    current_chapter = _data(
+        client.patch(
+            f"{base}/chapters/{chapter['id']}",
+            json={"expected_version": chapter["version"], "title": "改稿"},
+        )
+    )
+    information_item = _data(
+        client.post(f"{base}/information", json={"statement": "情報"})
+    )
+    current_information_item = _data(
+        client.patch(
+            f"{base}/information/{information_item['id']}",
+            json={
+                "expected_version": information_item["version"],
+                "statement": "改稿情報",
+            },
+        )
+    )
+
+    for entity_type, entity, current in (
+        ("chapter", chapter, current_chapter),
+        ("information_item", information_item, current_information_item),
+    ):
+        stale = client.post(
+            f"{base}/canon/status",
+            json={
+                "entity_type": entity_type,
+                "entity_id": entity["id"],
+                "target_status": "canon",
+                "expected_version": entity["version"],
+                "reason": "古い版からの確定",
+            },
+        )
+
+        assert stale.status_code == 409
+        details = stale.json()["error"]["details"]
+        assert details == {
+            "entity_type": entity_type,
+            "entity_id": entity["id"],
+            "expected_version": entity["version"],
+            "current_version": current["version"],
+            "current_resource": current,
+            "domain_code": "VersionConflictError",
+        }
+        assert "sqlite" not in stale.text.lower()
+
+
 def test_phase2_cross_project_ids_are_not_read_or_written(
     client: TestClient,
 ) -> None:

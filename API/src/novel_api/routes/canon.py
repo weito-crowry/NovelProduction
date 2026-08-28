@@ -20,6 +20,10 @@ def _phase1_entity(services: ServiceContainer, entity_type: str, entity_id: int)
         "timeline_event": services.timeline.get_event,
         "character": services.character.get,
         "relationship": services.relationship.get,
+        "chapter": services.narrative.get_chapter,
+        "episode": services.narrative.get_episode,
+        "scene": services.narrative.get_scene,
+        "information_item": services.information.get_information,
     }
     reader = readers.get(entity_type)
     return None if reader is None else reader(entity_id)
