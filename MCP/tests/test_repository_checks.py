@@ -78,7 +78,7 @@ def test_boundary_checker_rejects_api_imports_from_mcp(
     )
 
     failures = _boundary_checker().collect_failures(
-        tmp_path, tool_names=tuple(str(index) for index in range(55))
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
     assert any("API must not import" in failure for failure in failures)
@@ -95,7 +95,7 @@ def test_boundary_checker_rejects_core_imports_from_outer_layers(
     )
 
     failures = _boundary_checker().collect_failures(
-        tmp_path, tool_names=tuple(str(index) for index in range(55))
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
     assert any("CORE must not import" in failure for failure in failures)
@@ -112,7 +112,7 @@ def test_boundary_checker_rejects_direct_sql_in_api_routes(
     )
 
     failures = _boundary_checker().collect_failures(
-        tmp_path, tool_names=tuple(str(index) for index in range(55))
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
     assert any("direct SQL execution" in failure for failure in failures)
@@ -126,7 +126,7 @@ def test_boundary_checker_rejects_sqlite_outside_api_plumbing(tmp_path: Path) ->
     )
 
     failures = _boundary_checker().collect_failures(
-        tmp_path, tool_names=tuple(str(index) for index in range(55))
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
     assert any("sqlite3 is restricted" in failure for failure in failures)
@@ -138,7 +138,7 @@ def test_boundary_checker_rejects_migration_005(tmp_path: Path) -> None:
     migration.write_text("SELECT 1;\n", encoding="utf-8")
 
     failures = _boundary_checker().collect_failures(
-        tmp_path, tool_names=tuple(str(index) for index in range(55))
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
     assert any("migration 005" in failure for failure in failures)
@@ -148,7 +148,7 @@ def test_boundary_checker_rejects_mcp_migration_ownership(tmp_path: Path) -> Non
     (tmp_path / "MCP" / "migrations").mkdir(parents=True)
 
     failures = _boundary_checker().collect_failures(
-        tmp_path, tool_names=tuple(str(index) for index in range(55))
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
     assert any("MCP/migrations" in failure for failure in failures)
@@ -162,7 +162,7 @@ def test_boundary_checker_rejects_mcp_tool_count_drift(
         tmp_path, tool_names=tuple(str(index) for index in range(tool_count))
     )
 
-    assert failures == [f"MCP tool count is {tool_count}; expected 55"]
+    assert failures == [f"MCP tool count is {tool_count}; expected 59"]
 
 
 def test_boundary_checker_accepts_current_layering_contract(tmp_path: Path) -> None:
@@ -180,7 +180,62 @@ def test_boundary_checker_accepts_current_layering_contract(tmp_path: Path) -> N
 
     assert (
         _boundary_checker().collect_failures(
-            tmp_path, tool_names=tuple(str(index) for index in range(55))
+            tmp_path, tool_names=tuple(str(index) for index in range(59))
         )
         == []
     )
+
+
+@pytest.mark.parametrize(
+    "module_name", ["novel_core", "sqlite3", "novel_api", "fastapi"]
+)
+def test_boundary_checker_rejects_forbidden_mcp_runtime_imports(
+    tmp_path: Path, module_name: str
+) -> None:
+    _write_python(tmp_path, "MCP/src/novel_mcp/forbidden.py", f"import {module_name}\n")
+
+    failures = _boundary_checker().collect_failures(
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
+    )
+
+    assert any("MCP must not import" in failure for failure in failures)
+
+
+def test_boundary_checker_rejects_mcp_runtime_dependencies(tmp_path: Path) -> None:
+    (tmp_path / "MCP").mkdir()
+    (tmp_path / "MCP" / "pyproject.toml").write_text(
+        '[project]\ndependencies = ["novel-production-core"]\n', encoding="utf-8"
+    )
+
+    failures = _boundary_checker().collect_failures(
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
+    )
+
+    assert any("MCP must not depend" in failure for failure in failures)
+
+
+def test_boundary_checker_rejects_project_selection_state(tmp_path: Path) -> None:
+    _write_python(
+        tmp_path,
+        "MCP/src/novel_mcp/forbidden.py",
+        "project_select = 'not allowed'\n",
+    )
+
+    failures = _boundary_checker().collect_failures(
+        tmp_path, tool_names=tuple(str(index) for index in range(59))
+    )
+
+    assert any("project_select is forbidden" in failure for failure in failures)
+
+
+def test_boundary_checker_rejects_missing_required_project_id(tmp_path: Path) -> None:
+    failures = _boundary_checker().collect_failures(
+        tmp_path,
+        tool_names=("work_get",),
+        required_project_id_tools=(),
+    )
+
+    assert failures == [
+        "MCP tools missing required project_id: work_get",
+        "MCP tool count is 1; expected 59",
+    ]
