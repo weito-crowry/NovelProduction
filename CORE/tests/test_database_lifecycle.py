@@ -37,6 +37,18 @@ class _FakeConnection:
         return _FakeCursor(self._rows)
 
 
+class _SetupFailureConnection:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def execute(self, statement: str) -> None:
+        if statement == "PRAGMA journal_mode = WAL;":
+            raise sqlite3.OperationalError("setup failed")
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _simple_migration(eol: bytes) -> bytes:
     return (
         b"CREATE TABLE schema_migrations "
@@ -107,6 +119,20 @@ def test_open_database_applies_connection_defaults_and_migrations(
         )
     finally:
         connection.close()
+
+
+def test_open_database_closes_connection_when_setup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = _SetupFailureConnection()
+    monkeypatch.setattr(sqlite3, "connect", lambda _db_path: connection)
+
+    with pytest.raises(sqlite3.OperationalError, match="setup failed"):
+        open_database(
+            DatabaseConfig(db_path=tmp_path / "story.db", migration_dir=MIGRATION_DIR)
+        )
+
+    assert connection.closed is True
 
 
 def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> None:
