@@ -21,6 +21,20 @@ def error_payload(exc: BaseException) -> dict[str, Any]:
     return project_failure(exc)
 
 
+def validation_failure(
+    project_id: str | None, message: str = "The request is invalid."
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": {
+            "code": "VALIDATION_ERROR",
+            "message": message,
+            "project_id": project_id,
+            "details": {},
+        },
+    }
+
+
 def json_value(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
         return {key: json_value(item) for key, item in asdict(value).items()}
