@@ -14,6 +14,7 @@ class ApiSettings:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     dev_cors_origin: str | None = None
+    webui_dist: Path | None = None
 
 
 def _source_checkout_root() -> Path:

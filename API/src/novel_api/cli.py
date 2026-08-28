@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--dev-cors-origin", default=None)
+    parser.add_argument("--webui-dist", type=Path, default=None)
     return parser
 
 
@@ -51,6 +52,15 @@ def _resolve_dev_cors_origin(explicit: str | None) -> str | None:
     return None
 
 
+def _resolve_webui_dist(explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        return explicit
+    env_webui_dist = os.getenv("NOVEL_WEBUI_DIST")
+    if env_webui_dist:
+        return Path(env_webui_dist)
+    return None
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     settings = ApiSettings(
@@ -58,6 +68,7 @@ def main(argv: list[str] | None = None) -> None:
         host=_resolve_host(args.host),
         port=_resolve_port(args.port),
         dev_cors_origin=_resolve_dev_cors_origin(args.dev_cors_origin),
+        webui_dist=_resolve_webui_dist(args.webui_dist),
     )
     app = create_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port)
