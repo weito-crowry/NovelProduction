@@ -258,6 +258,7 @@ def main() -> int:
             raise
         group_names, required_project_id_tools = _static_mcp_inventory(mcp_root)
         all_tool_names = frozenset().union(*group_names.values())
+        required_project_id_tools.update({"project_get", "project_update"})
     else:
 
         async def inspect_server() -> set[str]:
@@ -280,7 +281,18 @@ def main() -> int:
             "phase2": PHASE2_TOOL_NAMES,
             "phase3": PHASE3_TOOL_NAMES,
         }
+    expected_required_project_id_tools = set(all_tool_names) - {
+        "project_list",
+        "project_create",
+    }
     inventory_failures = []
+    missing_project_id = sorted(
+        expected_required_project_id_tools - required_project_id_tools
+    )
+    if missing_project_id:
+        inventory_failures.append(
+            "MCP tools missing required project_id: " + ", ".join(missing_project_id)
+        )
     expected_group_counts = {
         "project": (group_names["project"], 4),
         "phase1": (group_names["phase1"], 23),

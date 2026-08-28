@@ -40,8 +40,11 @@ def test_http_server_owns_no_database_and_registers_59_tools() -> None:
         tools = {tool.name: tool for tool in _run(server.list_tools())}
         assert set(tools) == ALL_TOOL_NAMES
         assert all(
-            "project_id" in tools[name].input_schema["required"]
-            for name in ALL_TOOL_NAMES - PROJECT_TOOL_NAMES - {"project_list"}
+            "project_id" in tools[name].input_schema.get("required", [])
+            for name in ALL_TOOL_NAMES - {"project_list", "project_create"}
+        )
+        assert "project_id" not in tools["project_create"].input_schema.get(
+            "required", []
         )
     finally:
         _run(server.aclose())
