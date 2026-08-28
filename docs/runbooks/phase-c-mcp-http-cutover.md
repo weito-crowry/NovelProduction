@@ -21,11 +21,16 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    old runtime can checkpoint an already-existing WAL; that checkpoint belongs
    to the pre-cutover baseline transition, not to the new API read path.
 
-3. Record the quiescent baseline for `story.db` and an existing
-   `story.db-wal`, including content hash, size, and presence. Record
-   `story.db-shm` separately as a SQLite runtime sidecar. Do not repair,
-   migrate, vacuum, seed, replace, or delete any stable database while
-   collecting this baseline.
+3. Record the quiescent baseline for `story.db` and `story.db-wal`, including
+   content hash, size, and presence. The main database must remain
+   byte-for-byte unchanged during read-only dogfood. If the baseline WAL is
+   present, its presence, size, and content hash must remain unchanged. If the
+   baseline WAL is absent, the read-only operation may leave it absent or may
+   create a zero-byte WAL runtime sidecar; a newly created WAL with non-zero
+   size fails certification. Record `story.db-shm` separately as a SQLite
+   runtime sidecar; its creation, deletion, and size changes are not
+   certification failures. Do not repair, migrate, vacuum, seed, replace, or
+   delete any stable database while collecting this baseline.
 
 4. Start `novel-api` with the intended data root and the established port. Use
    `127.0.0.1:8765` for local-only dogfood; use `0.0.0.0:8765` only when the
@@ -73,11 +78,15 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
    MCP response has `project_id` at the top level, alongside `data`, without a
    second nested project envelope.
 
-9. Compare the post-dogfood `story.db` and existing `story.db-wal` content
-   hashes, sizes, and presence with the quiescent baseline. Treat SHM
-   creation/deletion separately; it is a SQLite sidecar and is not by itself
-   domain-data mutation. If the main DB or WAL changes, stop and investigate
-   before any write dogfood.
+9. Compare the post-dogfood filesystem state with the quiescent baseline.
+   Require unchanged presence, size, and content hash for `story.db`. When
+   the baseline had a WAL, require unchanged presence, size, and content hash
+   for `story.db-wal`. When the baseline had no WAL, accept either no WAL or a
+   zero-byte `story.db-wal`; a non-zero WAL is a certification failure. Treat
+   SHM creation, deletion, and size changes separately; it is a SQLite
+   runtime sidecar and is not by itself a certification failure. If the main
+   DB changes, or the WAL violates the applicable baseline rule, stop and
+   investigate before any write dogfood.
 
 10. Run a controlled write only when separately approved. Verify the returned
    API/MCP error details for stale versions, including `VERSION_CONFLICT`,
@@ -89,8 +98,9 @@ change the Cloudflare Tunnel or ChatGPT Connector configuration.
 
 ## Failure and rollback
 
-If health, project discovery, schema refresh, identity checks, or dogfood
-fails, stop the new MCP/API processes and restore the prior runtime process and
-configuration. Do not repair, reset, migrate, vacuum, seed, or replace the
-story database as a rollback mechanism. Leave the Connector and Tunnel
-unchanged until the reviewed post-merge operation has passed.
+If health, project discovery, schema refresh, identity checks, dogfood, main
+database invariance, or the applicable WAL rule fails, stop the new MCP/API
+processes and restore the prior runtime process and configuration. Do not
+repair, reset, migrate, vacuum, seed, or replace the story database as a
+rollback mechanism. Leave the Connector and Tunnel unchanged until the
+reviewed post-merge operation has passed.
