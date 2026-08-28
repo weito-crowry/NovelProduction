@@ -71,9 +71,12 @@ def test_project_tools_forward_paths_and_envelopes() -> None:
             "data": {"project_id": "a", "status": "active"},
         }
         assert _run(handlers["project_create"](working_title="作品"))["ok"] is True
-        assert _run(
-            handlers["project_update"](project_id="a", status="archived")
-        )["project_id"] == "a"
+        assert (
+            _run(handlers["project_update"](project_id="a", status="archived"))[
+                "project_id"
+            ]
+            == "a"
+        )
         assert registrations["project_get"]["handler"].__annotations__["project_id"]
     finally:
         _run(client.aclose())

@@ -72,16 +72,10 @@ async def _project_summary(
     project_id: str | None = None,
     json_body: Any = None,
 ) -> dict[str, Any]:
-    result = await call_api(
-        client,
-        method,
-        path,
-        project_id=None,
-        json_body=json_body,
-    )
-    if not result["ok"]:
-        return result
-    data = result["data"]
+    try:
+        data = await client.request_json(method, path, json_body=json_body)
+    except Exception as exc:
+        return project_failure(exc, project_id)
     if not isinstance(data, Mapping):
         return project_failure(BackendProtocolError(), project_id)
     response_project_id = data.get("project_id")

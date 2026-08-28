@@ -142,6 +142,8 @@ def test_project_envelope_rejects_mismatched_project_id() -> None:
 
 
 def test_project_success_unwraps_api_data_without_double_nesting() -> None:
-    assert project_success(
-        {"project_id": "2126", "data": {"id": 1}}, "2126"
-    ) == {"ok": True, "project_id": "2126", "data": {"id": 1}}
+    assert project_success({"project_id": "2126", "data": {"id": 1}}, "2126") == {
+        "ok": True,
+        "project_id": "2126",
+        "data": {"id": 1},
+    }
