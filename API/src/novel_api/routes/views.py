@@ -69,13 +69,14 @@ def get_episode_view(
 ) -> ProjectEnvelope[EpisodeView]:
     target = resolve_project_target(request, project_id)
     with open_project_services(target) as services:
+        outline = services.outline.get_episode_outline(episode_id)
         return envelope(
             project_id,
             EpisodeView(
-                episode=services.narrative.get_episode(episode_id),
+                episode=outline.episode,
                 scenes=list(services.narrative.list_scenes(episode_id)),
                 episode_references=list(services.episode_reference.list(episode_id)),
-                outline=services.outline.get_episode_outline(episode_id),
+                outline=outline,
                 context=services.context.build_episode_context(episode_id),
                 latest_draft=services.draft.get_draft(episode_id),
                 recent_draft_history=list(services.draft.history(episode_id, limit=20)),

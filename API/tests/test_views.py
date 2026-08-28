@@ -170,6 +170,50 @@ def test_episode_view_composes_existing_reads_and_missing_draft_is_null(
     assert _database_snapshot(story_db) == before
 
 
+def test_episode_view_preserves_work_scope_and_missing_error_details(
+    client: TestClient, data_root: Path
+) -> None:
+    base = _create_project(client)
+    story_db = data_root / "view-project" / "story.db"
+    connection = sqlite3.connect(story_db)
+    try:
+        connection.execute(
+            "INSERT INTO works (slug, working_title) VALUES (?, ?)",
+            ("foreign-work", "Foreign Work"),
+        )
+        foreign_work_id = connection.execute(
+            "SELECT id FROM works WHERE slug = ?", ("foreign-work",)
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO chapters (work_id, position, title) VALUES (?, ?, ?)",
+            (foreign_work_id, 1, "Foreign Chapter"),
+        )
+        foreign_chapter_id = connection.execute(
+            "SELECT id FROM chapters WHERE work_id = ?", (foreign_work_id,)
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO episodes "
+            "(work_id, chapter_id, position, title) VALUES (?, ?, ?, ?)",
+            (foreign_work_id, foreign_chapter_id, 1, "Foreign Episode"),
+        )
+        foreign_episode_id = connection.execute(
+            "SELECT id FROM episodes WHERE work_id = ?", (foreign_work_id,)
+        ).fetchone()[0]
+        connection.commit()
+    finally:
+        connection.close()
+
+    foreign = client.get(f"{base}/views/episodes/{foreign_episode_id}")
+    missing = client.get(f"{base}/views/episodes/{foreign_episode_id + 10_000}")
+
+    assert foreign.status_code == 404
+    assert foreign.json()["error"]["code"] == "NOT_FOUND"
+    assert foreign.json()["error"]["details"] == {"domain_code": "WORK_SCOPE_ERROR"}
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "NOT_FOUND"
+    assert missing.json()["error"]["details"] == {"domain_code": "NOT_FOUND"}
+
+
 def test_episode_view_returns_latest_draft_and_only_twenty_recent_revisions(
     client: TestClient,
 ) -> None:
