@@ -5,6 +5,7 @@ from pathlib import Path
 SRC_LINE_LIMIT = 600
 SRC_SIZE_LIMIT = 40 * 1024
 TEST_LINE_LIMIT = 800
+COMPONENT_NAMES = ("CORE", "API", "MCP")
 
 
 def _count_lines(path: Path) -> int:
@@ -26,9 +27,8 @@ def _collect_failures(
     return failures
 
 
-def main() -> int:
-    repo_root = Path(__file__).resolve().parents[2]
-    component_roots = (repo_root / "CORE", repo_root / "MCP")
+def collect_failures(repo_root: Path) -> list[str]:
+    component_roots = tuple(repo_root / name for name in COMPONENT_NAMES)
     src_files = sorted(
         path
         for component_root in component_roots
@@ -45,6 +45,12 @@ def main() -> int:
     failures.extend(
         _collect_failures(test_files, line_limit=TEST_LINE_LIMIT, size_limit=None)
     )
+    return failures
+
+
+def main() -> int:
+    repo_root = Path(__file__).resolve().parents[2]
+    failures = collect_failures(repo_root)
     if failures:
         for failure in failures:
             print(failure)

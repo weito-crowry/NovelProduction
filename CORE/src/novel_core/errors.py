@@ -9,6 +9,10 @@ class MigrationError(NovelMcpError):
     """Raised when migrations cannot be applied safely."""
 
 
+class DatabaseIntegrityError(NovelMcpError):
+    """Raised when SQLite integrity verification fails."""
+
+
 class VersionConflictError(NovelMcpError):
     """Raised when optimistic concurrency checks fail."""
 

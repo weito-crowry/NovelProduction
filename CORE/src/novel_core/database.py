@@ -7,7 +7,7 @@ from importlib import resources
 from pathlib import Path
 
 from novel_core.config import DatabaseConfig
-from novel_core.errors import MigrationError
+from novel_core.errors import DatabaseIntegrityError, MigrationError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -28,15 +28,21 @@ def default_migration_dir() -> Path:
 def open_database(config: DatabaseConfig) -> sqlite3.Connection:
     config.db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(config.db_path)
-    connection.execute("PRAGMA foreign_keys = ON;")
-    connection.execute("PRAGMA journal_mode = WAL;")
-    connection.execute("PRAGMA busy_timeout = 5000;")
     try:
+        connection.execute("PRAGMA foreign_keys = ON;")
+        connection.execute("PRAGMA journal_mode = WAL;")
+        connection.execute("PRAGMA busy_timeout = 5000;")
         apply_migrations(connection, config.migration_dir)
+        return connection
     except Exception:
         connection.close()
         raise
-    return connection
+
+
+def assert_database_integrity(connection: sqlite3.Connection) -> None:
+    rows = tuple(connection.execute("PRAGMA integrity_check;").fetchall())
+    if rows != (("ok",),):
+        raise DatabaseIntegrityError("DATABASE_INTEGRITY_ERROR")
 
 
 def apply_migrations(

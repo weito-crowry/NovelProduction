@@ -3,12 +3,13 @@ from __future__ import annotations
 import sqlite3
 from hashlib import sha256
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from novel_core.config import DatabaseConfig
-from novel_core.database import open_database
-from novel_core.errors import MigrationError
+from novel_core.database import assert_database_integrity, open_database
+from novel_core.errors import DatabaseIntegrityError, MigrationError
 
 MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
 MIGRATION_NAMES = (
@@ -17,6 +18,35 @@ MIGRATION_NAMES = (
     "003_narrative.sql",
     "004_drafts.sql",
 )
+
+
+class _FakeCursor:
+    def __init__(self, rows: tuple[tuple[str], ...]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> tuple[tuple[str], ...]:
+        return self._rows
+
+
+class _FakeConnection:
+    def __init__(self, rows: tuple[tuple[str], ...]) -> None:
+        self._rows = rows
+
+    def execute(self, statement: str) -> _FakeCursor:
+        assert statement == "PRAGMA integrity_check;"
+        return _FakeCursor(self._rows)
+
+
+class _SetupFailureConnection:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def execute(self, statement: str) -> None:
+        if statement == "PRAGMA journal_mode = WAL;":
+            raise sqlite3.OperationalError("setup failed")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _simple_migration(eol: bytes) -> bytes:
@@ -89,6 +119,20 @@ def test_open_database_applies_connection_defaults_and_migrations(
         )
     finally:
         connection.close()
+
+
+def test_open_database_closes_connection_when_setup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = _SetupFailureConnection()
+    monkeypatch.setattr(sqlite3, "connect", lambda _db_path: connection)
+
+    with pytest.raises(sqlite3.OperationalError, match="setup failed"):
+        open_database(
+            DatabaseConfig(db_path=tmp_path / "story.db", migration_dir=MIGRATION_DIR)
+        )
+
+    assert connection.closed is True
 
 
 def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> None:
@@ -304,6 +348,34 @@ def test_new_migration_checksum_is_eol_independent(tmp_path: Path) -> None:
         sha256(_simple_migration(b"\n")).hexdigest(),
         sha256(_simple_migration(b"\n")).hexdigest(),
     ]
+
+
+def test_assert_database_integrity_accepts_single_ok_row(tmp_path: Path) -> None:
+    connection = open_database(
+        DatabaseConfig(db_path=tmp_path / "story.db", migration_dir=MIGRATION_DIR)
+    )
+    try:
+        assert_database_integrity(connection)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        (),
+        (("not ok",),),
+        (("ok",), ("still ok",)),
+    ],
+    ids=["missing", "bad-result", "multiple-rows"],
+)
+def test_assert_database_integrity_rejects_non_ok_results(
+    rows: tuple[tuple[str], ...],
+) -> None:
+    connection = cast(sqlite3.Connection, _FakeConnection(rows))
+
+    with pytest.raises(DatabaseIntegrityError):
+        assert_database_integrity(connection)
 
 
 @pytest.mark.parametrize("current_eol", [b"\n", b"\r\n"], ids=["lf", "crlf"])
