@@ -16,7 +16,9 @@ from novel_core.errors import (
     CanonDecisionNotFoundError,
     CanonEntityNotFoundError,
     CanonPolicyError,
+    CanonReasonRequired,
     CharacterNotFoundError,
+    DeprecatedCanonForbiddenError,
     NarrativeNotFoundError,
     NovelMcpError,
     OrderConflictError,
@@ -154,7 +156,13 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _VERSION_CONFLICT
     if isinstance(exc, OrderConflictError):
         return _ORDER_CONFLICT
-    if isinstance(exc, RelationshipIntegrityError | CanonPolicyError):
+    if isinstance(
+        exc,
+        RelationshipIntegrityError
+        | CanonPolicyError
+        | CanonReasonRequired
+        | DeprecatedCanonForbiddenError,
+    ):
         return _DEPENDENCY_CONFLICT
     if isinstance(exc, sqlite3.IntegrityError):
         return _DEPENDENCY_CONFLICT

@@ -178,3 +178,60 @@ LF-to-CRLF working-copy warning for the two modified tracked files.
 Commit subject: `feat: add shared API error contract`
 
 The commit is local only; Task 4 does not push or create a PR.
+
+## Review fix: normalize remaining canon boundary errors
+
+### Finding
+
+Task 4 review found that the generic `NovelMcpError` handler preserved
+`details.domain_code`, but `_error_spec()` left the existing
+`CanonReasonRequired` and `DeprecatedCanonForbiddenError` classes on the generic
+500 `INTERNAL_ERROR` path. Both errors are intentional CORE policy/boundary denials
+raised by services included in Phase B, so treating them as unexpected internal
+failures made the shared contract incomplete.
+
+The existing CORE semantics were preserved. Both classes now use the same normalized
+409 `DEPENDENCY_CONFLICT` mapping as `CanonPolicyError`; CORE classes, messages, and
+service behavior were not changed.
+
+### Behavior-level RED
+
+Two parameterized API cases were added first, asserting status 409, the stable
+`DEPENDENCY_CONFLICT` API code, each CORE `domain_code`, project scope, and absence of
+raw exception text.
+
+```text
+uv run pytest -W error tests/test_errors.py -q
+........FF.....................
+2 failed, 29 passed in 0.75s
+```
+
+The failures showed both errors returning 500 instead of 409.
+
+### GREEN and verification
+
+```text
+uv run pytest -W error tests/test_errors.py -q
+31 passed in 0.53s
+
+uv run pytest -W error -q
+66 passed in 2.31s
+
+uv run ruff check .
+All checks passed!
+
+uv run ruff format --check .
+22 files already formatted
+
+uv run mypy src
+Success: no issues found in 15 source files
+```
+
+### Re-review evidence
+
+The final source diff is limited to importing the two existing CORE exception
+classes, adding them to the existing dependency-conflict branch, and adding their
+behavior-level contract cases. The shared `_domain_details()` path supplies
+`CANON_REASON_REQUIRED` and `DEPRECATED_CANON_FORBIDDEN`; the fixed public message
+comes from `_DEPENDENCY_CONFLICT`, so raw CORE exception messages are not serialized.
+No MCP, WEBUI, migration, dependency, service, or production-data code changed.
