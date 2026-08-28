@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import json
+from collections.abc import Callable, Collection, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from novel_mcp.api_client import ApiClient
+from novel_mcp.tool_errors import validation_failure
 from novel_mcp.tool_support import call_api
 from novel_mcp.tool_types import ProjectId
 
@@ -106,7 +108,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
         production_status: ProductionStatus = "planned",
         canon_status: CanonStatus = "draft",
     ) -> dict[str, Any]:
-        return await _call(
+        return await _call_json(
             client,
             "POST",
             _path(project_id, f"chapters/{chapter_id}/episodes"),
@@ -119,6 +121,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
                 production_status=production_status,
                 canon_status=canon_status,
             ),
+            json_fields=("foreshadowing_notes",),
         )
 
     async def episode_update(
@@ -133,7 +136,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
         canon_status: CanonStatus | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        return await _call(
+        return await _call_json(
             client,
             "PATCH",
             _path(project_id, f"episodes/{episode_id}"),
@@ -148,6 +151,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
                 canon_status=canon_status,
                 reason=reason,
             ),
+            json_fields=("foreshadowing_notes",),
         )
 
     async def episode_get(project_id: ProjectId, episode_id: Id) -> dict[str, Any]:
@@ -325,7 +329,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
         state_json: Any = None,
         expected_version: OptionalVersion = None,
     ) -> dict[str, Any]:
-        return await _call(
+        return await _call_json(
             client,
             "PUT",
             _path(project_id, f"characters/{character_id}/states/{episode_id}"),
@@ -338,6 +342,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
                 state_json=state_json,
                 expected_version=expected_version,
             ),
+            json_fields=("beliefs_json", "state_json"),
         )
 
     async def character_state_get(
@@ -369,7 +374,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
         canon_status: CanonStatus = "draft",
         importance: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        return await _call(
+        return await _call_json(
             client,
             "POST",
             _path(project_id, "information"),
@@ -382,6 +387,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
                 canon_status=canon_status,
                 importance=importance,
             ),
+            json_fields=("notes_json",),
         )
 
     async def information_update(
@@ -396,7 +402,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
         canon_status: CanonStatus | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        return await _call(
+        return await _call_json(
             client,
             "PATCH",
             _path(project_id, f"information/{information_item_id}"),
@@ -411,6 +417,7 @@ def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
                 canon_status=canon_status,
                 reason=reason,
             ),
+            json_fields=("notes_json",),
         )
 
     async def information_get(
@@ -528,6 +535,36 @@ async def _call(
     return await call_api(
         client, method, path, project_id=project_id, params=params, json_body=body
     )
+
+
+async def _call_json(
+    client: ApiClient,
+    method: str,
+    path: str,
+    *,
+    project_id: str,
+    body: Mapping[str, Any],
+    json_fields: Collection[str],
+) -> dict[str, Any]:
+    normalized = dict(body)
+    for field_name in json_fields:
+        if field_name in normalized:
+            try:
+                normalized[field_name] = _json_value(normalized[field_name])
+            except (TypeError, ValueError):
+                return validation_failure(
+                    project_id, f"{field_name} must contain valid JSON."
+                )
+    return await _call(client, method, path, project_id=project_id, body=normalized)
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError from exc
+    return value
 
 
 def _path(project_id: str, suffix: str) -> str:

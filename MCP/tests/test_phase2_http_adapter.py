@@ -227,3 +227,49 @@ def test_phase2_delete_has_no_json_body_and_optional_reference_query_is_omitted(
         _run(client.aclose())
 
     assert "reference_type" not in requests[-1].url.params
+
+
+def test_phase2_json_like_inputs_decode_strings_and_reject_invalid_json() -> None:
+    requests: list[httpx.Request] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"project_id": "p", "data": {}})
+
+    client = ApiClient(
+        McpSettings("http://api.example"), transport=httpx.MockTransport(transport)
+    )
+    registrations: dict[str, Any] = {}
+    register_phase2_tools(
+        client, lambda name, handler, **_: registrations.update({name: handler})
+    )
+    try:
+        result = _run(
+            registrations["episode_create"](
+                project_id="p", chapter_id=1, title="x", foreshadowing_notes='["clue"]'
+            )
+        )
+        assert result["ok"] is True
+        assert requests[-1].content == (
+            b'{"title":"x","summary":"","purpose":"",'
+            b'"foreshadowing_notes":["clue"],"production_status":"planned",'
+            b'"canon_status":"draft"}'
+        )
+
+        result = _run(
+            registrations["information_create"](
+                project_id="p", statement="x", notes_json="not-json"
+            )
+        )
+        assert result == {
+            "ok": False,
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "notes_json must contain valid JSON.",
+                "project_id": "p",
+                "details": {},
+            },
+        }
+        assert len(requests) == 1
+    finally:
+        _run(client.aclose())
