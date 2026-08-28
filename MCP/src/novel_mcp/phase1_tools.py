@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from novel_mcp.tool_errors import error_payload, success
-from novel_mcp.tool_support import call_service, json_text
+from novel_mcp.api_client import ApiClient
+from novel_mcp.tool_errors import validation_failure
+from novel_mcp.tool_support import call_api
+from novel_mcp.tool_types import ProjectId
 
 Registrar = Callable[..., None]
 Limit = Annotated[int, Field(ge=0, le=100)]
@@ -31,11 +33,12 @@ class ParticipantInput(BaseModel):
     role: Annotated[str, Field(min_length=1, max_length=120)]
 
 
-def register_phase1_tools(services: Any, register: Registrar) -> None:
-    async def work_get() -> dict[str, Any]:
-        return await call_service(services.work.get)
+def register_phase1_tools(client: ApiClient, register: Registrar) -> None:
+    async def work_get(project_id: ProjectId) -> dict[str, Any]:
+        return await _get(client, project_id, "work")
 
     async def work_update(
+        project_id: ProjectId,
         working_title: str,
         expected_version: int,
         genre: str | None = None,
@@ -53,18 +56,26 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         ]
         | None = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.work.update,
-            working_title,
-            expected_version,
-            genre=genre,
-            premise=premise,
-            themes_json=json_text(themes_json),
-            description=description,
-            production_status=production_status,
+        try:
+            body = _compact(
+                working_title=working_title,
+                expected_version=expected_version,
+                genre=genre,
+                premise=premise,
+                themes_json=_json_value(themes_json),
+                description=description,
+                production_status=production_status,
+            )
+        except ValueError:
+            return validation_failure(
+                project_id, "themes_json must contain valid JSON."
+            )
+        return await _call(
+            client, "PATCH", _path(project_id, "work"), project_id=project_id, body=body
         )
 
     async def world_fact_create(
+        project_id: ProjectId,
         statement: Annotated[str, Field(min_length=1)],
         valid_from: str | None = None,
         valid_to: str | None = None,
@@ -74,19 +85,31 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         details_json: str = "{}",
         importance: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.world.create,
-            statement,
-            valid_from,
-            valid_to,
-            topic_key=topic_key,
-            category=category,
-            title=title,
-            details_json=details_json,
-            importance=importance,
+        try:
+            body = _compact(
+                statement=statement,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                topic_key=topic_key,
+                category=category,
+                title=title,
+                details_json=_json_value(details_json),
+                importance=importance,
+            )
+        except ValueError:
+            return validation_failure(
+                project_id, "details_json must contain valid JSON."
+            )
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, "world-facts"),
+            project_id=project_id,
+            body=body,
         )
 
     async def world_fact_update(
+        project_id: ProjectId,
         fact_id: int,
         statement: Annotated[str, Field(min_length=1)],
         expected_version: int,
@@ -99,28 +122,46 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         valid_to: str | None = None,
         importance: Annotated[int | None, Field(ge=0)] = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.world.update,
-            fact_id,
-            statement,
-            expected_version,
-            reason,
-            topic_key=topic_key,
-            category=category,
-            title=title,
-            details_json=details_json,
-            valid_from=valid_from,
-            valid_to=valid_to,
-            importance=importance,
+        try:
+            body = _compact(
+                statement=statement,
+                expected_version=expected_version,
+                reason=reason,
+                topic_key=topic_key,
+                category=category,
+                title=title,
+                details_json=_json_value(details_json),
+                valid_from=valid_from,
+                valid_to=valid_to,
+                importance=importance,
+            )
+        except ValueError:
+            return validation_failure(
+                project_id, "details_json must contain valid JSON."
+            )
+        return await _call(
+            client,
+            "PATCH",
+            _path(project_id, f"world-facts/{fact_id}"),
+            project_id=project_id,
+            body=body,
         )
 
-    async def world_fact_get(fact_id: int) -> dict[str, Any]:
-        return await call_service(services.world.get, fact_id)
+    async def world_fact_get(project_id: ProjectId, fact_id: int) -> dict[str, Any]:
+        return await _get(client, project_id, f"world-facts/{fact_id}")
 
-    async def world_fact_search(query: str, limit: Limit = 20) -> dict[str, Any]:
-        return await call_service(services.search.search_world_facts, query, limit)
+    async def world_fact_search(
+        project_id: ProjectId, query: str, limit: Limit = 20
+    ) -> dict[str, Any]:
+        return await _get(
+            client,
+            project_id,
+            "world-facts/search",
+            params={"query": query, "limit": limit},
+        )
 
     async def timeline_event_create(
+        project_id: ProjectId,
         title: Annotated[str, Field(min_length=1)],
         event_date: str | None = None,
         participants: list[ParticipantInput] | None = None,
@@ -136,10 +177,9 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         consequence_summary: str = "",
         importance: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        return await _call(
-            services.timeline.create_event,
-            event_date,
-            title,
+        body = _compact(
+            title=title,
+            event_date=event_date,
             participants=_participants(participants),
             event_key=event_key,
             time_start=time_start,
@@ -153,8 +193,16 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
             consequence_summary=consequence_summary,
             importance=importance,
         )
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, "timeline/events"),
+            project_id=project_id,
+            body=body,
+        )
 
     async def timeline_event_update(
+        project_id: ProjectId,
         event_id: int,
         expected_version: int,
         title: str | None = None,
@@ -172,10 +220,8 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         consequence_summary: str | None = None,
         importance: Annotated[int | None, Field(ge=0)] = None,
     ) -> dict[str, Any]:
-        return await _call(
-            services.timeline.update_event,
-            event_id,
-            expected_version,
+        body = _compact(
+            expected_version=expected_version,
             title=title,
             new_date=new_date,
             participants=_participants(participants),
@@ -191,33 +237,76 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
             consequence_summary=consequence_summary,
             importance=importance,
         )
+        return await _call(
+            client,
+            "PATCH",
+            _path(project_id, f"timeline/events/{event_id}"),
+            project_id=project_id,
+            body=body,
+        )
 
-    async def timeline_event_get(event_id: int) -> dict[str, Any]:
-        return await _call(services.timeline.get_event, event_id)
+    async def timeline_event_get(
+        project_id: ProjectId, event_id: int
+    ) -> dict[str, Any]:
+        return await _get(client, project_id, f"timeline/events/{event_id}")
 
-    async def timeline_event_search(query: str, limit: Limit = 20) -> dict[str, Any]:
-        return await _call(services.timeline.search_events, query, limit)
+    async def timeline_event_search(
+        project_id: ProjectId, query: str, limit: Limit = 20
+    ) -> dict[str, Any]:
+        return await _get(
+            client,
+            project_id,
+            "timeline/events/search",
+            params={"query": query, "limit": limit},
+        )
 
-    async def timeline_range(start: str, end: str, limit: Limit = 20) -> dict[str, Any]:
-        return await _call(services.timeline.range_events, start, end, limit)
+    async def timeline_range(
+        project_id: ProjectId, start: str, end: str, limit: Limit = 20
+    ) -> dict[str, Any]:
+        return await _get(
+            client,
+            project_id,
+            "timeline/range",
+            params={"start": start, "end": end, "limit": limit},
+        )
 
     async def timeline_move(
-        event_id: int, expected_version: int, new_date: str, reason: str | None = None
+        project_id: ProjectId,
+        event_id: int,
+        expected_version: int,
+        new_date: str,
+        reason: str | None = None,
     ) -> dict[str, Any]:
         return await _call(
-            services.timeline.move_event, event_id, expected_version, new_date, reason
+            client,
+            "POST",
+            _path(project_id, f"timeline/events/{event_id}/move"),
+            project_id=project_id,
+            body=_compact(
+                expected_version=expected_version, new_date=new_date, reason=reason
+            ),
         )
 
     async def timeline_relation_create(
+        project_id: ProjectId,
         source_id: int,
         target_id: int,
         relation_type: Annotated[str, Field(min_length=1)],
     ) -> dict[str, Any]:
         return await _call(
-            services.timeline.create_relation, source_id, target_id, relation_type
+            client,
+            "POST",
+            _path(project_id, "timeline/relations"),
+            project_id=project_id,
+            body={
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation_type": relation_type,
+            },
         )
 
     async def character_create(
+        project_id: ProjectId,
         display_name: Annotated[str, Field(min_length=1)],
         character_key: str | None = None,
         entity_type: Literal["human", "ai", "organization"] = "human",
@@ -236,28 +325,40 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         private_notes: str = "",
         profile_json: str = "{}",
     ) -> dict[str, Any]:
+        try:
+            body = _compact(
+                display_name=display_name,
+                character_key=character_key,
+                entity_type=entity_type,
+                description=description,
+                birth_date=birth_date,
+                death_date=death_date,
+                physical_description=physical_description,
+                occupation=occupation,
+                core_beliefs=core_beliefs,
+                goals=goals,
+                fears=fears,
+                personality=personality,
+                speech_style=speech_style,
+                ai_attitude=ai_attitude,
+                genetic_modification_attitude=genetic_modification_attitude,
+                private_notes=private_notes,
+                profile_json=_json_value(profile_json),
+            )
+        except ValueError:
+            return validation_failure(
+                project_id, "profile_json must contain valid JSON."
+            )
         return await _call(
-            services.character.create,
-            display_name=display_name,
-            character_key=character_key,
-            entity_type=entity_type,
-            description=description,
-            birth_date=birth_date,
-            death_date=death_date,
-            physical_description=physical_description,
-            occupation=occupation,
-            core_beliefs=core_beliefs,
-            goals=goals,
-            fears=fears,
-            personality=personality,
-            speech_style=speech_style,
-            ai_attitude=ai_attitude,
-            genetic_modification_attitude=genetic_modification_attitude,
-            private_notes=private_notes,
-            profile_json=profile_json,
+            client,
+            "POST",
+            _path(project_id, "characters"),
+            project_id=project_id,
+            body=body,
         )
 
     async def character_update(
+        project_id: ProjectId,
         character_id: int,
         expected_version: int,
         display_name: str | None = None,
@@ -279,37 +380,55 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         private_notes: str | None = None,
         profile_json: str | None = None,
     ) -> dict[str, Any]:
+        try:
+            body = _compact(
+                expected_version=expected_version,
+                display_name=display_name,
+                description=description,
+                reason=reason,
+                character_key=character_key,
+                entity_type=entity_type,
+                birth_date=birth_date,
+                death_date=death_date,
+                physical_description=physical_description,
+                occupation=occupation,
+                core_beliefs=core_beliefs,
+                goals=goals,
+                fears=fears,
+                personality=personality,
+                speech_style=speech_style,
+                ai_attitude=ai_attitude,
+                genetic_modification_attitude=genetic_modification_attitude,
+                private_notes=private_notes,
+                profile_json=_json_value(profile_json),
+            )
+        except ValueError:
+            return validation_failure(
+                project_id, "profile_json must contain valid JSON."
+            )
         return await _call(
-            services.character.update,
-            character_id,
-            expected_version,
-            display_name=display_name,
-            description=description,
-            reason=reason,
-            character_key=character_key,
-            entity_type=entity_type,
-            birth_date=birth_date,
-            death_date=death_date,
-            physical_description=physical_description,
-            occupation=occupation,
-            core_beliefs=core_beliefs,
-            goals=goals,
-            fears=fears,
-            personality=personality,
-            speech_style=speech_style,
-            ai_attitude=ai_attitude,
-            genetic_modification_attitude=genetic_modification_attitude,
-            private_notes=private_notes,
-            profile_json=profile_json,
+            client,
+            "PATCH",
+            _path(project_id, f"characters/{character_id}"),
+            project_id=project_id,
+            body=body,
         )
 
-    async def character_get(character_id: int) -> dict[str, Any]:
-        return await _call(services.character.get, character_id)
+    async def character_get(project_id: ProjectId, character_id: int) -> dict[str, Any]:
+        return await _get(client, project_id, f"characters/{character_id}")
 
-    async def character_search(query: str, limit: Limit = 20) -> dict[str, Any]:
-        return await _call(services.search.search_characters, query, limit)
+    async def character_search(
+        project_id: ProjectId, query: str, limit: Limit = 20
+    ) -> dict[str, Any]:
+        return await _get(
+            client,
+            project_id,
+            "characters/search",
+            params={"query": query, "limit": limit},
+        )
 
     async def relationship_create(
+        project_id: ProjectId,
         source_character_id: int,
         target_character_id: int,
         relationship_type: Annotated[str, Field(min_length=1)],
@@ -318,16 +437,22 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         valid_to_episode_id: OptionalEpisodeId = None,
     ) -> dict[str, Any]:
         return await _call(
-            services.relationship.create,
-            source_character_id,
-            target_character_id,
-            relationship_type,
-            description,
-            valid_from_episode_id=valid_from_episode_id,
-            valid_to_episode_id=valid_to_episode_id,
+            client,
+            "POST",
+            _path(project_id, "relationships"),
+            project_id=project_id,
+            body=_compact(
+                source_character_id=source_character_id,
+                target_character_id=target_character_id,
+                relationship_type=relationship_type,
+                description=description,
+                valid_from_episode_id=valid_from_episode_id,
+                valid_to_episode_id=valid_to_episode_id,
+            ),
         )
 
     async def relationship_update(
+        project_id: ProjectId,
         relationship_id: int,
         expected_version: int,
         relationship_type: Annotated[str, Field(min_length=1)],
@@ -339,24 +464,34 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         clear_valid_to: bool = False,
     ) -> dict[str, Any]:
         return await _call(
-            services.relationship.update,
-            relationship_id,
-            expected_version,
-            relationship_type,
-            reason,
-            description=description,
-            valid_from_episode_id=valid_from_episode_id,
-            valid_to_episode_id=valid_to_episode_id,
-            clear_valid_from=clear_valid_from,
-            clear_valid_to=clear_valid_to,
+            client,
+            "PATCH",
+            _path(project_id, f"relationships/{relationship_id}"),
+            project_id=project_id,
+            body=_compact(
+                expected_version=expected_version,
+                relationship_type=relationship_type,
+                description=description,
+                reason=reason,
+                valid_from_episode_id=valid_from_episode_id,
+                valid_to_episode_id=valid_to_episode_id,
+                clear_valid_from=clear_valid_from,
+                clear_valid_to=clear_valid_to,
+            ),
         )
 
     async def relationship_search(
-        character_id: int | None = None, limit: Limit = 20
+        project_id: ProjectId, character_id: int | None = None, limit: Limit = 20
     ) -> dict[str, Any]:
-        return await _call(services.relationship.search, character_id, limit)
+        return await _get(
+            client,
+            project_id,
+            "relationships",
+            params=_compact(character_id=character_id, limit=limit),
+        )
 
     async def canon_status_set(
+        project_id: ProjectId,
         entity_type: EntityType,
         entity_id: int,
         target_status: CanonStatus,
@@ -364,19 +499,33 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         reason: str | None = None,
     ) -> dict[str, Any]:
         return await _call(
-            services.canon.set_canon_status,
-            entity_type,
-            entity_id,
-            target_status,
-            expected_version,
-            reason,
+            client,
+            "POST",
+            _path(project_id, "canon/status"),
+            project_id=project_id,
+            body=_compact(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                target_status=target_status,
+                expected_version=expected_version,
+                reason=reason,
+            ),
         )
 
-    async def canon_decision_get(decision_id: int) -> dict[str, Any]:
-        return await _call(services.canon.get_decision, decision_id)
+    async def canon_decision_get(
+        project_id: ProjectId, decision_id: int
+    ) -> dict[str, Any]:
+        return await _get(client, project_id, f"canon/decisions/{decision_id}")
 
-    async def canon_decision_search(query: str, limit: Limit = 20) -> dict[str, Any]:
-        return await _call(services.canon.search_decisions, query, limit)
+    async def canon_decision_search(
+        project_id: ProjectId, query: str, limit: Limit = 20
+    ) -> dict[str, Any]:
+        return await _get(
+            client,
+            project_id,
+            "canon/decisions/search",
+            params={"query": query, "limit": limit},
+        )
 
     registrations = (
         ("work_get", work_get, True, False),
@@ -407,24 +556,45 @@ def register_phase1_tools(services: Any, register: Registrar) -> None:
         register(name, handler, read_only=read_only, destructive=destructive)
 
 
-def _participants(
-    items: list[ParticipantInput] | None,
-) -> tuple[tuple[int, str], ...] | None:
-    if items is None:
-        return None
-    return tuple((item.character_id, item.role) for item in items)
-
-
 async def _call(
-    operation: Callable[..., Any], *args: Any, **kwargs: Any
+    client: ApiClient,
+    method: str,
+    path: str,
+    *,
+    project_id: str,
+    params: Mapping[str, Any] | None = None,
+    body: Any = None,
 ) -> dict[str, Any]:
-    try:
-        return success(operation(*args, **kwargs))
-    except Exception as exc:
-        return error_payload(exc)
+    return await call_api(
+        client, method, path, project_id=project_id, params=params, json_body=body
+    )
 
 
-def _json_text(value: object) -> str | None:
-    if value is None or isinstance(value, str):
+def _get(
+    client: ApiClient, project_id: str, suffix: str, params: Any = None
+) -> Awaitable[dict[str, Any]]:
+    return call_api(
+        client, "GET", _path(project_id, suffix), project_id=project_id, params=params
+    )
+
+
+def _path(project_id: str, suffix: str) -> str:
+    return f"/api/v1/projects/{project_id}/{suffix}"
+
+
+def _compact(**values: Any) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _participants(items: list[ParticipantInput] | None) -> list[dict[str, Any]] | None:
+    return (
+        None
+        if items is None
+        else [{"character_id": item.character_id, "role": item.role} for item in items]
+    )
+
+
+def _json_value(value: Any) -> Any:
+    if not isinstance(value, str):
         return value
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.loads(value)

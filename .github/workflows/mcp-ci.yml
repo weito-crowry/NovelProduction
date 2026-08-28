@@ -76,7 +76,7 @@ jobs:
         run: >-
           uv run python -c
           "from novel_mcp.mcp_server import ALL_TOOL_NAMES;
-          assert len(ALL_TOOL_NAMES) == 55, len(ALL_TOOL_NAMES)"
+          assert len(ALL_TOOL_NAMES) == 59, len(ALL_TOOL_NAMES)"
 
   invariants:
     runs-on: ubuntu-latest

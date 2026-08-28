@@ -27,6 +27,8 @@ def test_development_foundation_files_and_constraints_exist() -> None:
     pyproject_text = (mcp_root / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.10"' in pyproject_text
     assert '"mcp>=2.0,<3.0"' in pyproject_text
+    assert '"httpx>=0.28,<1.0"' in pyproject_text
+    assert "novel-production-core" not in pyproject_text
     assert "rev: v0.16.4" in (mcp_root / ".pre-commit-config.yaml").read_text(
         encoding="utf-8"
     )
@@ -51,12 +53,23 @@ def test_development_foundation_enforces_phase1_coverage_and_ruff_rules() -> Non
     )
 
 
+def test_phase_c_cutover_runbook_uses_module_entrypoint() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    runbook_path = repo_root / "docs" / "runbooks" / "phase-c-mcp-http-cutover.md"
+    runbook = runbook_path.read_text(encoding="utf-8")
+
+    assert "uv run python -m novel_mcp.mcp_server\n" in runbook
+    assert (
+        "uv run python -m novel_mcp.mcp_server --api-url http://127.0.0.1:8765"
+        in runbook
+    )
+    assert "uv run novel-mcp" not in runbook
+
+
 def test_services_and_cli_contain_no_raw_sql_statements() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     source_root = repo_root / "CORE" / "src" / "novel_core"
-    source_paths = sorted((source_root / "services").glob("*.py")) + [
-        repo_root / "MCP" / "src" / "novel_mcp" / "cli.py"
-    ]
+    source_paths = sorted((source_root / "services").glob("*.py"))
     sql_tokens = re.compile(
         r"\b(?:SELECT|INSERT|UPDATE|DELETE|BEGIN|COMMIT|ROLLBACK)\b"
     )

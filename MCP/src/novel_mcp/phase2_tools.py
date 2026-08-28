@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Collection, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from novel_mcp.tool_support import call_service
+from novel_mcp.api_client import ApiClient
+from novel_mcp.tool_errors import validation_failure
+from novel_mcp.tool_support import call_api
+from novel_mcp.tool_types import ProjectId
 
 Registrar = Callable[..., None]
 Limit = Annotated[int, Field(ge=0, le=100)]
@@ -22,24 +26,31 @@ KnowledgeState = Literal[
 ReferenceType = Literal["character", "world_fact", "timeline_event", "information"]
 
 
-def register_phase2_tools(services: Any, register: Registrar) -> None:
+def register_phase2_tools(client: ApiClient, register: Registrar) -> None:
     async def chapter_create(
+        project_id: ProjectId,
         title: Annotated[str, Field(min_length=1)],
         summary: str = "",
         purpose: str = "",
         production_status: ProductionStatus = "planned",
         canon_status: CanonStatus = "draft",
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.create_chapter,
-            title,
-            summary,
-            purpose,
-            production_status,
-            canon_status,
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, "chapters"),
+            project_id=project_id,
+            body=_compact(
+                title=title,
+                summary=summary,
+                purpose=purpose,
+                production_status=production_status,
+                canon_status=canon_status,
+            ),
         )
 
     async def chapter_update(
+        project_id: ProjectId,
         chapter_id: Id,
         expected_version: Version,
         title: str | None = None,
@@ -49,32 +60,46 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         canon_status: CanonStatus | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.update_chapter,
-            chapter_id,
-            expected_version,
-            title=title,
-            summary=summary,
-            purpose=purpose,
-            production_status=production_status,
-            canon_status=canon_status,
-            reason=reason,
+        return await _call(
+            client,
+            "PATCH",
+            _path(project_id, f"chapters/{chapter_id}"),
+            project_id=project_id,
+            body=_compact(
+                expected_version=expected_version,
+                title=title,
+                summary=summary,
+                purpose=purpose,
+                production_status=production_status,
+                canon_status=canon_status,
+                reason=reason,
+            ),
         )
 
     async def chapter_reorder(
-        chapter_id: Id, target_position: Position, expected_version: Version
+        project_id: ProjectId,
+        chapter_id: Id,
+        target_position: Position,
+        expected_version: Version,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.reorder_chapter,
-            chapter_id,
-            target_position,
-            expected_version,
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, f"chapters/{chapter_id}/reorder"),
+            project_id=project_id,
+            body={
+                "target_position": target_position,
+                "expected_version": expected_version,
+            },
         )
 
-    async def chapter_list() -> dict[str, Any]:
-        return await call_service(services.narrative.list_chapters)
+    async def chapter_list(project_id: ProjectId) -> dict[str, Any]:
+        return await _call(
+            client, "GET", _path(project_id, "chapters"), project_id=project_id
+        )
 
     async def episode_create(
+        project_id: ProjectId,
         chapter_id: Id,
         title: Annotated[str, Field(min_length=1)],
         summary: str = "",
@@ -83,18 +108,24 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         production_status: ProductionStatus = "planned",
         canon_status: CanonStatus = "draft",
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.create_episode,
-            chapter_id,
-            title,
-            summary,
-            purpose,
-            foreshadowing_notes,
-            production_status,
-            canon_status,
+        return await _call_json(
+            client,
+            "POST",
+            _path(project_id, f"chapters/{chapter_id}/episodes"),
+            project_id=project_id,
+            body=_compact(
+                title=title,
+                summary=summary,
+                purpose=purpose,
+                foreshadowing_notes=foreshadowing_notes,
+                production_status=production_status,
+                canon_status=canon_status,
+            ),
+            json_fields=("foreshadowing_notes",),
         )
 
     async def episode_update(
+        project_id: ProjectId,
         episode_id: Id,
         expected_version: Version,
         title: str | None = None,
@@ -105,36 +136,59 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         canon_status: CanonStatus | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.update_episode,
-            episode_id,
-            expected_version,
-            title=title,
-            summary=summary,
-            purpose=purpose,
-            foreshadowing_notes=foreshadowing_notes,
-            production_status=production_status,
-            canon_status=canon_status,
-            reason=reason,
+        return await _call_json(
+            client,
+            "PATCH",
+            _path(project_id, f"episodes/{episode_id}"),
+            project_id=project_id,
+            body=_compact(
+                expected_version=expected_version,
+                title=title,
+                summary=summary,
+                purpose=purpose,
+                foreshadowing_notes=foreshadowing_notes,
+                production_status=production_status,
+                canon_status=canon_status,
+                reason=reason,
+            ),
+            json_fields=("foreshadowing_notes",),
         )
 
-    async def episode_get(episode_id: Id) -> dict[str, Any]:
-        return await call_service(services.narrative.get_episode, episode_id)
+    async def episode_get(project_id: ProjectId, episode_id: Id) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"episodes/{episode_id}"),
+            project_id=project_id,
+        )
 
     async def episode_reorder(
-        episode_id: Id, target_position: Position, expected_version: Version
+        project_id: ProjectId,
+        episode_id: Id,
+        target_position: Position,
+        expected_version: Version,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.reorder_episode,
-            episode_id,
-            target_position,
-            expected_version,
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, f"episodes/{episode_id}/reorder"),
+            project_id=project_id,
+            body={
+                "target_position": target_position,
+                "expected_version": expected_version,
+            },
         )
 
-    async def episode_list(chapter_id: Id) -> dict[str, Any]:
-        return await call_service(services.narrative.list_episodes, chapter_id)
+    async def episode_list(project_id: ProjectId, chapter_id: Id) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"chapters/{chapter_id}/episodes"),
+            project_id=project_id,
+        )
 
     async def scene_create(
+        project_id: ProjectId,
         episode_id: Id,
         title: Annotated[str, Field(min_length=1)],
         summary: str = "",
@@ -142,17 +196,22 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         production_status: ProductionStatus = "planned",
         canon_status: CanonStatus = "draft",
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.create_scene,
-            episode_id,
-            title,
-            summary,
-            purpose,
-            production_status,
-            canon_status,
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, f"episodes/{episode_id}/scenes"),
+            project_id=project_id,
+            body=_compact(
+                title=title,
+                summary=summary,
+                purpose=purpose,
+                production_status=production_status,
+                canon_status=canon_status,
+            ),
         )
 
     async def scene_update(
+        project_id: ProjectId,
         scene_id: Id,
         expected_version: Version,
         title: str | None = None,
@@ -162,63 +221,105 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         canon_status: CanonStatus | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.update_scene,
-            scene_id,
-            expected_version,
-            title=title,
-            summary=summary,
-            purpose=purpose,
-            production_status=production_status,
-            canon_status=canon_status,
-            reason=reason,
+        return await _call(
+            client,
+            "PATCH",
+            _path(project_id, f"scenes/{scene_id}"),
+            project_id=project_id,
+            body=_compact(
+                expected_version=expected_version,
+                title=title,
+                summary=summary,
+                purpose=purpose,
+                production_status=production_status,
+                canon_status=canon_status,
+                reason=reason,
+            ),
         )
 
-    async def scene_get(scene_id: Id) -> dict[str, Any]:
-        return await call_service(services.narrative.get_scene, scene_id)
+    async def scene_get(project_id: ProjectId, scene_id: Id) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"scenes/{scene_id}"),
+            project_id=project_id,
+        )
 
     async def scene_reorder(
-        scene_id: Id, target_position: Position, expected_version: Version
+        project_id: ProjectId,
+        scene_id: Id,
+        target_position: Position,
+        expected_version: Version,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.narrative.reorder_scene,
-            scene_id,
-            target_position,
-            expected_version,
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, f"scenes/{scene_id}/reorder"),
+            project_id=project_id,
+            body={
+                "target_position": target_position,
+                "expected_version": expected_version,
+            },
         )
 
-    async def scene_list(episode_id: Id) -> dict[str, Any]:
-        return await call_service(services.narrative.list_scenes, episode_id)
+    async def scene_list(project_id: ProjectId, episode_id: Id) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"episodes/{episode_id}/scenes"),
+            project_id=project_id,
+        )
 
     async def episode_reference_add(
+        project_id: ProjectId,
         episode_id: Id,
         reference_type: ReferenceType,
         target_id: Id,
         role: Annotated[str, Field(min_length=1, max_length=120)] = "participant",
     ) -> dict[str, Any]:
-        return await call_service(
-            services.references.add,
-            episode_id,
-            reference_type,
-            target_id,
-            role=role,
+        return await _call(
+            client,
+            "POST",
+            _path(project_id, f"episodes/{episode_id}/references"),
+            project_id=project_id,
+            body={
+                "reference_type": reference_type,
+                "target_id": target_id,
+                "role": role,
+            },
         )
 
     async def episode_reference_remove(
-        episode_id: Id, reference_type: ReferenceType, target_id: Id
+        project_id: ProjectId,
+        episode_id: Id,
+        reference_type: ReferenceType,
+        target_id: Id,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.references.remove, episode_id, reference_type, target_id
+        return await _call(
+            client,
+            "DELETE",
+            _path(
+                project_id,
+                f"episodes/{episode_id}/references/{reference_type}/{target_id}",
+            ),
+            project_id=project_id,
         )
 
     async def episode_reference_list(
-        episode_id: Id, reference_type: ReferenceType | None = None
+        project_id: ProjectId,
+        episode_id: Id,
+        reference_type: ReferenceType | None = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.references.list, episode_id, reference_type=reference_type
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"episodes/{episode_id}/references"),
+            project_id=project_id,
+            params=_compact(reference_type=reference_type),
         )
 
     async def character_state_set(
+        project_id: ProjectId,
         character_id: Id,
         episode_id: Id,
         physical_state: str | None = None,
@@ -228,27 +329,44 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         state_json: Any = None,
         expected_version: OptionalVersion = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.state.set_state,
-            character_id,
-            episode_id,
-            physical_state=physical_state,
-            emotional_state=emotional_state,
-            beliefs_json=beliefs_json,
-            location_world_fact_id=location_world_fact_id,
-            state_json=state_json,
-            expected_version=expected_version,
+        return await _call_json(
+            client,
+            "PUT",
+            _path(project_id, f"characters/{character_id}/states/{episode_id}"),
+            project_id=project_id,
+            body=_compact(
+                physical_state=physical_state,
+                emotional_state=emotional_state,
+                beliefs_json=beliefs_json,
+                location_world_fact_id=location_world_fact_id,
+                state_json=state_json,
+                expected_version=expected_version,
+            ),
+            json_fields=("beliefs_json", "state_json"),
         )
 
-    async def character_state_get(character_id: Id, episode_id: Id) -> dict[str, Any]:
-        return await call_service(
-            services.state.get_effective_state, character_id, episode_id
+    async def character_state_get(
+        project_id: ProjectId, character_id: Id, episode_id: Id
+    ) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"characters/{character_id}/states/{episode_id}"),
+            project_id=project_id,
         )
 
-    async def character_state_history(character_id: Id) -> dict[str, Any]:
-        return await call_service(services.state.history, character_id)
+    async def character_state_history(
+        project_id: ProjectId, character_id: Id
+    ) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"characters/{character_id}/states"),
+            project_id=project_id,
+        )
 
     async def information_create(
+        project_id: ProjectId,
         statement: Annotated[str, Field(min_length=1)],
         truth_status: TruthStatus = "uncertain",
         authoring_guard: str = "",
@@ -256,17 +374,24 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         canon_status: CanonStatus = "draft",
         importance: Annotated[int, Field(ge=0)] = 0,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.information.create_information,
-            statement,
-            truth_status=truth_status,
-            authoring_guard=authoring_guard,
-            notes_json=notes_json,
-            canon_status=canon_status,
-            importance=importance,
+        return await _call_json(
+            client,
+            "POST",
+            _path(project_id, "information"),
+            project_id=project_id,
+            body=_compact(
+                statement=statement,
+                truth_status=truth_status,
+                authoring_guard=authoring_guard,
+                notes_json=notes_json,
+                canon_status=canon_status,
+                importance=importance,
+            ),
+            json_fields=("notes_json",),
         )
 
     async def information_update(
+        project_id: ProjectId,
         information_item_id: Id,
         expected_version: Version,
         statement: str | None = None,
@@ -277,40 +402,61 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         canon_status: CanonStatus | None = None,
         reason: str | None = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.information.update_information,
-            information_item_id,
-            expected_version,
-            statement=statement,
-            truth_status=truth_status,
-            authoring_guard=authoring_guard,
-            notes_json=notes_json,
-            importance=importance,
-            canon_status=canon_status,
-            reason=reason,
+        return await _call_json(
+            client,
+            "PATCH",
+            _path(project_id, f"information/{information_item_id}"),
+            project_id=project_id,
+            body=_compact(
+                expected_version=expected_version,
+                statement=statement,
+                truth_status=truth_status,
+                authoring_guard=authoring_guard,
+                notes_json=notes_json,
+                importance=importance,
+                canon_status=canon_status,
+                reason=reason,
+            ),
+            json_fields=("notes_json",),
         )
 
-    async def information_get(information_item_id: Id) -> dict[str, Any]:
-        return await call_service(
-            services.information.get_information, information_item_id
+    async def information_get(
+        project_id: ProjectId, information_item_id: Id
+    ) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"information/{information_item_id}"),
+            project_id=project_id,
         )
 
-    async def information_search(query: str, limit: Limit = 20) -> dict[str, Any]:
-        return await call_service(services.information.search_information, query, limit)
+    async def information_search(
+        project_id: ProjectId, query: str, limit: Limit = 20
+    ) -> dict[str, Any]:
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, "information/search"),
+            project_id=project_id,
+            params={"query": query, "limit": limit},
+        )
 
     async def reader_disclosure_set(
+        project_id: ProjectId,
         information_item_id: Id,
         episode_id: Id,
         expected_version: OptionalVersion = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.disclosure.set_reader_disclosure,
-            information_item_id,
-            episode_id,
-            expected_version=expected_version,
+        return await _call(
+            client,
+            "PUT",
+            _path(project_id, f"information/{information_item_id}/reader-disclosure"),
+            project_id=project_id,
+            body=_compact(episode_id=episode_id, expected_version=expected_version),
         )
 
     async def character_knowledge_set(
+        project_id: ProjectId,
         character_id: Id,
         information_item_id: Id,
         episode_id: Id,
@@ -318,21 +464,30 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
         note: str = "",
         expected_version: OptionalVersion = None,
     ) -> dict[str, Any]:
-        return await call_service(
-            services.knowledge.set_character_knowledge,
-            character_id,
-            information_item_id,
-            episode_id,
-            knowledge_state,
-            note,
-            expected_version=expected_version,
+        return await _call(
+            client,
+            "PUT",
+            _path(
+                project_id, f"characters/{character_id}/knowledge/{information_item_id}"
+            ),
+            project_id=project_id,
+            body=_compact(
+                episode_id=episode_id,
+                knowledge_state=knowledge_state,
+                note=note,
+                expected_version=expected_version,
+            ),
         )
 
     async def character_knowledge_get(
-        character_id: Id, episode_id: Id
+        project_id: ProjectId, character_id: Id, episode_id: Id
     ) -> dict[str, Any]:
-        return await call_service(
-            services.knowledge.get_character_knowledge, character_id, episode_id
+        return await _call(
+            client,
+            "GET",
+            _path(project_id, f"characters/{character_id}/knowledge"),
+            project_id=project_id,
+            params={"episode_id": episode_id},
         )
 
     registrations = (
@@ -366,3 +521,55 @@ def register_phase2_tools(services: Any, register: Registrar) -> None:
     )
     for name, handler, read_only, destructive in registrations:
         register(name, handler, read_only=read_only, destructive=destructive)
+
+
+async def _call(
+    client: ApiClient,
+    method: str,
+    path: str,
+    *,
+    project_id: str,
+    params: Mapping[str, Any] | None = None,
+    body: Any = None,
+) -> dict[str, Any]:
+    return await call_api(
+        client, method, path, project_id=project_id, params=params, json_body=body
+    )
+
+
+async def _call_json(
+    client: ApiClient,
+    method: str,
+    path: str,
+    *,
+    project_id: str,
+    body: Mapping[str, Any],
+    json_fields: Collection[str],
+) -> dict[str, Any]:
+    normalized = dict(body)
+    for field_name in json_fields:
+        if field_name in normalized:
+            try:
+                normalized[field_name] = _json_value(normalized[field_name])
+            except (TypeError, ValueError):
+                return validation_failure(
+                    project_id, f"{field_name} must contain valid JSON."
+                )
+    return await _call(client, method, path, project_id=project_id, body=normalized)
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError from exc
+    return value
+
+
+def _path(project_id: str, suffix: str) -> str:
+    return f"/api/v1/projects/{project_id}/{suffix}"
+
+
+def _compact(**values: Any) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}

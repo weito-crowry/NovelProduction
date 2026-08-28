@@ -16,18 +16,24 @@ data/      repository-wide story database location
 docs/      design specifications and implementation plans
 ```
 
-Phase A is implemented. `CORE/` owns the SQLite lifecycle, immutable migrations
-001–004, configuration, errors, models, repositories, initialization, and
-domain services. `MCP/` is the current direct adapter over CORE and preserves
-the existing 55-tool stdio interface and behavior. The configured work scope
-is fixed per MCP instance, and no repository story database or generated
-artifacts are committed.
+Phase A and Phase B are implemented. `CORE/` owns the SQLite lifecycle,
+immutable migrations 001–004, configuration, errors, models, repositories,
+initialization, and domain services. `API/` is the sole runtime data-access
+boundary for the shared services under `/api/v1`.
 
-The Phase B HTTP API exposes the shared CORE services under `/api/v1`. MCP
-remains direct-to-CORE throughout Phase B; moving MCP behind HTTP belongs to
-Phase C. Its future local backend URL is
-`http://127.0.0.1:8765/api/v1`. FastAPI static serving for WEBUI is deferred to
-Phase D.
+Phase C converts `MCP/` into a stateless HTTP adapter. It preserves the
+existing 55 project-data tool names, requires an explicit `project_id` on each
+of them, and adds `project_list`, `project_get`, `project_create`, and
+`project_update` for 59 tools total. MCP uses one shared HTTP client per
+process and fails closed with `BACKEND_UNAVAILABLE` when the API cannot be
+reached; it has no CORE or SQLite fallback. No repository story database or
+generated artifacts are committed.
+
+The MCP API URL defaults to `http://127.0.0.1:8765` and can be overridden by
+`NOVEL_API_URL` or the CLI `--api-url` option. FastAPI static serving for WEBUI
+is deferred to Phase D. Production API/MCP/Tunnel/Connector cutover remains a
+post-merge operation; see
+`docs/runbooks/phase-c-mcp-http-cutover.md`.
 
 ## Phase B API runtime
 
