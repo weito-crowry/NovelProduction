@@ -14,6 +14,7 @@
 
 ## Global Constraints
 
+- Codex/Luna executes this plan sequentially as a single agent. Do not spawn subagents, delegate investigation/review, perform parallel agent work, or escalate models.
 - Base implementation on latest `origin/main`; the reviewed Phase B merge baseline is `dd2bc4acf39a64f1bc04be1be693ee8b50840c6d`.
 - Existing Phase 1–3 tool names remain exactly the current 55 names. Do not rename or remove a project-data tool.
 - Add exactly four project-management tools: `project_list`, `project_get`, `project_create`, `project_update`. Target MCP inventory after Phase C is exactly **59** tools.
@@ -222,7 +223,7 @@ uv run mypy src
 
 ```powershell
 git add MCP
- git commit -m "feat: add MCP HTTP client foundation"
+git commit -m "feat: add MCP HTTP client foundation"
 ```
 
 ---
@@ -283,7 +284,7 @@ uv run pytest tests/test_project_mcp_tools.py -q
 
 ```powershell
 git add MCP
- git commit -m "feat: add MCP project management tools"
+git commit -m "feat: add MCP project management tools"
 ```
 
 ---
@@ -315,7 +316,7 @@ git add MCP
 
 ```powershell
 git add MCP/src/novel_mcp/phase1_tools.py MCP/tests
- git commit -m "refactor: route Phase 1 MCP tools through HTTP"
+git commit -m "refactor: route Phase 1 MCP tools through HTTP"
 ```
 
 ---
@@ -347,7 +348,7 @@ git add MCP/src/novel_mcp/phase1_tools.py MCP/tests
 
 ```powershell
 git add MCP/src/novel_mcp/phase2_tools.py MCP/tests
- git commit -m "refactor: route Phase 2 MCP tools through HTTP"
+git commit -m "refactor: route Phase 2 MCP tools through HTTP"
 ```
 
 ---
@@ -379,7 +380,7 @@ git add MCP/src/novel_mcp/phase2_tools.py MCP/tests
 
 ```powershell
 git add MCP/src/novel_mcp/phase3_tools.py MCP/tests
- git commit -m "refactor: route Phase 3 MCP tools through HTTP"
+git commit -m "refactor: route Phase 3 MCP tools through HTTP"
 ```
 
 ---
@@ -423,7 +424,7 @@ uv run pytest -W error
 
 ```powershell
 git add -A MCP
- git commit -m "refactor: remove MCP direct database runtime"
+git commit -m "refactor: remove MCP direct database runtime"
 ```
 
 ---
@@ -466,7 +467,7 @@ The test may launch the API with `uv run --project ../API novel-api --data-root 
 
 ```powershell
 git add MCP/tests
- git commit -m "test: verify MCP HTTP adapter end to end"
+git commit -m "test: verify MCP HTTP adapter end to end"
 ```
 
 ---
@@ -493,7 +494,7 @@ git add MCP/tests
 **Cutover runbook must state that implementation PR does not touch production. After merge/review only:**
 
 1. update local main to the merged Phase C revision;
-2. start `novel-api` on `127.0.0.1/0.0.0.0:8765` with the intended `data` root;
+2. start `novel-api` on `127.0.0.1/0.0.0:8765` with the intended `data` root;
 3. verify `/api/v1/health` and `/api/v1/projects`;
 4. start MCP with `NOVEL_API_URL=http://127.0.0.1:8765` or `--api-url`;
 5. refresh/reconnect the ChatGPT Connector so the 59-tool schema and required `project_id` fields are visible;
@@ -514,7 +515,7 @@ git add MCP/tests
 
 ```powershell
 git add .github MCP/scripts MCP/tests README.md docs/runbooks
- git commit -m "ci: enforce MCP HTTP-only runtime boundary"
+git commit -m "ci: enforce MCP HTTP-only runtime boundary"
 ```
 
 ---
