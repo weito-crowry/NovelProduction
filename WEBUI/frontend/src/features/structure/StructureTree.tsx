@@ -36,6 +36,7 @@ import {
   reorderEpisode,
   reorderScene,
 } from "./structureApi";
+import { sameParent } from "./structureTreeUtils";
 
 type EntityKind = "chapter" | "episode" | "scene";
 type TreeRecord = ChapterRecord | EpisodeRecord | SceneRecord;
@@ -77,12 +78,15 @@ export function StructureTree({
       id,
       targetPosition,
       expectedVersion,
+      parentId,
     }: {
       kind: EntityKind;
       id: number;
       targetPosition: number;
       expectedVersion: number;
+      parentId: number | null;
     }) => {
+      void parentId;
       const input = {
         target_position: targetPosition,
         expected_version: expectedVersion,
@@ -92,17 +96,13 @@ export function StructureTree({
       return reorderScene(projectId, id, input);
     },
     retry: false,
-    onSuccess: async () => {
+    onSuccess: async (_, variables) => {
       setReorderError(null);
       setConflict(null);
-      await queryClient.invalidateQueries({
-        queryKey: projectQueryKeys.outline(projectId),
-      });
+      await invalidateReorderQueries(queryClient, projectId, variables);
     },
     onError: async (error, variables) => {
-      await queryClient.invalidateQueries({
-        queryKey: projectQueryKeys.outline(projectId),
-      });
+      await invalidateReorderQueries(queryClient, projectId, variables);
       if (isApiError(error) && error.status === 409 && error.code === "VERSION_CONFLICT") {
         const local = findRecord(outline, variables.kind, variables.id);
         let latest = asTreeRecord(error.details.current_resource);
@@ -138,6 +138,7 @@ export function StructureTree({
       id: active.id,
       targetPosition: toIndex + 1,
       expectedVersion: dragged.version,
+      parentId: active.kind === "chapter" ? null : parentId(outline, active),
     });
   }
 
@@ -356,14 +357,6 @@ function parseDragId(value: string | number): Selection | null {
   return { kind: match[1] as EntityKind, id: Number(match[2]) };
 }
 
-function sameParent(outline: OutlineView, active: Selection, over: Selection): boolean {
-  if (active.kind !== over.kind) return false;
-  if (active.kind === "chapter") return true;
-  const activeParent = parentId(outline, active);
-  const overParent = parentId(outline, over);
-  return activeParent !== null && activeParent === overParent;
-}
-
 function siblingsFor(outline: OutlineView, selection: Selection): TreeRecord[] {
   if (selection.kind === "chapter") return outline.chapters.map(({ chapter }) => chapter);
   for (const chapter of outline.chapters) {
@@ -428,4 +421,23 @@ function asTreeRecord(value: unknown): TreeRecord | null {
     return null;
   }
   return value as TreeRecord;
+}
+
+async function invalidateReorderQueries(
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  variables: { kind: EntityKind; parentId: number | null },
+): Promise<void> {
+  const invalidations = [
+    queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+  ];
+  if (variables.kind === "scene") {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.scenes(projectId) }));
+    if (variables.parentId !== null) {
+      invalidations.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, variables.parentId) }));
+    }
+  } else {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }));
+  }
+  await Promise.all(invalidations);
 }

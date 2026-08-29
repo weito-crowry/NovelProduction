@@ -13,3 +13,11 @@ export function parseJsonEditor(text: string): unknown {
     throw new Error("Enter valid JSON.");
   }
 }
+
+export function parseForeshadowingNotesEditor(text: string): unknown[] {
+  const value = parseJsonEditor(text);
+  if (!Array.isArray(value)) {
+    throw new Error("Foreshadowing notes must be a JSON array.");
+  }
+  return value;
+}

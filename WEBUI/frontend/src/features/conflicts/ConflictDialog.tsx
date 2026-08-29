@@ -6,6 +6,7 @@ export interface ConflictDialogProps<TLocal, TLatest> {
   onDiscard: () => void;
   onKeep: () => void;
   entityLabel?: string;
+  errorMessage?: string | null;
 }
 
 export function ConflictDialog<TLocal, TLatest>({
@@ -14,6 +15,7 @@ export function ConflictDialog<TLocal, TLatest>({
   onDiscard,
   onKeep,
   entityLabel = "work",
+  errorMessage = null,
 }: ConflictDialogProps<TLocal, TLatest>) {
   return (
     <div className="dialog-backdrop" role="presentation">
@@ -38,6 +40,7 @@ export function ConflictDialog<TLocal, TLatest>({
             Load latest and discard local edits
           </Button>
         </div>
+        {errorMessage && <p role="alert">{errorMessage}</p>}
       </section>
     </div>
   );

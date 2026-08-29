@@ -8,7 +8,7 @@ import type { EpisodeView, OutlineView } from "../../api/types";
 
 const episode = {
   id: 2, work_id: 7, chapter_id: 1, position: 1, title: "Episode", summary: "Summary", purpose: "Purpose",
-  foreshadowing_notes_json: '{"clue":true}', canon_status: "draft", production_status: "planned", version: 5,
+  foreshadowing_notes_json: '[{"clue":true}]', canon_status: "draft", production_status: "planned", version: 5,
   created_at: "2026-01-01", updated_at: "2026-01-01",
 };
 const scene = {
@@ -30,9 +30,18 @@ function view(references: EpisodeView["episode_references"] = []): EpisodeView {
     scenes: [scene],
     episode_references: references,
     outline: { episode, scenes: [scene], participants: [], references: { world_facts: [], timeline_events: [], information: [] }, protected_information_guards: [] },
-    context: { episode, scenes: [scene], participants: [], world_facts: [], timeline_events: [], reader_context: { known_before_episode: [], reveal_this_episode: [] }, protected_information_guards: [], recent_context: { previous_episode_summaries: [], previous_draft_tail: "tail" }, foreshadowing_notes: [{ clue: true }], context_meta: { source: "test" } },
+    context: {
+      episode, scenes: [scene],
+      participants: [{
+        profile: { id: 9, character_key: "hero", display_name: "Hero", entity_type: "character", description: "A hero", birth_date: null, physical_description: "Tired", occupation: "Pilot", core_beliefs: "Truth", goals: "Return", fears: "Loss", personality: "Calm", speech_style: "Plain", ai_attitude: "Trusting", genetic_modification_attitude: "Neutral", canon_status: "canon" },
+        effective_state: { state_id: 12, source_episode_id: 2, physical_state: "Injured", emotional_state: "Afraid", beliefs: { clue: true }, location_world_fact_id: 44 },
+        effective_relationships: [{ relationship_id: 13, related_character_id: 10, relationship_type: "ally", description: "Trusts them", canon_status: "canon" }],
+        known_information: [{ information_item_id: 21, knowledge_state: "known", source_episode_id: 1, statement: "The gate is open", truth_status: "true", canon_status: "canon" }],
+      }],
+      world_facts: [], timeline_events: [], reader_context: { known_before_episode: [], reveal_this_episode: [] }, protected_information_guards: [], recent_context: { previous_episode_summaries: [], previous_draft_tail: "tail" }, foreshadowing_notes: [{ clue: true }], context_meta: { source: "test" },
+    },
     latest_draft: { id: 10, work_id: 7, episode_id: 2, revision: 1, parent_draft_id: null, body: "Read-only draft", source_agent: "agent", change_summary: "Initial", content_hash: "sha256:abc", created_at: "2026-01-02" },
-    recent_draft_history: [{ id: 10, episode_id: 2, revision: 1, parent_draft_id: null, source_agent: "agent", change_summary: "Initial", content_hash: "sha256:abc", body_chars: 16, created_at: "2026-01-02" }],
+    recent_draft_history: [{ id: 10, episode_id: 2, revision: 1, parent_draft_id: null, source_agent: "agent", change_summary: "Recent change summary", content_hash: "sha256:abc", body_chars: 16, created_at: "2026-01-02" }],
   };
 }
 
@@ -63,7 +72,50 @@ describe("episode aggregated detail", () => {
     }
     await userEvent.setup().click(screen.getByRole("button", { name: /^Draft history$/ }));
     expect(screen.getByText("Read-only draft")).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST" && String(fetchMock.mock.calls[0]?.[0]).includes("/drafts"))).toBe(false);
+    expect(screen.getByText("Recent change summary")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input, init]) => init?.method === "POST" && String(input).includes("/drafts"))).toBe(false);
+  });
+
+  it("keeps dirty episode edits mounted across tab switches and navigation guard", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/views/outline")) return new Response(JSON.stringify({ project_id: "A", data: outline() }));
+      if (url.endsWith("/views/episodes/2")) return new Response(JSON.stringify({ project_id: "A", data: view() }));
+      return new Response(JSON.stringify({ error: { code: "NOT_FOUND", message: "Not found" } }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const router = renderEpisode();
+    const user = userEvent.setup();
+    const title = await screen.findByLabelText("Title");
+    await user.clear(title);
+    await user.type(title, "Unsaved episode title");
+    await user.click(screen.getByRole("button", { name: "Scenes" }));
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByDisplayValue("Unsaved episode title")).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Back to structure" }));
+    expect(screen.getByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(screen.getByDisplayValue("Unsaved episode title")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/projects/A/structure/episodes/2");
+  });
+
+  it("renders effective state, relationships, and known information as records", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/views/outline")) return new Response(JSON.stringify({ project_id: "A", data: outline() }));
+      if (url.endsWith("/views/episodes/2")) return new Response(JSON.stringify({ project_id: "A", data: view() }));
+      return new Response(JSON.stringify({ error: { code: "NOT_FOUND", message: "Not found" } }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderEpisode();
+    await screen.findByRole("heading", { name: "Episode" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Context" }));
+    expect(screen.getByText("Injured")).toBeInTheDocument();
+    expect(screen.getByText("Afraid")).toBeInTheDocument();
+    expect(screen.getByText("related_character_id")).toBeInTheDocument();
+    expect(screen.getByText("Trusts them")).toBeInTheDocument();
+    expect(screen.getByText("information_item_id")).toBeInTheDocument();
+    expect(screen.getByText("The gate is open")).toBeInTheDocument();
   });
 
   it("adds a character reference with role and refetches the episode view", async () => {
@@ -131,6 +183,25 @@ describe("episode aggregated detail", () => {
     fireEvent.change(notes, { target: { value: "{broken" } });
     await userEvent.setup().click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Enter valid JSON.");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+  });
+
+  it.each(["{}", "null", '"text"'])("blocks non-array foreshadowing update %s without PATCH", async (notes) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      void _init;
+      const url = String(input);
+      if (url.endsWith("/views/outline")) return new Response(JSON.stringify({ project_id: "A", data: outline() }));
+      if (url.endsWith("/views/episodes/2")) return new Response(JSON.stringify({ project_id: "A", data: view() }));
+      return new Response(JSON.stringify({ error: { code: "NOT_FOUND", message: "Not found" } }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderEpisode();
+    await screen.findByRole("heading", { name: "Episode" });
+    const user = userEvent.setup();
+    const notesField = screen.getByLabelText("Foreshadowing notes JSON");
+    fireEvent.change(notesField, { target: { value: notes } });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Foreshadowing notes must be a JSON array.");
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
   });
 

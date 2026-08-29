@@ -1,4 +1,4 @@
-import { formatStoredJson, parseJsonEditor } from "../../api/jsonFields";
+import { formatStoredJson, parseForeshadowingNotesEditor } from "../../api/jsonFields";
 import type {
   ChapterRecord,
   ChapterUpdate,
@@ -98,7 +98,7 @@ export function buildEpisodeUpdate(
   addChanged(update, "purpose", values.purpose, baseline.purpose);
   const baselineJson = formatStoredJson(baseline.foreshadowing_notes_json);
   if (values.foreshadowing_notes_json !== baselineJson) {
-    update.foreshadowing_notes = parseJsonEditor(values.foreshadowing_notes_json);
+    update.foreshadowing_notes = parseForeshadowingNotesEditor(values.foreshadowing_notes_json);
   }
   addChanged(
     update,

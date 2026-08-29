@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isApiError } from "../../api/errors";
 import { projectQueryKeys } from "../../api/queryKeys";
 import type { ChapterRecord, EpisodeRecord, SceneRecord } from "../../api/types";
@@ -25,6 +25,7 @@ import {
 } from "./structureForms";
 import {
   fetchEpisode,
+  fetchEpisodeView,
   fetchOutline,
   fetchScene,
   updateChapter,
@@ -50,6 +51,13 @@ export function ChapterEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictLatest, setConflictLatest] = useState<ChapterRecord | null>(null);
   const dirty = useMemo(() => !sameChapterSemanticForm(values, baseline), [baseline, values]);
+  useEffect(() => {
+    if (chapter.version <= baseline.version) return;
+    if (!sameChapterSemanticForm(values, baseline)) return;
+    setBaseline(chapter);
+    setValues(chapterToForm(chapter));
+    setSaved(false);
+  }, [baseline, chapter, values]);
   const mutation = useMutation({
     mutationFn: (input: Parameters<typeof updateChapter>[2]) =>
       updateChapter(projectId, chapter.id, input),
@@ -64,7 +72,10 @@ export function ChapterEditor({
     if (!input) return;
     try {
       const updated = await mutation.mutateAsync(input);
-      await queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }),
+      ]);
       setBaseline(updated);
       setValues(chapterToForm(updated));
       setSaved(true);
@@ -87,12 +98,21 @@ export function ChapterEditor({
     setSaved(false);
   }
 
-  function discardConflict() {
+  async function discardConflict() {
     if (!conflictLatest) return;
-    setBaseline(conflictLatest);
-    setValues(chapterToForm(conflictLatest));
-    setConflictLatest(null);
-    setSaved(false);
+    try {
+      const latestOutline = await fetchOutline(projectId);
+      queryClient.setQueryData(projectQueryKeys.outline(projectId), latestOutline);
+      const latest = latestOutline.chapters.find(({ chapter: item }) => item.id === chapter.id)?.chapter;
+      if (!latest) throw new Error("Unable to load the latest chapter.");
+      setBaseline(latest);
+      setValues(chapterToForm(latest));
+      setConflictLatest(null);
+      setSaveError(null);
+      setSaved(false);
+    } catch (error) {
+      setSaveError(safeErrorMessage(error, "Unable to load the latest chapter."));
+    }
   }
 
   return (
@@ -117,6 +137,7 @@ export function ChapterEditor({
           latest={conflictLatest}
           onDiscard={discardConflict}
           onKeep={() => setConflictLatest(null)}
+          errorMessage={saveError}
         />
       )}
     </>
@@ -126,9 +147,11 @@ export function ChapterEditor({
 export function EpisodeEditor({
   projectId,
   episode,
+  hidden = false,
 }: {
   projectId: string;
   episode: EpisodeRecord;
+  hidden?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [baseline, setBaseline] = useState(episode);
@@ -138,6 +161,13 @@ export function EpisodeEditor({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictLatest, setConflictLatest] = useState<EpisodeRecord | null>(null);
   const dirty = useMemo(() => !sameEpisodeSemanticForm(values, baseline), [baseline, values]);
+  useEffect(() => {
+    if (episode.version <= baseline.version) return;
+    if (!sameEpisodeSemanticForm(values, baseline)) return;
+    setBaseline(episode);
+    setValues(episodeToForm(episode));
+    setSaved(false);
+  }, [baseline, episode, values]);
   const mutation = useMutation({
     mutationFn: (input: Parameters<typeof updateEpisode>[2]) =>
       updateEpisode(projectId, episode.id, input),
@@ -154,13 +184,13 @@ export function EpisodeEditor({
       const updated = await mutation.mutateAsync(input);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
-        queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, episode.id) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }),
       ]);
       setBaseline(updated);
       setValues(episodeToForm(updated));
       setSaved(true);
     } catch (error) {
-      if (error instanceof Error && error.message === "Enter valid JSON.") {
+      if (error instanceof Error && isEpisodeValidationError(error)) {
         setValidationError(error.message);
         return;
       }
@@ -178,17 +208,26 @@ export function EpisodeEditor({
     setSaved(false);
   }
 
-  function discardConflict() {
+  async function discardConflict() {
     if (!conflictLatest) return;
-    setBaseline(conflictLatest);
-    setValues(episodeToForm(conflictLatest));
-    setConflictLatest(null);
-    setSaved(false);
+    try {
+      const latestView = await fetchEpisodeView(projectId, episode.id);
+      queryClient.setQueryData(projectQueryKeys.episodeView(projectId, episode.id), latestView);
+      queryClient.setQueryData(projectQueryKeys.episode(projectId, episode.id), latestView.episode);
+      setBaseline(latestView.episode);
+      setValues(episodeToForm(latestView.episode));
+      setConflictLatest(null);
+      setSaveError(null);
+      setSaved(false);
+    } catch (error) {
+      setSaveError(safeErrorMessage(error, "Unable to load the latest episode."));
+    }
   }
 
   return (
     <>
-      <Card>
+      <div hidden={hidden}>
+        <Card>
         <EditorHeading label="Episode" dirty={dirty} saved={saved} />
         <div className="editor-form">
           <NarrativeTextFields prefix="episode" values={values} onChange={updateValue} />
@@ -208,7 +247,8 @@ export function EpisodeEditor({
         {validationError && <p role="alert">{validationError}</p>}
         {saveError && <p role="alert">{saveError}</p>}
         <EditorActions onSave={() => void save()} pending={mutation.isPending} version={baseline.version} />
-      </Card>
+        </Card>
+      </div>
       <DirtyNavigationGuard dirty={dirty} />
       {conflictLatest && (
         <ConflictDialog
@@ -217,6 +257,7 @@ export function EpisodeEditor({
           latest={conflictLatest}
           onDiscard={discardConflict}
           onKeep={() => setConflictLatest(null)}
+          errorMessage={saveError}
         />
       )}
     </>
@@ -247,6 +288,13 @@ function SceneEditorForm({ projectId, scene }: { projectId: string; scene: Scene
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflictLatest, setConflictLatest] = useState<SceneRecord | null>(null);
   const dirty = useMemo(() => !sameSceneSemanticForm(values, baseline), [baseline, values]);
+  useEffect(() => {
+    if (scene.version <= baseline.version) return;
+    if (!sameSceneSemanticForm(values, baseline)) return;
+    setBaseline(scene);
+    setValues(sceneToForm(scene));
+    setSaved(false);
+  }, [baseline, scene, values]);
   const mutation = useMutation({
     mutationFn: (input: Parameters<typeof updateScene>[2]) => updateScene(projectId, scene.id, input),
     retry: false,
@@ -282,12 +330,23 @@ function SceneEditorForm({ projectId, scene }: { projectId: string; scene: Scene
     setSaved(false);
   }
 
-  function discardConflict() {
+  async function discardConflict() {
     if (!conflictLatest) return;
-    setBaseline(conflictLatest);
-    setValues(sceneToForm(conflictLatest));
-    setConflictLatest(null);
-    setSaved(false);
+    try {
+      const latest = await fetchScene(projectId, scene.id);
+      queryClient.setQueryData(projectQueryKeys.scene(projectId, scene.id), latest);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, latest.episode_id) }),
+      ]);
+      setBaseline(latest);
+      setValues(sceneToForm(latest));
+      setConflictLatest(null);
+      setSaveError(null);
+      setSaved(false);
+    } catch (error) {
+      setSaveError(safeErrorMessage(error, "Unable to load the latest scene."));
+    }
   }
 
   return (
@@ -311,6 +370,7 @@ function SceneEditorForm({ projectId, scene }: { projectId: string; scene: Scene
           latest={conflictLatest}
           onDiscard={discardConflict}
           onKeep={() => setConflictLatest(null)}
+          errorMessage={saveError}
         />
       )}
     </>
@@ -383,7 +443,12 @@ async function showConflictOrError<T extends object>(
 ) {
   if (isApiError(error) && error.status === 409 && error.code === "VERSION_CONFLICT") {
     let latest = asRecord<T>(error.details.current_resource);
-    if (latest === null) latest = await options.fallback();
+    try {
+      if (latest === null) latest = await options.fallback();
+    } catch (fallbackError) {
+      options.setError(safeErrorMessage(fallbackError, "Unable to load the latest resource."));
+      return;
+    }
     if (latest !== null) {
       options.setConflict(latest);
       return;
@@ -391,6 +456,14 @@ async function showConflictOrError<T extends object>(
   }
   const message = isApiError(error) ? error.message : "Unable to save the narrative entity.";
   options.setError(message);
+}
+
+function isEpisodeValidationError(error: Error): boolean {
+  return error.message === "Enter valid JSON." || error.message === "Foreshadowing notes must be a JSON array.";
+}
+
+function safeErrorMessage(error: unknown, fallback: string): string {
+  return isApiError(error) ? error.message : error instanceof Error ? error.message : fallback;
 }
 
 function asRecord<T extends object>(value: unknown): T | null {

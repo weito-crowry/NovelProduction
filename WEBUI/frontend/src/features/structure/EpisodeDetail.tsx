@@ -65,7 +65,12 @@ export function EpisodeDetail({
           </button>
         ))}
       </nav>
-      {activeTab === "Details" && <EpisodeEditor key={view.episode.id} projectId={projectId} episode={view.episode} />}
+      <EpisodeEditor
+        key={view.episode.id}
+        projectId={projectId}
+        episode={view.episode}
+        hidden={activeTab !== "Details"}
+      />
       {activeTab === "Scenes" && (
         <ScenesSection
           projectId={projectId}
@@ -214,7 +219,7 @@ function DraftHistorySection({ view }: { view: EpisodeView }) {
         <section className="draft-latest"><h3>Latest draft — revision {view.latest_draft.revision}</h3><p>{view.latest_draft.created_at} · {view.latest_draft.source_agent ?? "unknown source"} · {view.latest_draft.content_hash}</p><p>{view.latest_draft.change_summary}</p><pre>{view.latest_draft.body}</pre></section>
       ) : <p>No draft is available.</p>}
       <h3>Recent revisions</h3>
-      {view.recent_draft_history.length === 0 ? <p>No draft history.</p> : <div className="record-list">{view.recent_draft_history.map((draft) => <div className="record-list-item" key={draft.id}><span>Revision {draft.revision} · {draft.created_at} · {draft.source_agent ?? "unknown source"} · {draft.body_chars} chars</span><small>{draft.content_hash}</small></div>)}</div>}
+      {view.recent_draft_history.length === 0 ? <p>No draft history.</p> : <div className="record-list">{view.recent_draft_history.map((draft) => <div className="record-list-item" key={draft.id}><span>Revision {draft.revision} · {draft.created_at} · {draft.source_agent ?? "unknown source"} · {draft.body_chars} chars</span><small>{draft.change_summary}</small><small>{draft.content_hash}</small></div>)}</div>}
       <p className="helper-text">Draft history is read-only in D2.</p>
     </Card>
   );
@@ -236,7 +241,15 @@ function ParticipantList({ participants, empty }: { participants: OutlinePartici
 
 function ContextParticipantList({ participants, empty }: { participants: ContextParticipant[]; empty: string }) {
   if (!participants.length) return <p>{empty}</p>;
-  return <div className="record-list">{participants.map((participant) => <div className="record-list-item" key={participant.profile.id}><strong>{participant.profile.display_name}</strong><span>effective state: {participant.effective_state ? `${participant.effective_state.physical_state} / ${participant.effective_state.emotional_state}` : "none"}</span><span>effective relationships: {participant.effective_relationships.length}</span><span>known information: {participant.known_information.length}</span></div>)}</div>;
+  return <div className="record-list">{participants.map((participant) => <div className="record-list-item" key={participant.profile.id}>
+    <strong>{participant.profile.display_name}</strong>
+    <h4>Effective state</h4>
+    {participant.effective_state ? <RecordSummary record={participant.effective_state} fields={["physical_state", "emotional_state", "beliefs", "location_world_fact_id"]} /> : <p>No effective state.</p>}
+    <h4>Effective relationships</h4>
+    <RecordList records={participant.effective_relationships} fields={["relationship_id", "related_character_id", "relationship_type", "description", "canon_status"]} empty="No effective relationships." />
+    <h4>Known information</h4>
+    <RecordList records={participant.known_information} fields={["information_item_id", "knowledge_state", "source_episode_id", "statement", "truth_status", "canon_status"]} empty="No known information." />
+  </div>)}</div>;
 }
 
 function GuardList({ guards, empty }: { guards: ProtectedInformationGuard[]; empty: string }) {

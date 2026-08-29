@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { isApiError } from "../../api/errors";
-import { parseJsonEditor } from "../../api/jsonFields";
+import { parseForeshadowingNotesEditor } from "../../api/jsonFields";
 import { projectQueryKeys } from "../../api/queryKeys";
 import type { CanonStatus, ProductionStatus } from "../../api/types";
 import { Button } from "../../components/ui/Button";
@@ -41,7 +41,11 @@ export function CreateChapterForm({
     mutationFn: () => createChapter(projectId, values),
     retry: false,
     onSuccess: async (chapter) => {
-      await queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.dashboard(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }),
+      ]);
       onClose();
       navigate(`/projects/${encodeURIComponent(projectId)}/structure/chapters/${chapter.id}`);
     },
@@ -84,7 +88,7 @@ export function CreateEpisodeForm({
     title: "",
     summary: "",
     purpose: "",
-    foreshadowing_notes_json: "{}",
+    foreshadowing_notes_json: "[]",
     production_status: "planned",
     canon_status: "draft",
   });
@@ -97,15 +101,17 @@ export function CreateEpisodeForm({
         purpose: values.purpose,
         production_status: values.production_status,
         canon_status: values.canon_status,
-        ...(values.foreshadowing_notes_json.trim()
-          ? { foreshadowing_notes: parseJsonEditor(values.foreshadowing_notes_json) }
-          : {}),
+        foreshadowing_notes: parseForeshadowingNotesEditor(values.foreshadowing_notes_json),
       };
       return createEpisode(projectId, chapterId, input);
     },
     retry: false,
     onSuccess: async (episode) => {
-      await queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.dashboard(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }),
+      ]);
       onClose();
       navigate(`/projects/${encodeURIComponent(projectId)}/structure/episodes/${episode.id}`);
     },
@@ -118,7 +124,7 @@ export function CreateEpisodeForm({
       return;
     }
     try {
-      if (values.foreshadowing_notes_json.trim()) parseJsonEditor(values.foreshadowing_notes_json);
+      parseForeshadowingNotesEditor(values.foreshadowing_notes_json);
     } catch (validationError) {
       setError(validationError instanceof Error ? validationError.message : "Enter valid JSON.");
       return;
@@ -173,6 +179,7 @@ export function CreateSceneForm({
     onSuccess: async (scene) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+        queryClient.invalidateQueries({ queryKey: projectQueryKeys.dashboard(projectId) }),
         queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, episodeId) }),
       ]);
       onClose();

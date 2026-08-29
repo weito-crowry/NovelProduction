@@ -7,6 +7,8 @@ describe("project query keys", () => {
       projectQueryKeys.project("A"),
       projectQueryKeys.work("A"),
       projectQueryKeys.dashboard("A"),
+      projectQueryKeys.episodeViews("A"),
+      projectQueryKeys.scenes("A"),
     ];
 
     for (const key of keys) {
@@ -42,5 +44,11 @@ describe("project query keys", () => {
       "scene",
       1,
     ]);
+    expect(projectQueryKeys.episodeViews("A")).toEqual([
+      "project",
+      "A",
+      "episode-view",
+    ]);
+    expect(projectQueryKeys.scenes("A")).toEqual(["project", "A", "scene"]);
   });
 });
