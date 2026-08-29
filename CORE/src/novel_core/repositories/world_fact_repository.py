@@ -89,6 +89,23 @@ class WorldFactRepository:
         ).fetchone()
         return None if row is None else int(row[0])
 
+    def list(
+        self, *, work_id: int, limit: int, offset: int
+    ) -> tuple[WorldFactRecord, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT id, work_id, topic_key, category, title, statement, details_json,
+                   valid_from, valid_to, canon_status, importance, version,
+                   created_at, updated_at
+            FROM world_facts
+            WHERE work_id = ?
+            ORDER BY id
+            LIMIT ? OFFSET ?
+            """,
+            (work_id, limit, offset),
+        ).fetchall()
+        return tuple(WorldFactRecord(*row) for row in rows)
+
     def search(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[WorldFactRecord, ...]:

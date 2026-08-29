@@ -51,4 +51,34 @@ describe("project query keys", () => {
     ]);
     expect(projectQueryKeys.scenes("A")).toEqual(["project", "A", "scene"]);
   });
+
+  it("provides D3 entity and paginated query keys", () => {
+    const keys = [
+      projectQueryKeys.worldFacts("A", 50, 0),
+      projectQueryKeys.worldFact("A", 1),
+      projectQueryKeys.worldFactSearch("A", "火山", 50, 0),
+      projectQueryKeys.characters("A", 50, 0),
+      projectQueryKeys.character("A", 1),
+      projectQueryKeys.characterSearch("A", "主人公", 50, 0),
+      projectQueryKeys.relationships("A", 1),
+      projectQueryKeys.characterState("A", 1, 2),
+      projectQueryKeys.characterStateHistory("A", 1),
+      projectQueryKeys.characterKnowledge("A", 1, 2),
+      projectQueryKeys.timelineEvents("A", 50, 0),
+      projectQueryKeys.timelineEvent("A", 1),
+      projectQueryKeys.timelineEventSearch("A", "火山", 50),
+      projectQueryKeys.timelineRange("A", "2104-01-01", "2104-12-31", 50),
+      projectQueryKeys.timelineRelations("A", 1, 50, 0),
+    ];
+    for (const key of keys) {
+      expect(key[0]).toBe("project");
+      expect(key[1]).toBe("A");
+    }
+    expect(projectQueryKeys.worldFacts("A", 50, 0)).not.toEqual(
+      projectQueryKeys.worldFacts("B", 50, 0),
+    );
+    expect(projectQueryKeys.worldFacts("A", 50, 0)).not.toEqual(
+      projectQueryKeys.worldFacts("A", 50, 50),
+    );
+  });
 });

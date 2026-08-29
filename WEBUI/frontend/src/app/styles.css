@@ -103,6 +103,23 @@ label { color: #344054; font-size: .88rem; font-weight: 600; }
 .json-block, .draft-latest pre { background: #f8f9fc; border: 1px solid #eaecf0; border-radius: 8px; max-height: 360px; overflow: auto; padding: 12px; white-space: pre-wrap; word-break: break-word; }
 .helper-text { color: #667085; font-size: .85rem; }
 .draft-latest { border-left: 3px solid #175cd3; margin-bottom: 24px; padding-left: 14px; }
+.entity-layout { display: grid; gap: 20px; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); }
+.entity-list-pane, .entity-detail-pane { min-width: 0; }
+.entity-search { display: grid; gap: 8px; margin-bottom: 18px; }
+.search-row { align-items: center; display: flex; gap: 8px; }
+.search-row .field-control { min-width: 0; }
+.mode-switcher { border: 1px solid #eaecf0; border-radius: 8px; display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 18px; padding: 10px 12px; }
+.mode-switcher legend { color: #667085; font-size: .8rem; font-weight: 700; padding: 0 5px; }
+.mode-switcher label { align-items: center; display: flex; gap: 6px; }
+.range-form, .move-form { align-items: end; display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; margin-bottom: 18px; }
+.read-only-meta { color: #667085; font-size: .85rem; line-height: 1.5; }
+.relationship-create-form { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; margin: 18px 0 22px; }
+.relationship-create-form fieldset { border: 1px solid #eaecf0; border-radius: 8px; display: flex; gap: 12px; grid-column: 1 / -1; padding: 10px 12px; }
+.relationship-create-form fieldset legend { color: #667085; font-size: .8rem; font-weight: 700; }
+.relationship-create-form fieldset label { align-items: center; display: flex; gap: 5px; }
+.relationship-editor { border: 1px solid #eaecf0; border-radius: 8px; display: grid; gap: 12px; padding: 12px; }
+.participant-row { align-items: end; border: 1px solid #eaecf0; border-radius: 8px; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; padding: 10px; }
+.participant-row .button { min-height: 36px; }
 
 @media (max-width: 720px) {
   .app-shell { display: block; }
@@ -122,5 +139,10 @@ label { color: #344054; font-size: .88rem; font-weight: 600; }
   .structure-layout { display: block; }
   .structure-detail-route .structure-tree-pane { display: none; }
   .structure-detail-pane { width: 100%; }
+  .entity-layout { display: block; }
+  .entity-detail-route .entity-list-pane { display: none; }
+  .entity-detail-pane { width: 100%; }
   .reference-form { grid-template-columns: 1fr; }
+  .range-form, .move-form, .relationship-create-form, .participant-row { grid-template-columns: 1fr; }
+  .relationship-create-form fieldset { display: grid; }
 }

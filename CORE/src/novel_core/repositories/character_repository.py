@@ -83,6 +83,25 @@ class CharacterRepository:
         ).fetchone()
         return None if row is None else int(row[0])
 
+    def list(
+        self, *, work_id: int, limit: int, offset: int
+    ) -> tuple[CharacterRecord, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT id, work_id, character_key, display_name, entity_type, description,
+                   birth_date, death_date, physical_description, occupation,
+                   core_beliefs, goals, fears, personality, speech_style,
+                   ai_attitude, genetic_modification_attitude, private_notes,
+                   profile_json, canon_status, version, created_at, updated_at
+            FROM characters
+            WHERE work_id = ?
+            ORDER BY id
+            LIMIT ? OFFSET ?
+            """,
+            (work_id, limit, offset),
+        ).fetchall()
+        return tuple(CharacterRecord(*row) for row in rows)
+
     def search(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[CharacterRecord, ...]:

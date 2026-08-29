@@ -145,6 +145,24 @@ class TimelineRepository:
         ).fetchone()
         return None if row is None else int(row[0])
 
+    def list_events(
+        self, *, work_id: int, limit: int, offset: int
+    ) -> tuple[TimelineEventRecord, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT id FROM timeline_events
+            WHERE work_id = ?
+            ORDER BY COALESCE(time_start, '9999-12-31'), id
+            LIMIT ? OFFSET ?
+            """,
+            (work_id, limit, offset),
+        ).fetchall()
+        return tuple(
+            record
+            for (event_id,) in rows
+            if (record := self.get(work_id=work_id, event_id=event_id)) is not None
+        )
+
     def search(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[TimelineEventRecord, ...]:
@@ -179,6 +197,31 @@ class TimelineRepository:
             for (event_id,) in rows
             if (record := self.get(work_id=work_id, event_id=event_id)) is not None
         )
+
+    def list_relations(
+        self,
+        *,
+        work_id: int,
+        event_id: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[TimelineRelationRecord, ...]:
+        condition = "work_id = ?"
+        params: list[object] = [work_id]
+        if event_id is not None:
+            condition += " AND (source_event_id = ? OR target_event_id = ?)"
+            params.extend((event_id, event_id))
+        rows = self._connection.execute(
+            f"""
+            SELECT id, work_id, source_event_id, target_event_id, relation_type, version
+            FROM timeline_event_relations
+            WHERE {condition}
+            ORDER BY id
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+        return tuple(TimelineRelationRecord(*row) for row in rows)
 
     def create_relation(
         self,
