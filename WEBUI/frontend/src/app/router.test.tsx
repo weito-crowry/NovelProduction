@@ -138,6 +138,24 @@ describe("D1 routing and shell", () => {
     );
   });
 
+  it("moves focus into mobile navigation and restores it after Escape", async () => {
+    installFetchMock();
+    renderRouter("/projects/A/dashboard");
+
+    const user = userEvent.setup();
+    const toggle = screen.getByRole("button", { name: "Open navigation" });
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: "Hide navigation" })).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: "Open navigation" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Open navigation" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
   it("does not render project A data after switching to project B", async () => {
     installFetchMock();
     renderRouter("/projects/A/dashboard");
