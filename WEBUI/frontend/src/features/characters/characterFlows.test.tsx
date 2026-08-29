@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectQueryKeys } from "../../api/queryKeys";
 import { appRoutes } from "../../app/routes";
 import type {
   CharacterRecord,
@@ -751,6 +752,45 @@ describe("D3 character flows", () => {
     ).toHaveLength(1);
   });
 
+  it("keeps the relationship query cache aligned after Canon loads the latest", async () => {
+    const currentCharacter = character(1);
+    const currentRelationship = relationship();
+    const latest = { ...currentRelationship, relationship_type: "rival", canon_status: "canon", version: 2 };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/characters?limit=50&offset=0")) return response({ project_id: "A", data: [currentCharacter] });
+      if (url.endsWith("/characters/1")) return response({ project_id: "A", data: currentCharacter });
+      if (url.endsWith("/views/outline")) return response({ project_id: "A", data: outline() });
+      if (url.includes("/relationships?character_id=1")) return response({ project_id: "A", data: [currentRelationship] });
+      if (url.endsWith("/canon/status") && init?.method === "POST") return response({ error: { code: "VERSION_CONFLICT", message: "Changed elsewhere", details: { current_resource: latest } } }, 409);
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+    queryClient.setQueryData(projectQueryKeys.character("A", 1), currentCharacter);
+    queryClient.setQueryData(projectQueryKeys.outline("A"), outline());
+    queryClient.setQueryData(projectQueryKeys.relationships("A", 1), [currentRelationship]);
+    const router = renderWithQueryClient("/projects/A/characters/1", queryClient);
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    await screen.findByDisplayValue("ally");
+    const canonStatus = document.getElementById("relationship-1-target-status");
+    if (!canonStatus) throw new Error("Relationship canon status control not found");
+    await user.selectOptions(canonStatus, "canon");
+    await user.click(screen.getAllByRole("button", { name: "Change canon status" })[0]);
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Load latest and discard local edits" }));
+    await waitFor(() => expect(queryClient.getQueryData(projectQueryKeys.relationships("A", 1))).toEqual([latest]));
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+    await router.navigate("/projects/A/characters");
+    await router.navigate("/projects/A/characters/1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    expect(await screen.findByDisplayValue("rival")).toBeInTheDocument();
+    expect(screen.getByText("Current status: canon · version 2")).toBeInTheDocument();
+  });
+
   it("keeps state edits across conflict fallback and compares JSON semantically", async () => {
     const currentCharacter = character(1);
     const currentState = characterState();
@@ -825,3 +865,15 @@ describe("D3 character flows", () => {
     ).toHaveLength(1);
   });
 });
+
+function renderWithQueryClient(initialEntry: string, queryClient: QueryClient) {
+  const router = createMemoryRouter(appRoutes, {
+    initialEntries: [initialEntry],
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  return router;
+}

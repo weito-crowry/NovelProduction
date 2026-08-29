@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectQueryKeys } from "../../api/queryKeys";
 import { appRoutes } from "../../app/routes";
 import type { InformationItemRecord } from "../../api/types";
 
@@ -88,6 +89,38 @@ describe("D4 information flows", () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1));
   });
 
+  it("invalidates derived caches after an information update even while their data is fresh", async () => {
+    const original = item();
+    const updated = item(1, "Updated", 2);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/information/1") && init?.method === "PATCH") return response({ project_id: "A", data: updated });
+      if (url.endsWith("/information/1")) return response({ project_id: "A", data: original });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+    const derivedKeys = [
+      projectQueryKeys.informationFamily("A"),
+      projectQueryKeys.informationSearchFamily("A"),
+      projectQueryKeys.canonDecisionsFamily("A"),
+      projectQueryKeys.canonDecisionSearchFamily("A"),
+      projectQueryKeys.characterKnowledgeProjectFamily("A"),
+      projectQueryKeys.episodeViews("A"),
+    ];
+    for (const key of derivedKeys) queryClient.setQueryData(key, { cached: true });
+    renderRouteWithClient("/projects/A/information/1", queryClient);
+
+    const user = userEvent.setup();
+    const statement = await screen.findByLabelText("Statement");
+    await user.clear(statement);
+    await user.type(statement, "Updated");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText("Saved");
+
+    for (const key of derivedKeys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
   it("does not request an invalid information route", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -96,3 +129,9 @@ describe("D4 information flows", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+function renderRouteWithClient(initialEntry: string, queryClient: QueryClient) {
+  const router = createMemoryRouter(appRoutes, { initialEntries: [initialEntry] });
+  render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>);
+  return router;
+}

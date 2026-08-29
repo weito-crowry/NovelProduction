@@ -1146,7 +1146,14 @@ function RelationshipEditor({
           const current = rows.find((item) => item.id === baseline.id);
           if (current) adoptLatest(current);
         }}
-        onLoadLatest={(latest) => adoptLatest(latest as RelationshipRecord)}
+        onLoadLatest={(latest) => {
+          const current = latest as RelationshipRecord;
+          adoptLatest(current);
+          queryClient.setQueryData<RelationshipRecord[] | undefined>(
+            projectQueryKeys.relationships(projectId, characterId),
+            (rows) => rows?.map((item) => (item.id === current.id ? current : item)),
+          );
+        }}
       />
       {error && <p role="alert">{error}</p>}
       {conflictOpen && (
