@@ -7,6 +7,8 @@ describe("project query keys", () => {
       projectQueryKeys.project("A"),
       projectQueryKeys.work("A"),
       projectQueryKeys.dashboard("A"),
+      projectQueryKeys.episodeViews("A"),
+      projectQueryKeys.scenes("A"),
     ];
 
     for (const key of keys) {
@@ -20,5 +22,33 @@ describe("project query keys", () => {
     expect(projectQueryKeys.dashboard("A")).not.toEqual(
       projectQueryKeys.dashboard("B"),
     );
+  });
+
+  it("provides project-scoped structure query keys", () => {
+    expect(projectQueryKeys.outline("A")).toEqual(["project", "A", "outline"]);
+    expect(projectQueryKeys.episode("A", 1)).toEqual([
+      "project",
+      "A",
+      "episode",
+      1,
+    ]);
+    expect(projectQueryKeys.episodeView("A", 1)).toEqual([
+      "project",
+      "A",
+      "episode-view",
+      1,
+    ]);
+    expect(projectQueryKeys.scene("A", 1)).toEqual([
+      "project",
+      "A",
+      "scene",
+      1,
+    ]);
+    expect(projectQueryKeys.episodeViews("A")).toEqual([
+      "project",
+      "A",
+      "episode-view",
+    ]);
+    expect(projectQueryKeys.scenes("A")).toEqual(["project", "A", "scene"]);
   });
 });

@@ -1,7 +1,6 @@
 import { NavLink, Link } from "react-router-dom";
 
 const futureSections = [
-  "Structure",
   "World",
   "Characters",
   "Timeline",
@@ -39,6 +38,13 @@ export function Sidebar({
           onClick={onClose}
         >
           Dashboard
+        </NavLink>
+        <NavLink
+          className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+          to={`/projects/${encodeURIComponent(projectId)}/structure`}
+          onClick={onClose}
+        >
+          Structure
         </NavLink>
         <div className="nav-future" aria-label="Future sections">
           {futureSections.map((section) => (
