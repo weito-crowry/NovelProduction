@@ -198,7 +198,10 @@ function ManuscriptEditor({ projectId, episodeId }: { projectId: string; episode
           <div className="form-field"><FieldLabel htmlFor="manuscript-body">Manuscript body</FieldLabel><TextArea id="manuscript-body" rows={18} value={values.body} onChange={(event) => setValues((current) => ({ ...current, body: event.target.value }))} /></div>
           <div className="form-field"><FieldLabel htmlFor="manuscript-change-summary">Change summary</FieldLabel><TextInput id="manuscript-change-summary" value={values.change_summary} onChange={(event) => setValues((current) => ({ ...current, change_summary: event.target.value }))} /></div>
           <p className="helper-text">Saving appends a new revision; it never overwrites an existing draft.</p>
-          <div className="form-actions"><Button type="submit" disabled={saving || !dirty}>Save new revision</Button></div>
+          <div className="form-actions">
+            <Button type="submit" disabled={saving || !dirty}>Save new revision</Button>
+            {dirty && <span className="dirty-indicator">Unsaved changes</span>}
+          </div>
         </form>
         {error && <p role="alert">{error}</p>}
         {savedRevision !== null && <p role="status">Saved revision {savedRevision}</p>}

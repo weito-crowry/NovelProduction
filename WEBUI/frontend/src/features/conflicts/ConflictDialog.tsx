@@ -1,4 +1,6 @@
+import { useId, useRef } from "react";
 import { Button } from "../../components/ui/Button";
+import { useModalFocus } from "../../components/ui/useModalFocus";
 
 export interface ConflictDialogProps<TLocal, TLatest> {
   local: TLocal;
@@ -19,16 +21,25 @@ export function ConflictDialog<TLocal, TLatest>({
   keepActionLabel = "Keep local edits",
   errorMessage = null,
 }: ConflictDialogProps<TLocal, TLatest>) {
+  const headingId = useId();
+  const keepButtonRef = useRef<HTMLButtonElement>(null);
+  const { dialogRef, onKeyDown } = useModalFocus(true, {
+    initialFocusRef: keepButtonRef,
+    onEscape: onKeep,
+  });
+
   return (
     <div className="dialog-backdrop" role="presentation">
       <section
+        ref={dialogRef}
         className="dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="conflict-heading"
+        aria-labelledby={headingId}
+        onKeyDown={onKeyDown}
       >
         <p className="eyebrow">VERSION_CONFLICT</p>
-        <h2 id="conflict-heading">This {entityLabel} changed elsewhere</h2>
+        <h2 id={headingId}>This {entityLabel} changed elsewhere</h2>
         <div className="comparison-grid">
           <div>
             <h3>Local unsaved edits</h3>
@@ -44,7 +55,12 @@ export function ConflictDialog<TLocal, TLatest>({
           </div>
         </div>
         <div className="dialog-actions">
-          <Button type="button" variant="secondary" onClick={onKeep}>
+          <Button
+            ref={keepButtonRef}
+            type="button"
+            variant="secondary"
+            onClick={onKeep}
+          >
             {keepActionLabel}
           </Button>
           <Button type="button" onClick={onDiscard}>

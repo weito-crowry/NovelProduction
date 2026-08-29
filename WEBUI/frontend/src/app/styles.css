@@ -11,6 +11,8 @@
 body { margin: 0; min-width: 320px; }
 button, input, textarea { font: inherit; }
 a { color: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
+select:focus-visible { outline: 3px solid #84adff; outline-offset: 3px; }
 
 .app-shell { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { background: #101828; color: #d0d5dd; padding: 24px 16px; }

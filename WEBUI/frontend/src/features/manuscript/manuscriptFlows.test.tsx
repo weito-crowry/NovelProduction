@@ -48,6 +48,7 @@ describe("D4 manuscript flows", () => {
     const body = screen.getByLabelText("Manuscript body");
     await user.clear(body);
     await user.type(body, "Second draft");
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save new revision" }));
     expect(await screen.findByText("Saved revision 2")).toBeInTheDocument();
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["project", "A", "draft-history", 2, 20] });
