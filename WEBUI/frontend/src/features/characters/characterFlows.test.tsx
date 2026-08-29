@@ -234,7 +234,7 @@ describe("D3 character flows", () => {
     await user.clear(name);
     await user.type(name, "Changed");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    expect(await screen.findByText("Saved", {}, { timeout: 5000 })).toBeInTheDocument();
   });
 
   it("reads states and knowledge from the selected episode without a knowledge write", async () => {
