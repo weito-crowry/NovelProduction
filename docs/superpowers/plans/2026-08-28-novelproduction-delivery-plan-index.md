@@ -25,7 +25,7 @@
 
 4. **Phase D — WEBUI**
    - Plan: `docs/superpowers/plans/2026-08-29-novelproduction-phase-d-webui.md`
-   - Status: complete. D1–D5 implementation and stable-dogfood blocker follow-ups PR #24 and #25 are merged; certified main is `026a7fcf8c42693bd01c49965dd4e9f22da51f72`, main CI is green, and final stable WEBUI dogfood passed. Issue #10 remains open until this bookkeeping record is reviewed and merged.
+   - Status: complete. D1–D5 implementation and stable-dogfood blocker follow-ups PR #24 and #25 are merged; certified main is `026a7fcf8c42693bd01c49965dd4e9f22da51f72`, main CI is green, and final stable WEBUI dogfood passed.
    - Exit state: React/Vite UI covering the Phase 1–3 data surface with explicit save, conflict comparison, project switching, production static serving through FastAPI, browser E2E, and certified stable dogfood.
 
 5. **Phase E — Structured draft editor**
