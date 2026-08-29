@@ -48,4 +48,21 @@ describe("D4 canon flows", () => {
     await user.click(await screen.findByRole("link", { name: /Set information_item 4 canon status/ }));
     expect(await screen.findByText("status_changed")).toBeInTheDocument();
   });
+
+  it("renders the empty state after an empty browse without querying search", async () => {
+    const requests: Array<{ url: string; method: string | undefined }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method });
+      if (url.endsWith("/canon/decisions?limit=50&offset=0")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/canon");
+
+    expect(await screen.findByText("No canon decisions yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading canon history…" })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requests).toEqual([{ url: "/api/v1/projects/A/canon/decisions?limit=50&offset=0", method: undefined }]);
+  });
 });

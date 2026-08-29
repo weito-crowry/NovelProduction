@@ -63,7 +63,8 @@ export function InformationPage() {
     queryFn: () => searchInformation(project, activeSearch, PAGE_SIZE),
     enabled: routeValid && activeSearch !== "",
   });
-  const result = activeSearch === "" ? browseQuery.data : searchQuery.data;
+  const activeQuery = activeSearch === "" ? browseQuery : searchQuery;
+  const result = activeQuery.data;
 
   useEffect(() => {
     if (previousProject.current === project) return;
@@ -112,9 +113,9 @@ export function InformationPage() {
             </div>
           </form>
           {showCreate && <InformationCreateForm projectId={project} onCreated={() => setShowCreate(false)} />}
-          {(browseQuery.isError || searchQuery.isError) && <p role="alert">Unable to load information.</p>}
-          {records.length === 0 && (browseQuery.isPending || searchQuery.isPending) && <p role="status">Loading information…</p>}
-          {records.length === 0 && !browseQuery.isPending && !searchQuery.isPending && <p className="empty-state-inline">No information items yet.</p>}
+          {activeQuery.isError && <p role="alert">Unable to load information.</p>}
+          {records.length === 0 && activeQuery.isPending && <p role="status">Loading information…</p>}
+          {records.length === 0 && activeQuery.isSuccess && <p className="empty-state-inline">No information items yet.</p>}
           <div className="record-list">
             {records.map((record) => <Link key={record.id} className="record-list-item" to={`/projects/${encodeURIComponent(project)}/information/${record.id}`}><span><strong>{record.statement}</strong><small>{record.truth_status} · {record.canon_status}</small></span><small>v{record.version}</small></Link>)}
           </div>
