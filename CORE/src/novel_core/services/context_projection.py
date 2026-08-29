@@ -30,11 +30,11 @@ def parse_foreshadowing(value: str) -> tuple[object, ...]:
         raise ValidationError(
             "foreshadowing_notes must be valid JSON", field="foreshadowing_notes"
         ) from exc
-    if not isinstance(parsed, list):
-        raise ValidationError(
-            "foreshadowing_notes must be a JSON array", field="foreshadowing_notes"
-        )
-    return tuple(parsed)
+    if isinstance(parsed, list):
+        return tuple(parsed)
+    if parsed is None:
+        return ()
+    return (parsed,)
 
 
 def safe_information(item: InformationItemRecord) -> SafeInformationItem:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +10,7 @@ from novel_core.config import DatabaseConfig
 from novel_core.database import open_database
 from novel_core.services.character_service import CharacterService
 from novel_core.services.character_state_service import CharacterStateService
+from novel_core.services.context_projection import parse_foreshadowing
 from novel_core.services.context_service import ContextService
 from novel_core.services.disclosure_service import DisclosureService
 from novel_core.services.draft_service import DraftService
@@ -154,16 +154,45 @@ def test_context_is_stable_and_write_free(services) -> None:
 
 
 def test_context_rejects_malformed_foreshadowing_notes(services) -> None:
+    with pytest.raises(ValueError, match="foreshadowing_notes"):
+        parse_foreshadowing("{not valid json")
+
+
+def test_context_reads_legacy_object_foreshadowing_notes(services) -> None:
     chapter = services.narrative.create_chapter("章")
     episode = services.narrative.create_episode(chapter.id, "対象話")
     services.connection.execute(
         "UPDATE episodes SET foreshadowing_notes_json = ? WHERE id = ?",
-        (json.dumps({"not": "an array"}), episode.id),
+        ('{"hint":"legacy"}', episode.id),
     )
     services.connection.commit()
 
-    with pytest.raises(ValueError, match="foreshadowing_notes"):
-        services.context.build_episode_context(episode.id)
+    context = services.context.build_episode_context(episode.id)
+
+    assert context.foreshadowing_notes == ({"hint": "legacy"},)
+
+
+@pytest.mark.parametrize(
+    ("stored_value", "expected"),
+    [
+        ('"legacy hint"', ("legacy hint",)),
+        ("null", ()),
+    ],
+)
+def test_context_reads_legacy_scalar_and_null_foreshadowing_notes(
+    services, stored_value: str, expected: tuple[object, ...]
+) -> None:
+    chapter = services.narrative.create_chapter("章")
+    episode = services.narrative.create_episode(chapter.id, "対象話")
+    services.connection.execute(
+        "UPDATE episodes SET foreshadowing_notes_json = ? WHERE id = ?",
+        (stored_value, episode.id),
+    )
+    services.connection.commit()
+
+    context = services.context.build_episode_context(episode.id)
+
+    assert context.foreshadowing_notes == expected
 
 
 def test_context_information_cap_applies_to_participant_known_information(

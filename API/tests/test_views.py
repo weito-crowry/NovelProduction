@@ -170,6 +170,70 @@ def test_episode_view_composes_existing_reads_and_missing_draft_is_null(
     assert _database_snapshot(story_db) == before
 
 
+def test_episode_view_reads_legacy_object_foreshadowing_notes_without_repair(
+    client: TestClient, data_root: Path
+) -> None:
+    base = _create_project(client)
+    hierarchy = _create_hierarchy(client, base)
+    episode_id = hierarchy["episodes"][0]["id"]
+    story_db = data_root / "view-project" / "story.db"
+    connection = sqlite3.connect(story_db)
+    try:
+        connection.execute(
+            "UPDATE episodes SET foreshadowing_notes_json = ? WHERE id = ?",
+            ('{"hint":"legacy"}', episode_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    before = _database_snapshot(story_db)
+
+    response = client.get(f"{base}/views/episodes/{episode_id}")
+
+    view = _data(response)
+    assert view["episode"]["foreshadowing_notes_json"] == '{"hint":"legacy"}'
+    assert view["context"]["foreshadowing_notes"] == [{"hint": "legacy"}]
+    assert _database_snapshot(story_db) == before
+
+
+def test_episode_writes_reject_non_array_foreshadowing_notes(
+    client: TestClient, data_root: Path
+) -> None:
+    base = _create_project(client)
+    chapter = _post(client, f"{base}/chapters", {"title": "Chapter"})
+    story_db = data_root / "view-project" / "story.db"
+
+    create_response = client.post(
+        f"{base}/chapters/{chapter['id']}/episodes",
+        json={"title": "Invalid", "foreshadowing_notes": {"hint": "legacy"}},
+    )
+
+    assert create_response.status_code == 400
+    assert create_response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert create_response.json()["error"]["details"] == {
+        "domain_code": "VALIDATION_ERROR"
+    }
+
+    episode = _post(
+        client, f"{base}/chapters/{chapter['id']}/episodes", {"title": "Valid"}
+    )
+    before = _database_snapshot(story_db)
+    update_response = client.patch(
+        f"{base}/episodes/{episode['id']}",
+        json={
+            "expected_version": episode["version"],
+            "foreshadowing_notes": {"hint": "legacy"},
+        },
+    )
+
+    assert update_response.status_code == 400
+    assert update_response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert update_response.json()["error"]["details"] == {
+        "domain_code": "VALIDATION_ERROR"
+    }
+    assert _database_snapshot(story_db) == before
+
+
 def test_episode_view_preserves_work_scope_and_missing_error_details(
     client: TestClient, data_root: Path
 ) -> None:

@@ -84,9 +84,8 @@ class NarrativeService:
             production_status=production_status,
             canon_status=canon_status,
         )
-        fields["foreshadowing_notes_json"] = self._json_text(
+        fields["foreshadowing_notes_json"] = self._foreshadowing_notes_json(
             [] if foreshadowing_notes is None else foreshadowing_notes,
-            "foreshadowing_notes",
         )
         work_id = self._work_id()
         self._repository.begin_write()
@@ -323,8 +322,8 @@ class NarrativeService:
             canon_status=canon_status,
         )
         if foreshadowing_notes is not None:
-            fields["foreshadowing_notes_json"] = self._json_text(
-                foreshadowing_notes, "foreshadowing_notes"
+            fields["foreshadowing_notes_json"] = self._foreshadowing_notes_json(
+                foreshadowing_notes
             )
         return self._update(
             "episodes",
@@ -461,4 +460,25 @@ class NarrativeService:
         except (TypeError, ValueError) as exc:
             raise ValidationError(
                 f"{field_name} must be valid JSON", field=field_name
+            ) from exc
+
+    def _foreshadowing_notes_json(self, value: object) -> str:
+        try:
+            parsed = json.loads(value) if isinstance(value, str) else value
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                "foreshadowing_notes must be valid JSON",
+                field="foreshadowing_notes",
+            ) from exc
+        if not isinstance(parsed, list):
+            raise ValidationError(
+                "foreshadowing_notes must be a JSON array",
+                field="foreshadowing_notes",
+            )
+        try:
+            return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                "foreshadowing_notes must be valid JSON",
+                field="foreshadowing_notes",
             ) from exc
