@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { isApiError } from "../../api/errors";
 import { formatStoredJson, parseJsonEditor } from "../../api/jsonFields";
@@ -312,6 +319,8 @@ function CharacterEditor({
   const [baseline, setBaseline] = useState<CharacterRecord | null>(null);
   const [values, setValues] = useState<CharacterFormValues | null>(null);
   const [tab, setTab] = useState<CharacterTab>("Profile");
+  const [relationshipDirty, setRelationshipDirty] = useState(false);
+  const [stateDirty, setStateDirty] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -332,6 +341,28 @@ function CharacterEditor({
       hasCharacterChanges(values, baseline),
     [baseline, values],
   );
+  const overallDirty = dirty || relationshipDirty || stateDirty;
+  const reportRelationshipDirty = useCallback(
+    (value: boolean) => setRelationshipDirty(value),
+    [],
+  );
+  const reportStateDirty = useCallback(
+    (value: boolean) => setStateDirty(value),
+    [],
+  );
+  function selectTab(next: CharacterTab) {
+    if (next === tab) return;
+    const sectionDirty =
+      (tab === "Relationships" && relationshipDirty) ||
+      (tab === "States" && stateDirty);
+    if (sectionDirty && !window.confirm("Discard unsaved section edits?"))
+      return;
+    if (sectionDirty) {
+      setRelationshipDirty(false);
+      setStateDirty(false);
+    }
+    setTab(next);
+  }
   if (characterQuery.isError)
     return <p role="alert">Unable to load the character.</p>;
   if (characterQuery.isPending || baseline === null || values === null)
@@ -448,7 +479,7 @@ function CharacterEditor({
               role="tab"
               aria-selected={tab === item}
               className={tab === item ? "detail-tab active" : "detail-tab"}
-              onClick={() => setTab(item)}
+              onClick={() => selectTab(item)}
             >
               {item}
             </button>
@@ -482,15 +513,23 @@ function CharacterEditor({
         )}
       </Card>
       {tab === "Relationships" && (
-        <RelationshipsPanel projectId={projectId} characterId={characterId} />
+        <RelationshipsPanel
+          projectId={projectId}
+          characterId={characterId}
+          onDirtyChange={reportRelationshipDirty}
+        />
       )}
       {tab === "States" && (
-        <StatesPanel projectId={projectId} characterId={characterId} />
+        <StatesPanel
+          projectId={projectId}
+          characterId={characterId}
+          onDirtyChange={reportStateDirty}
+        />
       )}
       {tab === "Knowledge" && (
         <KnowledgePanel projectId={projectId} characterId={characterId} />
       )}
-      <DirtyNavigationGuard dirty={dirty} />
+      <DirtyNavigationGuard dirty={overallDirty} />
       {conflictLatest && (
         <ConflictDialog
           local={values}
@@ -621,9 +660,11 @@ function CharacterFields({
 function RelationshipsPanel({
   projectId,
   characterId,
+  onDirtyChange,
 }: {
   projectId: string;
   characterId: number;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const relationshipsQuery = useQuery({
@@ -641,12 +682,26 @@ function RelationshipsPanel({
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [dirtyIds, setDirtyIds] = useState<Set<number>>(() => new Set());
   const mutation = useMutation({
     mutationFn: (input: RelationshipCreate) =>
       createRelationship(projectId, input),
     retry: false,
   });
   const episodes = episodeOptions(outlineQuery.data);
+  useEffect(() => {
+    onDirtyChange(dirtyIds.size > 0);
+  }, [dirtyIds, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  const reportEditorDirty = useCallback((id: number, dirty: boolean) => {
+    setDirtyIds((current) => {
+      if (current.has(id) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   async function submit(event: FormEvent) {
     event.preventDefault();
     const id = positiveInteger(otherId);
@@ -790,6 +845,7 @@ function RelationshipsPanel({
               characterId={characterId}
               record={record}
               episodes={episodes}
+              onDirtyChange={(dirty) => reportEditorDirty(record.id, dirty)}
             />
           ))}
         </div>
@@ -803,68 +859,90 @@ function RelationshipEditor({
   characterId,
   record,
   episodes,
+  onDirtyChange,
 }: {
   projectId: string;
   characterId: number;
   record: RelationshipRecord;
   episodes: EpisodeRecord[];
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const queryClient = useQueryClient();
+  const [baseline, setBaseline] = useState(record);
   const [type, setType] = useState(record.relationship_type);
   const [description, setDescription] = useState(record.description);
   const [from, setFrom] = useState(
-    record.valid_from_episode_id === null
+    baseline.valid_from_episode_id === null
       ? ""
-      : String(record.valid_from_episode_id),
+      : String(baseline.valid_from_episode_id),
   );
   const [to, setTo] = useState(
-    record.valid_to_episode_id === null
+    baseline.valid_to_episode_id === null
       ? ""
-      : String(record.valid_to_episode_id),
+      : String(baseline.valid_to_episode_id),
   );
+  const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [latest, setLatest] = useState<RelationshipRecord | null>(null);
+  const [conflictOpen, setConflictOpen] = useState(false);
   const mutation = useMutation({
     mutationFn: (input: RelationshipUpdate) =>
       updateRelationship(projectId, record.id, input),
     retry: false,
   });
   const dirty =
-    type !== record.relationship_type ||
-    description !== record.description ||
+    type !== baseline.relationship_type ||
+    description !== baseline.description ||
     from !==
-      (record.valid_from_episode_id === null
+      (baseline.valid_from_episode_id === null
         ? ""
-        : String(record.valid_from_episode_id)) ||
+        : String(baseline.valid_from_episode_id)) ||
     to !==
-      (record.valid_to_episode_id === null
+      (baseline.valid_to_episode_id === null
         ? ""
-        : String(record.valid_to_episode_id));
+        : String(baseline.valid_to_episode_id));
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (!dirty && latest === null && record.version !== baseline.version) {
+      adoptLatest(record);
+    }
+  }, [baseline.version, dirty, latest, record]);
   async function save() {
     if (!dirty) return;
     const input: RelationshipUpdate = {
-      expected_version: record.version,
+      expected_version: baseline.version,
       relationship_type: type,
-      ...(description !== record.description ? { description } : {}),
+      ...(description !== baseline.description ? { description } : {}),
       ...(from !==
-      (record.valid_from_episode_id === null
+      (baseline.valid_from_episode_id === null
         ? ""
-        : String(record.valid_from_episode_id))
+        : String(baseline.valid_from_episode_id))
         ? from
           ? { valid_from_episode_id: Number(from) }
           : { clear_valid_from: true }
         : {}),
       ...(to !==
-      (record.valid_to_episode_id === null
+      (baseline.valid_to_episode_id === null
         ? ""
-        : String(record.valid_to_episode_id))
+        : String(baseline.valid_to_episode_id))
         ? to
           ? { valid_to_episode_id: Number(to) }
           : { clear_valid_to: true }
         : {}),
+      ...(reason.trim() ? { reason: reason.trim() } : {}),
     };
     try {
-      await mutation.mutateAsync(input);
+      const updated = await mutation.mutateAsync(input);
+      setBaseline(updated);
+      adoptLatest(updated);
+      setReason("");
+      queryClient.setQueryData<RelationshipRecord[] | undefined>(
+        projectQueryKeys.relationships(projectId, characterId),
+        (current) =>
+          current?.map((item) => (item.id === updated.id ? updated : item)),
+      );
       await queryClient.invalidateQueries({
         queryKey: projectQueryKeys.relationships(projectId, characterId),
       });
@@ -881,11 +959,22 @@ function RelationshipEditor({
         const current = asRecord<RelationshipRecord>(
           caught.details.current_resource,
         );
-        if (current) setLatest(current);
-        else {
+        if (current) {
+          setLatest(current);
+          queryClient.setQueryData<RelationshipRecord[] | undefined>(
+            projectQueryKeys.relationships(projectId, characterId),
+            (rows) =>
+              rows?.map((item) => (item.id === current.id ? current : item)),
+          );
+          setError(null);
+        } else {
           try {
             const rows = await fetchRelationships(projectId, characterId);
-            const found = rows.find((item) => item.id === record.id);
+            queryClient.setQueryData(
+              projectQueryKeys.relationships(projectId, characterId),
+              rows,
+            );
+            const found = rows.find((item) => item.id === baseline.id);
             if (found) setLatest(found);
             else
               setError(
@@ -897,6 +986,7 @@ function RelationshipEditor({
             );
           }
         }
+        setConflictOpen(true);
         return;
       }
       setError(
@@ -906,7 +996,29 @@ function RelationshipEditor({
       );
     }
   }
+  async function loadLatest() {
+    try {
+      const rows = await fetchRelationships(projectId, characterId);
+      queryClient.setQueryData(
+        projectQueryKeys.relationships(projectId, characterId),
+        rows,
+      );
+      const found = rows.find((item) => item.id === baseline.id);
+      if (!found) {
+        setError(
+          "The relationship no longer appears in the selected character list.",
+        );
+        return;
+      }
+      adoptLatest(found);
+    } catch {
+      setError(
+        "The latest relationship could not be loaded. Your local edits were kept.",
+      );
+    }
+  }
   function adoptLatest(value: RelationshipRecord) {
+    setBaseline(value);
     setType(value.relationship_type);
     setDescription(value.description);
     setFrom(
@@ -919,48 +1031,61 @@ function RelationshipEditor({
         ? ""
         : String(value.valid_to_episode_id),
     );
+    setReason("");
     setLatest(null);
+    setConflictOpen(false);
+    setError(null);
   }
   return (
     <div className="relationship-editor">
       <div>
-        <strong>#{record.id}</strong> {record.source_character_id} →{" "}
-        {record.target_character_id}
+        <strong>#{baseline.id}</strong> {baseline.source_character_id} →{" "}
+        {baseline.target_character_id}
       </div>
       <div className="editor-form">
         <div className="field-group">
-          <FieldLabel htmlFor={`relationship-${record.id}-type`}>
+          <FieldLabel htmlFor={`relationship-${baseline.id}-type`}>
             Relationship type
           </FieldLabel>
           <TextInput
-            id={`relationship-${record.id}-type`}
+            id={`relationship-${baseline.id}-type`}
             value={type}
             onChange={(event) => setType(event.target.value)}
           />
         </div>
         <div className="field-group">
-          <FieldLabel htmlFor={`relationship-${record.id}-description`}>
+          <FieldLabel htmlFor={`relationship-${baseline.id}-description`}>
             Description
           </FieldLabel>
           <TextInput
-            id={`relationship-${record.id}-description`}
+            id={`relationship-${baseline.id}-description`}
             value={description}
             onChange={(event) => setDescription(event.target.value)}
           />
         </div>
         <EpisodeSelect
-          id={`relationship-${record.id}-from`}
+          id={`relationship-${baseline.id}-from`}
           label="Valid from episode"
           value={from}
           options={episodes}
           onChange={setFrom}
         />
         <EpisodeSelect
-          id={`relationship-${record.id}-to`}
+          id={`relationship-${baseline.id}-to`}
           label="Valid to episode"
           value={to}
           options={episodes}
           onChange={setTo}
+        />
+      </div>
+      <div className="field-group">
+        <FieldLabel htmlFor={`relationship-${baseline.id}-reason`}>
+          Reason (optional)
+        </FieldLabel>
+        <TextInput
+          id={`relationship-${baseline.id}-reason`}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
         />
       </div>
       <Button
@@ -971,13 +1096,17 @@ function RelationshipEditor({
         Save relationship
       </Button>
       {error && <p role="alert">{error}</p>}
-      {latest && (
+      {conflictOpen && (
         <ConflictDialog
-          local={{ type, description, from, to }}
+          local={{ type, description, from, to, reason }}
           latest={latest}
           entityLabel="relationship"
-          onDiscard={() => adoptLatest(latest)}
-          onKeep={() => setLatest(null)}
+          onDiscard={() => void loadLatest()}
+          onKeep={() => {
+            setConflictOpen(false);
+            setLatest(null);
+            setError(null);
+          }}
         />
       )}
     </div>
@@ -987,80 +1116,152 @@ function RelationshipEditor({
 function StatesPanel({
   projectId,
   characterId,
+  onDirtyChange,
 }: {
   projectId: string;
   characterId: number;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
-  const queryClient = useQueryClient();
   const outlineQuery = useQuery({
     queryKey: projectQueryKeys.outline(projectId),
     queryFn: () => fetchOutline(projectId),
   });
   const [episodeId, setEpisodeId] = useState<number | null>(null);
-  const [baseline, setBaseline] = useState<CharacterStateRecord | null>(null);
-  const [values, setValues] = useState<StateFormValues | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [latest, setLatest] = useState<CharacterStateRecord | null>(null);
+  const [episodeDirty, setEpisodeDirty] = useState(false);
   const episodes = episodeOptions(outlineQuery.data);
   useEffect(() => {
     if (episodeId === null && episodes[0]) setEpisodeId(episodes[0].id);
   }, [episodeId, episodes]);
-  const effectiveQuery = useQuery({
-    queryKey: projectQueryKeys.characterState(
-      projectId,
-      characterId,
-      episodeId ?? 0,
-    ),
-    queryFn: () => fetchCharacterState(projectId, characterId, episodeId ?? 0),
-    enabled: episodeId !== null,
-  });
+  useEffect(() => {
+    onDirtyChange(episodeDirty);
+  }, [episodeDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   const historyQuery = useQuery({
     queryKey: projectQueryKeys.characterStateHistory(projectId, characterId),
     queryFn: () => fetchCharacterStateHistory(projectId, characterId),
   });
-  useEffect(() => {
-    if (effectiveQuery.isSuccess) {
-      setBaseline(effectiveQuery.data);
-      setValues(toStateForm(effectiveQuery.data));
-      setLatest(null);
-    }
-  }, [effectiveQuery.data, effectiveQuery.isSuccess]);
-  if (outlineQuery.isError || historyQuery.isError || effectiveQuery.isError)
+  function selectEpisode(value: string) {
+    const nextEpisodeId = Number(value);
+    if (nextEpisodeId === episodeId) return;
+    if (episodeDirty && !window.confirm("Discard unsaved state edits?")) return;
+    setEpisodeDirty(false);
+    setEpisodeId(nextEpisodeId);
+  }
+  if (outlineQuery.isError || historyQuery.isError)
     return (
       <Card>
         <p role="alert">Unable to load character state.</p>
       </Card>
     );
-  if (
-    outlineQuery.isPending ||
-    historyQuery.isPending ||
-    episodeId === null ||
-    values === null
-  )
+  if (outlineQuery.isPending || historyQuery.isPending || episodeId === null)
     return (
       <Card>
         <p role="status">Loading character state…</p>
       </Card>
     );
-  const currentEpisodeId = episodeId;
+  return (
+    <Card>
+      <div className="section-heading">
+        <h2>States</h2>
+        <EpisodeSelect
+          id="state-episode"
+          label="Episode"
+          value={String(episodeId)}
+          options={episodes}
+          onChange={selectEpisode}
+        />
+      </div>
+      <StateEpisodeEditor
+        key={`${projectId}-${characterId}-${episodeId}`}
+        projectId={projectId}
+        characterId={characterId}
+        episodeId={episodeId}
+        onDirtyChange={setEpisodeDirty}
+      />
+      <h3>History</h3>
+      {(historyQuery.data ?? []).length === 0 ? (
+        <p>No state history.</p>
+      ) : (
+        <div className="record-list">
+          {(historyQuery.data ?? []).map((item) => (
+            <div className="record-list-item" key={item.id}>
+              Episode {item.episode_id} · v{item.version}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function StateEpisodeEditor({
+  projectId,
+  characterId,
+  episodeId,
+  onDirtyChange,
+}: {
+  projectId: string;
+  characterId: number;
+  episodeId: number;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const effectiveQuery = useQuery({
+    queryKey: projectQueryKeys.characterState(
+      projectId,
+      characterId,
+      episodeId,
+    ),
+    queryFn: () => fetchCharacterState(projectId, characterId, episodeId),
+    retry: false,
+  });
+  const [baseline, setBaseline] = useState<CharacterStateRecord | null>(null);
+  const [values, setValues] = useState<StateFormValues | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [latest, setLatest] = useState<CharacterStateRecord | null>(null);
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const dirty = values !== null && hasStateChanges(values, baseline);
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
+  useEffect(() => {
+    if (!effectiveQuery.isSuccess) return;
+    const baselineVersion = baseline?.version ?? null;
+    const queryVersion = effectiveQuery.data?.version ?? null;
+    const shouldAdopt =
+      values === null || (!dirty && baselineVersion !== queryVersion);
+    if (!shouldAdopt) return;
+    setBaseline(effectiveQuery.data);
+    setValues(toStateForm(effectiveQuery.data));
+    setLatest(null);
+    setConflictOpen(false);
+  }, [baseline, dirty, effectiveQuery.data, effectiveQuery.isSuccess, values]);
+  if (effectiveQuery.isError)
+    return <p role="alert">Unable to load character state.</p>;
+  if (effectiveQuery.isPending || values === null)
+    return <p role="status">Loading character state…</p>;
   const currentValues = values;
   async function save() {
+    if (!dirty) return;
     try {
       const input = buildStateSet(currentValues, baseline);
       const saved = await setCharacterState(
         projectId,
         characterId,
-        currentEpisodeId,
+        episodeId,
         input,
       );
+      queryClient.setQueryData(
+        projectQueryKeys.characterState(projectId, characterId, episodeId),
+        saved,
+      );
+      setBaseline(saved);
+      setValues(toStateForm(saved));
+      setLatest(null);
+      setConflictOpen(false);
+      setError(null);
       await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: projectQueryKeys.characterState(
-            projectId,
-            characterId,
-            currentEpisodeId,
-          ),
-        }),
         queryClient.invalidateQueries({
           queryKey: projectQueryKeys.characterStateHistory(
             projectId,
@@ -1071,21 +1272,35 @@ function StatesPanel({
           queryKey: projectQueryKeys.episodeViews(projectId),
         }),
       ]);
-      setBaseline(saved);
-      setValues(toStateForm(saved));
-      setError(null);
     } catch (caught) {
-      if (isApiError(caught) && caught.status === 409) {
+      if (
+        isApiError(caught) &&
+        caught.status === 409 &&
+        caught.code === "VERSION_CONFLICT"
+      ) {
         const current = asRecord<CharacterStateRecord>(
           caught.details.current_resource,
         );
-        if (current) setLatest(current);
-        else {
+        if (current) {
+          setLatest(current);
+          queryClient.setQueryData(
+            projectQueryKeys.characterState(projectId, characterId, episodeId),
+            current,
+          );
+        } else {
           try {
             const fetched = await fetchCharacterState(
               projectId,
               characterId,
-              currentEpisodeId,
+              episodeId,
+            );
+            queryClient.setQueryData(
+              projectQueryKeys.characterState(
+                projectId,
+                characterId,
+                episodeId,
+              ),
+              fetched,
             );
             setLatest(fetched);
           } catch {
@@ -1094,6 +1309,7 @@ function StatesPanel({
             );
           }
         }
+        setConflictOpen(true);
         return;
       }
       setError(
@@ -1103,18 +1319,30 @@ function StatesPanel({
   }
   const update = (field: keyof StateFormValues, value: string) =>
     setValues({ ...currentValues, [field]: value });
+  async function loadLatest() {
+    try {
+      const fetched = await fetchCharacterState(
+        projectId,
+        characterId,
+        episodeId,
+      );
+      queryClient.setQueryData(
+        projectQueryKeys.characterState(projectId, characterId, episodeId),
+        fetched,
+      );
+      setBaseline(fetched);
+      setValues(toStateForm(fetched));
+      setLatest(null);
+      setConflictOpen(false);
+      setError(null);
+    } catch {
+      setError(
+        "The latest state could not be loaded. Your local edits were kept.",
+      );
+    }
+  }
   return (
-    <Card>
-      <div className="section-heading">
-        <h2>States</h2>
-        <EpisodeSelect
-          id="state-episode"
-          label="Episode"
-          value={String(episodeId)}
-          options={episodes}
-          onChange={(value) => setEpisodeId(Number(value))}
-        />
-      </div>
+    <>
       {baseline === null && <p>No state for this episode.</p>}
       <div className="editor-form">
         <div className="field-group">
@@ -1168,35 +1396,24 @@ function StatesPanel({
         </div>
       </div>
       {error && <p role="alert">{error}</p>}
-      <Button type="button" onClick={() => void save()}>
+      <Button type="button" onClick={() => void save()} disabled={!dirty}>
         Save state
       </Button>
-      {latest && (
+      {conflictOpen && (
         <ConflictDialog
           local={currentValues}
           latest={latest}
           entityLabel="character state"
-          onDiscard={() => {
-            setBaseline(latest);
-            setValues(toStateForm(latest));
+          onDiscard={() => void loadLatest()}
+          onKeep={() => {
+            setConflictOpen(false);
             setLatest(null);
+            setError(null);
           }}
-          onKeep={() => setLatest(null)}
+          errorMessage={error}
         />
       )}
-      <h3>History</h3>
-      {(historyQuery.data ?? []).length === 0 ? (
-        <p>No state history.</p>
-      ) : (
-        <div className="record-list">
-          {(historyQuery.data ?? []).map((item) => (
-            <div className="record-list-item" key={item.id}>
-              Episode {item.episode_id} · v{item.version}
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
+    </>
   );
 }
 
@@ -1443,6 +1660,28 @@ function toStateForm(record: CharacterStateRecord | null): StateFormValues {
         state_json: formatStoredJson(record.state_json),
       };
 }
+function hasStateChanges(
+  values: StateFormValues,
+  baseline: CharacterStateRecord | null,
+): boolean {
+  const empty = emptyStateForm();
+  return (
+    values.physical_state !==
+      (baseline?.physical_state ?? empty.physical_state) ||
+    values.emotional_state !==
+      (baseline?.emotional_state ?? empty.emotional_state) ||
+    jsonChanged(
+      values.beliefs_json,
+      baseline?.beliefs_json ?? empty.beliefs_json,
+    ) ||
+    values.location_world_fact_id !==
+      (baseline?.location_world_fact_id === null ||
+      baseline?.location_world_fact_id === undefined
+        ? empty.location_world_fact_id
+        : String(baseline.location_world_fact_id)) ||
+    jsonChanged(values.state_json, baseline?.state_json ?? empty.state_json)
+  );
+}
 function buildStateSet(
   values: StateFormValues,
   baseline: CharacterStateRecord | null,
@@ -1468,13 +1707,40 @@ function buildStateSet(
 }
 function jsonChanged(left: string, right: string): boolean {
   try {
-    return (
-      JSON.stringify(parseJsonEditor(left)) !==
-      JSON.stringify(JSON.parse(right))
-    );
+    return !jsonValuesEqual(parseJsonEditor(left), JSON.parse(right));
   } catch {
     return true;
   }
+}
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]))
+    );
+  }
+  if (
+    typeof left !== "object" ||
+    left === null ||
+    typeof right !== "object" ||
+    right === null
+  )
+    return false;
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(rightRecord, key) &&
+        jsonValuesEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
 }
 function asRecord<T>(value: unknown): T | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)

@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRoutes } from "../../app/routes";
 import type {
   CharacterRecord,
+  CharacterStateRecord,
   EffectiveKnowledgeRecord,
+  RelationshipRecord,
 } from "../../api/types";
 
 function response(value: unknown, status = 200): Response {
@@ -41,6 +43,44 @@ function character(id: number, projectId = "A"): CharacterRecord {
     version: 1,
     created_at: "2026-01-01",
     updated_at: "2026-01-01",
+  };
+}
+
+function relationship(id = 1, version = 1): RelationshipRecord {
+  return {
+    id,
+    work_id: 1,
+    source_character_id: 1,
+    target_character_id: 2,
+    relationship_type: "ally",
+    description: "",
+    canon_status: "draft",
+    valid_from_episode_id: null,
+    valid_to_episode_id: null,
+    version,
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+function characterState(
+  episodeId = 20,
+  version = 1,
+  physicalState = "calm",
+): CharacterStateRecord {
+  return {
+    id: 50,
+    work_id: 1,
+    character_id: 1,
+    episode_id: episodeId,
+    physical_state: physicalState,
+    emotional_state: "focused",
+    beliefs_json: '{"a":1,"b":2}',
+    location_world_fact_id: null,
+    state_json: "{}",
+    version,
+    created_at: "",
+    updated_at: "",
   };
 }
 
@@ -247,10 +287,408 @@ describe("D3 character flows", () => {
     await user.click(screen.getByRole("tab", { name: "Knowledge" }));
     expect(await screen.findByText("A secret")).toBeInTheDocument();
     expect(
-      (fetchMock.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit | undefined]>).some(
+      (
+        fetchMock.mock.calls as unknown as Array<
+          [RequestInfo | URL, RequestInit | undefined]
+        >
+      ).some(
         ([, init]) =>
           init?.method === "PUT" && String(init?.body).includes("knowledge"),
       ),
     ).toBe(false);
+  });
+
+  it("uses the returned relationship version as baseline and sends reason only with semantic edits", async () => {
+    const currentCharacter = character(1);
+    let currentRelationship = relationship();
+    const patchBodies: unknown[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacter });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        if (url.includes("/relationships?character_id=1"))
+          return response({ project_id: "A", data: [currentRelationship] });
+        if (url.endsWith("/relationships/1") && init?.method === "PATCH") {
+          const body = JSON.parse(String(init.body));
+          patchBodies.push(body);
+          currentRelationship = {
+            ...currentRelationship,
+            relationship_type: body.relationship_type,
+            version: currentRelationship.version + 1,
+          };
+          return response({ project_id: "A", data: currentRelationship });
+        }
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/characters/1");
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    const type = await screen.findByDisplayValue("ally");
+    const reason = screen.getByLabelText("Reason (optional)");
+    await user.type(reason, "  because  ");
+    expect(
+      screen.getByRole("button", { name: "Save relationship" }),
+    ).toBeDisabled();
+    await user.clear(type);
+    await user.type(type, "rival");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    await waitFor(() => expect(patchBodies).toHaveLength(1));
+    expect(patchBodies[0]).toEqual({
+      expected_version: 1,
+      relationship_type: "rival",
+      reason: "because",
+    });
+    expect(reason).toHaveValue("");
+
+    const refreshedType = await screen.findByDisplayValue("rival");
+    await user.clear(refreshedType);
+    await user.type(refreshedType, "enemy");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    await waitFor(() => expect(patchBodies).toHaveLength(2));
+    expect(patchBodies[1]).toMatchObject({
+      expected_version: 2,
+      relationship_type: "enemy",
+    });
+    expect(patchBodies[1]).not.toHaveProperty("reason");
+  });
+
+  it("keeps relationship edits and old version after conflict, while guarding external navigation", async () => {
+    const currentCharacter = character(1);
+    const currentRelationship = relationship();
+    const latest = {
+      ...currentRelationship,
+      relationship_type: "rival",
+      version: 2,
+    };
+    const patchBodies: unknown[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacter });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        if (url.includes("/relationships?character_id=1"))
+          return response({ project_id: "A", data: [currentRelationship] });
+        if (url.endsWith("/relationships/1") && init?.method === "PATCH") {
+          patchBodies.push(JSON.parse(String(init.body)));
+          if (patchBodies.length === 1)
+            return response(
+              {
+                error: {
+                  code: "VERSION_CONFLICT",
+                  message: "Conflict",
+                  details: { current_resource: latest },
+                },
+              },
+              409,
+            );
+          return response({ project_id: "A", data: latest });
+        }
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const router = renderRoute("/projects/A/characters/1");
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    const type = await screen.findByDisplayValue("ally");
+    await user.clear(type);
+    await user.type(type, "changed locally");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    expect(
+      await screen.findByText("This relationship changed elsewhere"),
+    ).toBeInTheDocument();
+
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await router.navigate("/projects/A/characters");
+    expect(
+      await screen.findByText("Leave without saving?"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(screen.getByDisplayValue("changed locally")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Keep local edits" }));
+    const keptType = screen.getByDisplayValue("changed locally");
+    await user.clear(keptType);
+    await user.type(keptType, "changed again");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    await waitFor(() => expect(patchBodies).toHaveLength(2));
+    expect(patchBodies[1]).toMatchObject({ expected_version: 1 });
+  });
+
+  it("loads a current-resource relationship conflict before the next save", async () => {
+    const currentCharacter = character(1);
+    const currentRelationship = relationship();
+    const latest = {
+      ...currentRelationship,
+      relationship_type: "rival",
+      version: 2,
+    };
+    const next = { ...latest, relationship_type: "enemy", version: 3 };
+    let relationshipReads = 0;
+    const patchBodies: unknown[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacter });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        if (url.includes("/relationships?character_id=1")) {
+          relationshipReads += 1;
+          return response({
+            project_id: "A",
+            data: [relationshipReads === 1 ? currentRelationship : latest],
+          });
+        }
+        if (url.endsWith("/relationships/1") && init?.method === "PATCH") {
+          const body = JSON.parse(String(init.body));
+          patchBodies.push(body);
+          if (patchBodies.length === 1)
+            return response(
+              {
+                error: {
+                  code: "VERSION_CONFLICT",
+                  message: "Conflict",
+                  details: { current_resource: latest },
+                },
+              },
+              409,
+            );
+          return response({ project_id: "A", data: next });
+        }
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/characters/1");
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    const type = await screen.findByDisplayValue("ally");
+    await user.clear(type);
+    await user.type(type, "changed locally");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    expect(
+      await screen.findByText("This relationship changed elsewhere"),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Load latest and discard local edits",
+      }),
+    );
+    expect(relationshipReads).toBe(2);
+    const latestType = await screen.findByDisplayValue("rival");
+    await user.clear(latestType);
+    await user.type(latestType, "enemy");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    await waitFor(() => expect(patchBodies).toHaveLength(2));
+    expect(patchBodies[1]).toMatchObject({ expected_version: 2 });
+  });
+
+  it("does not save an unchanged state and confirms dirty episode switches", async () => {
+    const view = outline();
+    const firstEpisode = view.chapters[0].episodes[0].episode;
+    view.chapters[0].episodes.push({
+      ...view.chapters[0].episodes[0],
+      episode: { ...firstEpisode, id: 21, title: "Episode 2" },
+    });
+    const currentCharacter = character(1);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/characters/1"))
+        return response({ project_id: "A", data: currentCharacter });
+      if (url.endsWith("/views/outline"))
+        return response({ project_id: "A", data: view });
+      if (url.includes("/states/20") || url.includes("/states/21"))
+        return response({ project_id: "A", data: null });
+      if (url.endsWith("/characters/1/states"))
+        return response({ project_id: "A", data: [] });
+      return response(
+        { error: { code: "NOT_FOUND", message: "Not found" } },
+        404,
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/characters/1");
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "States" }));
+    expect(
+      await screen.findByText("No state for this episode."),
+    ).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save state" });
+    expect(save).toBeDisabled();
+    await user.type(screen.getByLabelText("Physical state"), "injured");
+    expect(save).toBeEnabled();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    fireEvent.change(screen.getByLabelText("Episode"), {
+      target: { value: "21" },
+    });
+    expect(screen.getByLabelText("Episode")).toHaveValue("20");
+    vi.mocked(window.confirm).mockReturnValue(true);
+    fireEvent.change(screen.getByLabelText("Episode"), {
+      target: { value: "21" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Episode")).toHaveValue("21"),
+    );
+  });
+
+  it("loads a relationship conflict fallback without retrying the write", async () => {
+    const currentCharacter = character(1);
+    const currentRelationship = relationship();
+    const latest = {
+      ...currentRelationship,
+      relationship_type: "rival",
+      version: 2,
+    };
+    let relationshipReads = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacter });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        if (url.includes("/relationships?character_id=1")) {
+          relationshipReads += 1;
+          return response({
+            project_id: "A",
+            data: [relationshipReads === 1 ? currentRelationship : latest],
+          });
+        }
+        if (url.endsWith("/relationships/1") && init?.method === "PATCH")
+          return response(
+            {
+              error: {
+                code: "VERSION_CONFLICT",
+                message: "Conflict",
+                details: {},
+              },
+            },
+            409,
+          );
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/characters/1");
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    const type = await screen.findByDisplayValue("ally");
+    await user.clear(type);
+    await user.type(type, "changed locally");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    expect(
+      await screen.findByText("This relationship changed elsewhere"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      '"relationship_type": "rival"',
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Load latest and discard local edits",
+      }),
+    );
+    expect(await screen.findByDisplayValue("rival")).toBeInTheDocument();
+    expect(relationshipReads).toBe(3);
+    expect(
+      fetchMock.mock.calls.filter(([, request]) => request?.method === "PATCH"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps state edits across conflict fallback and compares JSON semantically", async () => {
+    const currentCharacter = character(1);
+    const currentState = characterState();
+    const latest = characterState(20, 2, "latest");
+    let stateReads = 0;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacter });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        if (url.includes("/characters/1/states/20") && init?.method === "PUT")
+          return response(
+            {
+              error: {
+                code: "VERSION_CONFLICT",
+                message: "Conflict",
+                details: {},
+              },
+            },
+            409,
+          );
+        if (url.includes("/characters/1/states/20")) {
+          stateReads += 1;
+          return response({
+            project_id: "A",
+            data: stateReads === 1 ? currentState : latest,
+          });
+        }
+        if (url.endsWith("/characters/1/states"))
+          return response({ project_id: "A", data: [currentState] });
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/characters/1");
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "States" }));
+    const beliefs = await screen.findByLabelText("Beliefs JSON");
+    fireEvent.change(beliefs, {
+      target: { value: '{"b":2,"a":1}' },
+    });
+    const save = screen.getByRole("button", { name: "Save state" });
+    expect(save).toBeDisabled();
+    const physical = screen.getByLabelText("Physical state");
+    await user.clear(physical);
+    await user.type(physical, "local");
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(
+      await screen.findByText("This character state changed elsewhere"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      '"physical_state": "latest"',
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Load latest and discard local edits",
+      }),
+    );
+    expect(await screen.findByLabelText("Physical state")).toHaveValue(
+      "latest",
+    );
+    expect(screen.getByRole("button", { name: "Save state" })).toBeDisabled();
+    expect(
+      fetchMock.mock.calls.filter(([, request]) => request?.method === "PUT"),
+    ).toHaveLength(1);
   });
 });

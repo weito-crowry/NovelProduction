@@ -40,6 +40,7 @@ interface EventFormValues {
   consequence_summary: string;
   importance: string;
   participants: TimelineParticipantInput[];
+  reason: string;
 }
 interface CreateEventValues extends EventFormValues {
   event_key: string;
@@ -338,6 +339,7 @@ function TimelineCreateForm({
           prefix="create-timeline"
           includeParticipants
           includeMeta
+          includeReason={false}
         />
         <div className="form-actions">
           <Button type="submit" disabled={mutation.isPending}>
@@ -480,6 +482,7 @@ function TimelineEventEditor({
           prefix="edit-timeline"
           includeParticipants={true}
           includeMeta={false}
+          includeReason={true}
         />
         <p className="read-only-meta">
           Date changes use the separate Move action.
@@ -497,6 +500,7 @@ function TimelineEventEditor({
         projectId={projectId}
         eventId={eventId}
         baseline={baseline}
+        editorDirty={dirty}
         onMoved={(updated) => {
           setBaseline(updated);
           setValues(toEventForm(updated));
@@ -526,17 +530,22 @@ function MoveEventPanel({
   projectId,
   eventId,
   baseline,
+  editorDirty,
   onMoved,
 }: {
   projectId: string;
   eventId: number;
   baseline: TimelineEventRecord;
+  editorDirty: boolean;
   onMoved: (event: TimelineEventRecord) => void;
 }) {
   const queryClient = useQueryClient();
   const [newDate, setNewDate] = useState("");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [latest, setLatest] = useState<TimelineEventRecord | null>(null);
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const [conflictError, setConflictError] = useState<string | null>(null);
   const mutation = useMutation({
     mutationFn: (input: TimelineMove) =>
       moveTimelineEvent(projectId, eventId, input),
@@ -544,6 +553,10 @@ function MoveEventPanel({
   });
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (editorDirty) {
+      setError(null);
+      return;
+    }
     if (!newDate) {
       setError("Enter a new date.");
       return;
@@ -555,11 +568,52 @@ function MoveEventPanel({
         new_date: newDate,
         ...(reason.trim() ? { reason: reason.trim() } : {}),
       });
+      queryClient.setQueryData(
+        projectQueryKeys.timelineEvent(projectId, eventId),
+        updated,
+      );
       onMoved(updated);
       await invalidateTimelineFamilies(projectId, queryClient);
       setNewDate("");
       setReason("");
+      setLatest(null);
+      setConflictOpen(false);
+      setConflictError(null);
     } catch (caught) {
+      if (
+        isApiError(caught) &&
+        caught.status === 409 &&
+        caught.code === "VERSION_CONFLICT"
+      ) {
+        const current = asRecord<TimelineEventRecord>(
+          caught.details.current_resource,
+        );
+        if (current) {
+          setLatest(current);
+          queryClient.setQueryData(
+            projectQueryKeys.timelineEvent(projectId, eventId),
+            current,
+          );
+          setConflictError(null);
+        } else {
+          try {
+            const fetched = await fetchTimelineEvent(projectId, eventId);
+            setLatest(fetched);
+            queryClient.setQueryData(
+              projectQueryKeys.timelineEvent(projectId, eventId),
+              fetched,
+            );
+            setConflictError(null);
+          } catch {
+            setLatest(null);
+            setConflictError(
+              "The latest timeline event could not be loaded. Your Move inputs were kept.",
+            );
+          }
+        }
+        setConflictOpen(true);
+        return;
+      }
       setError(
         caught instanceof Error
           ? caught.message
@@ -567,34 +621,73 @@ function MoveEventPanel({
       );
     }
   }
+  async function loadLatest() {
+    try {
+      const fetched = await fetchTimelineEvent(projectId, eventId);
+      queryClient.setQueryData(
+        projectQueryKeys.timelineEvent(projectId, eventId),
+        fetched,
+      );
+      onMoved(fetched);
+      setNewDate("");
+      setReason("");
+      setLatest(null);
+      setConflictOpen(false);
+      setConflictError(null);
+    } catch {
+      setConflictError(
+        "The latest timeline event could not be loaded. Your Move inputs were kept.",
+      );
+    }
+  }
   return (
-    <Card>
-      <h2>Move event</h2>
-      <form className="move-form" onSubmit={(event) => void submit(event)}>
-        <div className="field-group">
-          <FieldLabel htmlFor="new-date">New date</FieldLabel>
-          <TextInput
-            id="new-date"
-            type="date"
-            value={newDate}
-            onChange={(event) => setNewDate(event.target.value)}
-            required
-          />
-        </div>
-        <div className="field-group">
-          <FieldLabel htmlFor="move-reason">Move reason</FieldLabel>
-          <TextInput
-            id="move-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </div>
-        <Button type="submit" disabled={mutation.isPending}>
-          Move event
-        </Button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-    </Card>
+    <>
+      <Card>
+        <h2>Move event</h2>
+        <form className="move-form" onSubmit={(event) => void submit(event)}>
+          <div className="field-group">
+            <FieldLabel htmlFor="new-date">New date</FieldLabel>
+            <TextInput
+              id="new-date"
+              type="text"
+              placeholder="Examples: 2126年春頃, 正確な日付不明"
+              value={newDate}
+              onChange={(event) => setNewDate(event.target.value)}
+              required
+            />
+          </div>
+          <div className="field-group">
+            <FieldLabel htmlFor="move-reason">Move reason</FieldLabel>
+            <TextInput
+              id="move-reason"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </div>
+          {editorDirty && (
+            <p role="alert">Save or discard event edits before moving.</p>
+          )}
+          {error && <p role="alert">{error}</p>}
+          <Button type="submit" disabled={mutation.isPending || editorDirty}>
+            Move event
+          </Button>
+        </form>
+      </Card>
+      {conflictOpen && (
+        <ConflictDialog
+          local={{ newDate, reason }}
+          latest={latest}
+          entityLabel="timeline event"
+          onDiscard={() => void loadLatest()}
+          onKeep={() => {
+            setConflictOpen(false);
+            setLatest(null);
+            setConflictError(null);
+          }}
+          errorMessage={conflictError}
+        />
+      )}
+    </>
   );
 }
 
@@ -732,12 +825,14 @@ function TimelineFields({
   prefix,
   includeParticipants,
   includeMeta,
+  includeReason,
 }: {
   values: EventFormValues | CreateEventValues;
   setValues: (value: EventFormValues | CreateEventValues) => void;
   prefix: string;
   includeParticipants: boolean;
   includeMeta: boolean;
+  includeReason: boolean;
 }) {
   const update = (field: keyof EventFormValues, value: string) =>
     setValues({ ...values, [field]: value });
@@ -923,6 +1018,18 @@ function TimelineFields({
           ))}
         </div>
       )}
+      {includeReason && (
+        <div className="field-group field-span">
+          <FieldLabel htmlFor={`${prefix}-reason`}>
+            Reason (optional)
+          </FieldLabel>
+          <TextInput
+            id={`${prefix}-reason`}
+            value={(values as EventFormValues).reason}
+            onChange={(event) => update("reason", event.target.value)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -938,7 +1045,8 @@ function emptyCreateEvent(): CreateEventValues {
     cause_summary: "",
     consequence_summary: "",
     importance: "0",
-    participants: [{ character_id: 0, role: "" }],
+    participants: [],
+    reason: "",
   };
 }
 function toEventForm(record: TimelineEventRecord): EventFormValues {
@@ -957,6 +1065,7 @@ function toEventForm(record: TimelineEventRecord): EventFormValues {
       character_id: item.character_id,
       role: item.role,
     })),
+    reason: "",
   };
 }
 function buildCreateEvent(values: CreateEventValues): TimelineEventCreate {
@@ -1060,6 +1169,7 @@ function buildEventUpdate(
     )
   )
     input.participants = buildParticipants(values.participants);
+  if (values.reason.trim()) input.reason = values.reason.trim();
   return input;
 }
 function buildParticipants(
