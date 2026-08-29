@@ -62,9 +62,12 @@ configuration.
 
 ## Isolated Chromium E2E
 
-From `WEBUI/frontend/`:
+From the repository root on a fresh checkout:
 
 ```powershell
+Set-Location API
+uv sync --all-groups
+Set-Location ../WEBUI/frontend
 npm ci
 npm run build
 npx playwright install chromium
@@ -76,6 +79,10 @@ The Playwright web server starts a separate FastAPI process with
 `127.0.0.1:18765` port, and `--webui-dist dist`. Set `NOVEL_E2E_PORT` to use a
 different test-only port. The server refuses an occupied port, never reuses an
 existing server, and removes its temporary data root when it exits.
+
+Because the harness intentionally uses `uv run --no-sync`, the E2E runner must
+run `uv sync --all-groups` from `API/` before starting the browser tests. CI
+uses the same explicit API sync before installing and building the WEBUI.
 
 E2E tests create unique project IDs and must not use repository `data/`, stable
 project `2126`, a stable API process, Tunnel, Connector, or production MCP.
