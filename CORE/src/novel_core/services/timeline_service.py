@@ -204,6 +204,27 @@ class TimelineService:
             limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
+    def list_events(self, limit: int, offset: int) -> tuple[TimelineEventRecord, ...]:
+        if limit <= 0 or offset < 0:
+            return ()
+        return self._repository.list_events(
+            work_id=self._work_id(),
+            limit=limit,
+            offset=offset,
+        )
+
+    def list_relations(
+        self, event_id: int | None, limit: int, offset: int
+    ) -> tuple[TimelineRelationRecord, ...]:
+        if limit <= 0 or offset < 0:
+            return ()
+        return self._repository.list_relations(
+            work_id=self._work_id(),
+            event_id=event_id,
+            limit=limit,
+            offset=offset,
+        )
+
     def range_events(
         self, start: str, end: str, limit: int
     ) -> tuple[TimelineEventRecord, ...]:

@@ -384,3 +384,273 @@ export interface WorkUpdate {
   description?: string;
   production_status?: string;
 }
+
+export interface WorldFactRecord {
+  id: number;
+  work_id: number;
+  topic_key: string;
+  category: string;
+  title: string;
+  statement: string;
+  details_json: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  canon_status: string;
+  importance: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CharacterRecord {
+  id: number;
+  work_id: number;
+  character_key: string;
+  display_name: string;
+  entity_type: string;
+  description: string;
+  birth_date: string | null;
+  death_date: string | null;
+  physical_description: string;
+  occupation: string;
+  core_beliefs: string;
+  goals: string;
+  fears: string;
+  personality: string;
+  speech_style: string;
+  ai_attitude: string;
+  genetic_modification_attitude: string;
+  private_notes: string;
+  profile_json: string;
+  canon_status: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RelationshipRecord {
+  id: number;
+  work_id: number;
+  source_character_id: number;
+  target_character_id: number;
+  relationship_type: string;
+  description: string;
+  canon_status: string;
+  valid_from_episode_id: number | null;
+  valid_to_episode_id: number | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CharacterStateRecord {
+  id: number;
+  work_id: number;
+  character_id: number;
+  episode_id: number;
+  physical_state: string;
+  emotional_state: string;
+  beliefs_json: string;
+  location_world_fact_id: number | null;
+  state_json: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InformationItemRecord {
+  id: number;
+  work_id: number;
+  statement: string;
+  truth_status: string;
+  authoring_guard: string;
+  notes_json: string;
+  canon_status: string;
+  importance: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EffectiveKnowledgeRecord {
+  knowledge_state: string;
+  event_episode_id: number;
+  event_id: number;
+  event_version: number;
+  information_item: InformationItemRecord;
+}
+
+export interface TimelineParticipantRecord {
+  event_id: number;
+  character_id: number;
+  role: string;
+}
+
+export interface TimelineEventRecord {
+  id: number;
+  work_id: number;
+  event_key: string;
+  time_start: string | null;
+  time_end: string | null;
+  date_precision: string;
+  date_display: string;
+  title: string;
+  description: string;
+  category: string;
+  location_world_fact_id: number | null;
+  cause_summary: string;
+  consequence_summary: string;
+  canon_status: string;
+  importance: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  participants: TimelineParticipantRecord[];
+}
+
+export interface TimelineRelationRecord {
+  id: number;
+  work_id: number;
+  source_event_id: number;
+  target_event_id: number;
+  relation_type: string;
+  version: number;
+}
+
+export interface WorldFactCreate {
+  statement: string;
+  topic_key?: string;
+  category?: string;
+  title?: string;
+  details_json?: unknown;
+  valid_from?: string;
+  valid_to?: string;
+  importance?: number;
+}
+
+export interface WorldFactUpdate {
+  statement: string;
+  expected_version: number;
+  reason?: string;
+  topic_key?: string;
+  category?: string;
+  title?: string;
+  details_json?: unknown;
+  valid_from?: string;
+  valid_to?: string;
+  importance?: number;
+}
+
+export interface CharacterCreate {
+  display_name: string;
+  character_key?: string;
+  entity_type?: string;
+  description?: string;
+  birth_date?: string;
+  death_date?: string;
+  physical_description?: string;
+  occupation?: string;
+  core_beliefs?: string;
+  goals?: string;
+  fears?: string;
+  personality?: string;
+  speech_style?: string;
+  ai_attitude?: string;
+  genetic_modification_attitude?: string;
+  private_notes?: string;
+  profile_json?: unknown;
+}
+
+export interface CharacterUpdate {
+  expected_version: number;
+  reason?: string;
+  display_name?: string;
+  description?: string;
+  character_key?: string;
+  entity_type?: string;
+  birth_date?: string;
+  death_date?: string;
+  physical_description?: string;
+  occupation?: string;
+  core_beliefs?: string;
+  goals?: string;
+  fears?: string;
+  personality?: string;
+  speech_style?: string;
+  ai_attitude?: string;
+  genetic_modification_attitude?: string;
+  private_notes?: string;
+  profile_json?: unknown;
+}
+
+export interface RelationshipCreate {
+  source_character_id: number;
+  target_character_id: number;
+  relationship_type: string;
+  description?: string;
+  valid_from_episode_id?: number;
+  valid_to_episode_id?: number;
+}
+
+export interface RelationshipUpdate {
+  expected_version: number;
+  relationship_type: string;
+  reason?: string;
+  description?: string;
+  valid_from_episode_id?: number;
+  valid_to_episode_id?: number;
+  clear_valid_from?: boolean;
+  clear_valid_to?: boolean;
+}
+
+export interface CharacterStateSet {
+  physical_state?: string;
+  emotional_state?: string;
+  beliefs_json?: unknown;
+  location_world_fact_id?: number;
+  state_json?: unknown;
+  expected_version?: number;
+}
+
+export interface TimelineEventCreate {
+  title: string;
+  event_date?: string;
+  participants?: TimelineParticipantInput[];
+  event_key?: string;
+  description?: string;
+  category?: string;
+  location_world_fact_id?: number;
+  cause_summary?: string;
+  consequence_summary?: string;
+  importance?: number;
+}
+
+export interface TimelineParticipantInput {
+  character_id: number;
+  role: string;
+}
+
+export interface TimelineEventUpdate {
+  expected_version: number;
+  title?: string;
+  participants?: TimelineParticipantInput[];
+  reason?: string;
+  description?: string;
+  category?: string;
+  location_world_fact_id?: number;
+  cause_summary?: string;
+  consequence_summary?: string;
+  importance?: number;
+}
+
+export interface TimelineMove {
+  expected_version: number;
+  new_date: string;
+  reason?: string;
+}
+
+export interface TimelineRelationCreate {
+  source_id: number;
+  target_id: number;
+  relation_type: string;
+}

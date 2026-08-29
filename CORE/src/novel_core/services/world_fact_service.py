@@ -139,6 +139,15 @@ class WorldFactService:
             limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
+    def list(self, limit: int, offset: int) -> tuple[WorldFactRecord, ...]:
+        if limit <= 0 or offset < 0:
+            return ()
+        return self._repository.list(
+            work_id=self._work_id(),
+            limit=limit,
+            offset=offset,
+        )
+
     def _work_id(self) -> int:
         record = self._work_repository.get()
         if record is None:

@@ -1,13 +1,6 @@
 import { NavLink, Link } from "react-router-dom";
 
-const futureSections = [
-  "World",
-  "Characters",
-  "Timeline",
-  "Information",
-  "Manuscript",
-  "Canon / History",
-];
+const futureSections = ["Information", "Manuscript", "Canon / History"];
 
 export function Sidebar({
   projectId,
@@ -45,6 +38,27 @@ export function Sidebar({
           onClick={onClose}
         >
           Structure
+        </NavLink>
+        <NavLink
+          className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+          to={`/projects/${encodeURIComponent(projectId)}/world`}
+          onClick={onClose}
+        >
+          World
+        </NavLink>
+        <NavLink
+          className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+          to={`/projects/${encodeURIComponent(projectId)}/characters`}
+          onClick={onClose}
+        >
+          Characters
+        </NavLink>
+        <NavLink
+          className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+          to={`/projects/${encodeURIComponent(projectId)}/timeline`}
+          onClick={onClose}
+        >
+          Timeline
         </NavLink>
         <div className="nav-future" aria-label="Future sections">
           {futureSections.map((section) => (

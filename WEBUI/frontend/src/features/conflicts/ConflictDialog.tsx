@@ -2,7 +2,7 @@ import { Button } from "../../components/ui/Button";
 
 export interface ConflictDialogProps<TLocal, TLatest> {
   local: TLocal;
-  latest: TLatest;
+  latest: TLatest | null;
   onDiscard: () => void;
   onKeep: () => void;
   entityLabel?: string;
@@ -19,7 +19,12 @@ export function ConflictDialog<TLocal, TLatest>({
 }: ConflictDialogProps<TLocal, TLatest>) {
   return (
     <div className="dialog-backdrop" role="presentation">
-      <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="conflict-heading">
+      <section
+        className="dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="conflict-heading"
+      >
         <p className="eyebrow">VERSION_CONFLICT</p>
         <h2 id="conflict-heading">This {entityLabel} changed elsewhere</h2>
         <div className="comparison-grid">
@@ -29,7 +34,11 @@ export function ConflictDialog<TLocal, TLatest>({
           </div>
           <div>
             <h3>Latest database resource</h3>
-            <pre>{JSON.stringify(latest, null, 2)}</pre>
+            {latest === null ? (
+              <p>The latest resource is currently unavailable.</p>
+            ) : (
+              <pre>{JSON.stringify(latest, null, 2)}</pre>
+            )}
           </div>
         </div>
         <div className="dialog-actions">

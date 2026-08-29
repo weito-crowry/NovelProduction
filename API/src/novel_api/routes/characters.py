@@ -57,6 +57,18 @@ def create_character(
         return envelope(project_id, created)
 
 
+@characters_router.get("", response_model=ProjectEnvelope[Any])
+def list_characters(
+    request: Request,
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ProjectEnvelope[Any]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        return envelope(project_id, services.character.list(limit, offset))
+
+
 @characters_router.get("/search", response_model=ProjectEnvelope[Any])
 def search_characters(
     request: Request,

@@ -195,6 +195,15 @@ class CharacterService:
             limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
+    def list(self, limit: int, offset: int) -> tuple[CharacterRecord, ...]:
+        if limit <= 0 or offset < 0:
+            return ()
+        return self._repository.list(
+            work_id=self._work_id(),
+            limit=limit,
+            offset=offset,
+        )
+
     def _normalize_fields(self, **fields: object) -> dict[str, object]:
         entity_type = fields["entity_type"]
         if entity_type not in _ENTITY_TYPES:

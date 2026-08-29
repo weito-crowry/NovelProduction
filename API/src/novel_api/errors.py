@@ -135,7 +135,11 @@ async def _handle_request_validation(request: Request, exc: Exception) -> Respon
     if not _is_api_request(request):
         assert isinstance(exc, RequestValidationError)
         return await request_validation_exception_handler(request, exc)
-    return _error_response(request, _VALIDATION)
+    return _error_response(
+        request,
+        _VALIDATION,
+        status_code=422 if _is_d3_browse_query_validation(request, exc) else None,
+    )
 
 
 async def _handle_http_exception(request: Request, exc: Exception) -> Response:
@@ -216,6 +220,7 @@ def _error_response(
     spec: _ErrorSpec,
     *,
     details: dict[str, Any] | None = None,
+    status_code: int | None = None,
 ) -> JSONResponse:
     payload = ErrorEnvelope(
         error=ApiError(
@@ -225,7 +230,30 @@ def _error_response(
             details={} if details is None else details,
         )
     )
-    return JSONResponse(status_code=spec.status_code, content=payload.model_dump())
+    return JSONResponse(
+        status_code=spec.status_code if status_code is None else status_code,
+        content=payload.model_dump(),
+    )
+
+
+def _is_d3_browse_query_validation(request: Request, exc: Exception) -> bool:
+    if request.url.path.rsplit("/", 1)[-1] not in {
+        "world-facts",
+        "characters",
+        "events",
+        "relations",
+    }:
+        return False
+    if not request.url.path.startswith("/api/v1/projects/"):
+        return False
+    if not isinstance(exc, RequestValidationError):
+        return False
+    return any(
+        len(error.get("loc", ())) >= 2
+        and error["loc"][0] == "query"
+        and error["loc"][1] in {"limit", "offset", "event_id"}
+        for error in exc.errors()
+    )
 
 
 def _project_id(request: Request) -> str | None:

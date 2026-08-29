@@ -4,6 +4,9 @@ import { ProjectPickerPage } from "../features/projects/ProjectPickerPage";
 import { NotFound } from "./NotFound";
 import { ProjectDashboardRoute } from "./ProjectDashboardRoute";
 import { StructureRoute } from "./StructureRoute";
+import { WorldRoute } from "./WorldRoute";
+import { CharactersRoute } from "./CharactersRoute";
+import { TimelineRoute } from "./TimelineRoute";
 
 export const appRoutes: RouteObject[] = [
   { path: "/", element: createElement(ProjectPickerPage) },
@@ -27,5 +30,11 @@ export const appRoutes: RouteObject[] = [
     path: "/projects/:projectId/structure/scenes/:sceneId",
     element: createElement(StructureRoute),
   },
+  { path: "/projects/:projectId/world", element: createElement(WorldRoute) },
+  { path: "/projects/:projectId/world/:factId", element: createElement(WorldRoute) },
+  { path: "/projects/:projectId/characters", element: createElement(CharactersRoute) },
+  { path: "/projects/:projectId/characters/:characterId", element: createElement(CharactersRoute) },
+  { path: "/projects/:projectId/timeline", element: createElement(TimelineRoute) },
+  { path: "/projects/:projectId/timeline/:eventId", element: createElement(TimelineRoute) },
   { path: "*", element: createElement(NotFound) },
 ];
