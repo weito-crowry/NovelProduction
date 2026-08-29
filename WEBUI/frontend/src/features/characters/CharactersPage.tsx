@@ -657,6 +657,27 @@ function CharacterFields({
   );
 }
 
+async function invalidateRelationshipMutationCaches(
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  affectedCharacterIds: number[],
+) {
+  const uniqueCharacterIds = [...new Set(affectedCharacterIds)];
+  await Promise.all([
+    ...uniqueCharacterIds.map((affectedCharacterId) =>
+      queryClient.invalidateQueries({
+        queryKey: projectQueryKeys.relationships(
+          projectId,
+          affectedCharacterId,
+        ),
+      }),
+    ),
+    queryClient.invalidateQueries({
+      queryKey: projectQueryKeys.episodeViews(projectId),
+    }),
+  ]);
+}
+
 function RelationshipsPanel({
   projectId,
   characterId,
@@ -718,7 +739,7 @@ function RelationshipsPanel({
       return;
     }
     try {
-      await mutation.mutateAsync({
+      const created = await mutation.mutateAsync({
         source_character_id: side === "source" ? characterId : id,
         target_character_id: side === "source" ? id : characterId,
         relationship_type: type,
@@ -726,12 +747,10 @@ function RelationshipsPanel({
         valid_from_episode_id: from ? Number(from) : undefined,
         valid_to_episode_id: to ? Number(to) : undefined,
       });
-      await queryClient.invalidateQueries({
-        queryKey: projectQueryKeys.relationships(projectId, characterId),
-      });
-      await queryClient.invalidateQueries({
-        queryKey: projectQueryKeys.episodeViews(projectId),
-      });
+      await invalidateRelationshipMutationCaches(queryClient, projectId, [
+        created.source_character_id,
+        created.target_character_id,
+      ]);
       setOtherId("");
       setType("");
       setDescription("");
@@ -943,12 +962,10 @@ function RelationshipEditor({
         (current) =>
           current?.map((item) => (item.id === updated.id ? updated : item)),
       );
-      await queryClient.invalidateQueries({
-        queryKey: projectQueryKeys.relationships(projectId, characterId),
-      });
-      await queryClient.invalidateQueries({
-        queryKey: projectQueryKeys.episodeViews(projectId),
-      });
+      await invalidateRelationshipMutationCaches(queryClient, projectId, [
+        updated.source_character_id,
+        updated.target_character_id,
+      ]);
       setError(null);
     } catch (caught) {
       if (

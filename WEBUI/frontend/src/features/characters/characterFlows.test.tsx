@@ -126,12 +126,12 @@ function outline() {
   };
 }
 
-function renderRoute(initialEntry: string) {
+function renderRoute(initialEntry: string, staleTime = 0) {
   const router = createMemoryRouter(appRoutes, {
     initialEntries: [initialEntry],
   });
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false, staleTime } },
   });
   render(
     <QueryClientProvider client={queryClient}>
@@ -500,6 +500,139 @@ describe("D3 character flows", () => {
     await user.click(screen.getByRole("button", { name: "Save relationship" }));
     await waitFor(() => expect(patchBodies).toHaveLength(2));
     expect(patchBodies[1]).toMatchObject({ expected_version: 2 });
+  });
+
+  it("refetches the other relationship endpoint after create", async () => {
+    const currentCharacterA = character(1, "A");
+    const currentCharacterB = character(2, "A");
+    let currentRelationship: RelationshipRecord | null = null;
+    const relationshipReads = new Map<number, number>();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacterA });
+        if (url.endsWith("/characters/2"))
+          return response({ project_id: "A", data: currentCharacterB });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        const relationshipMatch = url.match(
+          /\/relationships\?character_id=(\d+)/,
+        );
+        if (relationshipMatch) {
+          const id = Number(relationshipMatch[1]);
+          relationshipReads.set(id, (relationshipReads.get(id) ?? 0) + 1);
+          return response({
+            project_id: "A",
+            data: currentRelationship ? [currentRelationship] : [],
+          });
+        }
+        if (url.endsWith("/relationships") && init?.method === "POST") {
+          const body = JSON.parse(String(init.body));
+          currentRelationship = {
+            ...relationship(10),
+            source_character_id: body.source_character_id,
+            target_character_id: body.target_character_id,
+            relationship_type: body.relationship_type,
+          };
+          return response({ project_id: "A", data: currentRelationship }, 201);
+        }
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const router = renderRoute("/projects/A/characters/2", 30_000);
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 2");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    expect(
+      await screen.findByText("No relationships yet."),
+    ).toBeInTheDocument();
+    expect(relationshipReads.get(2)).toBe(1);
+
+    await router.navigate("/projects/A/characters/1");
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    await user.type(screen.getByLabelText("Other character ID"), "2");
+    await user.type(screen.getByLabelText("Relationship type"), "ally");
+    await user.click(
+      screen.getByRole("button", { name: "Create relationship" }),
+    );
+    await waitFor(() =>
+      expect(currentRelationship?.relationship_type).toBe("ally"),
+    );
+
+    await router.navigate("/projects/A/characters/2");
+    await screen.findByDisplayValue("A character 2");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    expect(await screen.findByDisplayValue("ally")).toBeInTheDocument();
+    expect(relationshipReads.get(2)).toBe(2);
+  });
+
+  it("refetches the other relationship endpoint after update", async () => {
+    const currentCharacterA = character(1, "A");
+    const currentCharacterB = character(2, "A");
+    let currentRelationship = relationship();
+    const relationshipReads = new Map<number, number>();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/characters/1"))
+          return response({ project_id: "A", data: currentCharacterA });
+        if (url.endsWith("/characters/2"))
+          return response({ project_id: "A", data: currentCharacterB });
+        if (url.endsWith("/views/outline"))
+          return response({ project_id: "A", data: outline() });
+        const relationshipMatch = url.match(
+          /\/relationships\?character_id=(\d+)/,
+        );
+        if (relationshipMatch) {
+          const id = Number(relationshipMatch[1]);
+          relationshipReads.set(id, (relationshipReads.get(id) ?? 0) + 1);
+          return response({ project_id: "A", data: [currentRelationship] });
+        }
+        if (url.endsWith("/relationships/1") && init?.method === "PATCH") {
+          const body = JSON.parse(String(init.body));
+          currentRelationship = {
+            ...currentRelationship,
+            relationship_type: body.relationship_type,
+            version: 2,
+          };
+          return response({ project_id: "A", data: currentRelationship });
+        }
+        return response(
+          { error: { code: "NOT_FOUND", message: "Not found" } },
+          404,
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const router = renderRoute("/projects/A/characters/2", 30_000);
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A character 2");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    await screen.findByDisplayValue("ally");
+    expect(relationshipReads.get(2)).toBe(1);
+
+    await router.navigate("/projects/A/characters/1");
+    await screen.findByDisplayValue("A character 1");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    const type = await screen.findByDisplayValue("ally");
+    await user.clear(type);
+    await user.type(type, "rival");
+    await user.click(screen.getByRole("button", { name: "Save relationship" }));
+    await waitFor(() =>
+      expect(currentRelationship.relationship_type).toBe("rival"),
+    );
+
+    await router.navigate("/projects/A/characters/2");
+    await screen.findByDisplayValue("A character 2");
+    await user.click(screen.getByRole("tab", { name: "Relationships" }));
+    expect(await screen.findByDisplayValue("rival")).toBeInTheDocument();
+    expect(relationshipReads.get(2)).toBe(2);
   });
 
   it("does not save an unchanged state and confirms dirty episode switches", async () => {
