@@ -16,9 +16,12 @@ data/      repository-wide story database location
 docs/      design specifications and implementation plans
 ```
 
-Phase A through Phase C are complete. The Phase D D1-D5 WEBUI implementation
-is present pending final post-merge stable dogfood certification. `CORE/` owns
-the SQLite lifecycle,
+Phase A through Phase D are complete. Phase D final stable WEBUI dogfood passed;
+the WEBUI covers the Phase 1–3 administration surface with explicit Save and
+conflict handling, production static serving, browser E2E, and stable
+certification. Phase E structured draft editor work is not implemented yet;
+migration 005, TipTap, and structured draft persistence remain Phase E. `CORE/`
+owns the SQLite lifecycle,
 immutable migrations 001–004, configuration, errors, models, repositories,
 initialization, and domain services. `API/` is the sole runtime data-access
 boundary for the shared services under `/api/v1`.
