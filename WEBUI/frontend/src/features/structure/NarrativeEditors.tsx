@@ -145,6 +145,11 @@ export function ChapterEditor({
           const current = latestOutline.chapters.find(({ chapter: item }) => item.id === chapter.id)?.chapter;
           if (current) { setBaseline(current); setValues(chapterToForm(current)); }
         }}
+        onLoadLatest={(latest) => {
+          const current = latest as ChapterRecord;
+          setBaseline(current);
+          setValues(chapterToForm(current));
+        }}
       />
       {conflictLatest && (
         <ConflictDialog
@@ -277,6 +282,11 @@ export function EpisodeEditor({
           setBaseline(current);
           setValues(episodeToForm(current));
         }}
+        onLoadLatest={(latest) => {
+          const current = latest as EpisodeRecord;
+          setBaseline(current);
+          setValues(episodeToForm(current));
+        }}
       />
       {conflictLatest && (
         <ConflictDialog
@@ -399,6 +409,11 @@ function SceneEditorForm({ projectId, scene }: { projectId: string; scene: Scene
         readCurrent={() => fetchScene(projectId, scene.id)}
         onStatusChanged={async () => {
           const current = await fetchScene(projectId, scene.id);
+          setBaseline(current);
+          setValues(sceneToForm(current));
+        }}
+        onLoadLatest={(latest) => {
+          const current = latest as SceneRecord;
           setBaseline(current);
           setValues(sceneToForm(current));
         }}

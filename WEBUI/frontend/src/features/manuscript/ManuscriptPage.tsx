@@ -135,7 +135,7 @@ function ManuscriptEditor({ projectId, episodeId }: { projectId: string; episode
       const saved = await saveDraft(projectId, episodeId, buildDraftSave(values, baseline ?? null));
       queryClient.setQueryData(projectQueryKeys.latestDraft(projectId, episodeId), saved);
       await queryClient.invalidateQueries({ queryKey: projectQueryKeys.draftHistory(projectId, episodeId) });
-      await queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, episodeId) });
+      await queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) });
       setBaseline(saved);
       setValues({ body: saved.body, change_summary: "" });
       setSavedRevision(saved.revision);
@@ -171,6 +171,7 @@ function ManuscriptEditor({ projectId, episodeId }: { projectId: string; episode
 
   function discardLocal() {
     if (!conflictReady) return;
+    queryClient.setQueryData(projectQueryKeys.latestDraft(projectId, episodeId), conflictLatest);
     setBaseline(conflictLatest);
     setValues({ body: conflictLatest?.body ?? "", change_summary: "" });
     setConflictOpen(false);
@@ -179,6 +180,7 @@ function ManuscriptEditor({ projectId, episodeId }: { projectId: string; episode
 
   function keepLocal() {
     if (!conflictReady) return;
+    queryClient.setQueryData(projectQueryKeys.latestDraft(projectId, episodeId), conflictLatest);
     setBaseline(conflictLatest);
     setConflictOpen(false);
     setConflictError(null);

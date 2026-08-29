@@ -435,6 +435,12 @@ function WorldFactEditor({
           setBaseline(current);
           setValues(toWorldFactForm(current));
         }}
+        onLoadLatest={(latest) => {
+          const current = latest as WorldFactRecord;
+          queryClient.setQueryData(projectQueryKeys.worldFact(projectId, factId), current);
+          setBaseline(current);
+          setValues(toWorldFactForm(current));
+        }}
       />
       {conflictLatest && (
         <ConflictDialog

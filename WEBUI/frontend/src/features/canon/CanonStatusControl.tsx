@@ -10,6 +10,7 @@ import { ConflictDialog } from "../conflicts/ConflictDialog";
 import { setCanonStatus } from "./canonApi";
 
 const statuses = ["idea", "draft", "canon", "deprecated"];
+type CanonResource = { id: number; canon_status: string; version: number };
 
 export function CanonStatusControl({
   projectId,
@@ -18,19 +19,22 @@ export function CanonStatusControl({
   dirty = false,
   onStatusChanged,
   readCurrent,
+  onLoadLatest,
 }: {
   projectId: string;
   entityType: string;
-  record: { id: number; canon_status: string; version: number };
+  record: CanonResource;
   dirty?: boolean;
   onStatusChanged?: (decision: CanonDecisionRecord) => void | Promise<void>;
   readCurrent?: () => Promise<unknown>;
+  onLoadLatest?: (latest: CanonResource) => void | Promise<void>;
 }) {
   const queryClient = useQueryClient();
   const [targetStatus, setTargetStatus] = useState("");
   const [reason, setReason] = useState("");
-  const [latest, setLatest] = useState<unknown | null>(null);
+  const [latest, setLatest] = useState<CanonResource | null>(null);
   const [conflictOpen, setConflictOpen] = useState(false);
+  const [conflictReady, setConflictReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -58,20 +62,38 @@ export function CanonStatusControl({
         caught.status === 409 &&
         caught.code === "VERSION_CONFLICT"
       ) {
-        let current: unknown | null = caught.details.current_resource ?? null;
+        let current = asCanonResource(caught.details.current_resource);
+        let ready = current !== null;
         setError(null);
         if (current === null && readCurrent) {
           try {
-            current = await readCurrent();
+            current = asCanonResource(await readCurrent());
+            ready = current !== null;
           } catch {
             setError("The latest resource could not be loaded.");
           }
         }
         setLatest(current);
+        setConflictReady(ready);
         setConflictOpen(true);
         return;
       }
       setError(caught instanceof Error ? caught.message : "Unable to change canon status.");
+    }
+  }
+
+  async function loadLatest() {
+    if (!conflictReady || latest === null) return;
+    try {
+      await onLoadLatest?.(latest);
+      setTargetStatus("");
+      setReason("");
+      setLatest(null);
+      setConflictReady(false);
+      setConflictOpen(false);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to load the latest resource.");
     }
   }
 
@@ -123,8 +145,12 @@ export function CanonStatusControl({
           local={{ target_status: targetStatus, reason }}
           latest={latest}
           entityLabel="canon status"
-          onDiscard={() => setConflictOpen(false)}
-          onKeep={() => setConflictOpen(false)}
+          onDiscard={() => void loadLatest()}
+          onKeep={() => {
+            setLatest(null);
+            setConflictReady(false);
+            setConflictOpen(false);
+          }}
           errorMessage={error}
         />
       )}
@@ -138,11 +164,16 @@ async function invalidateCanonQueries(
   entityId: number,
   queryClient: ReturnType<typeof useQueryClient>,
 ) {
-  const keys = [queryClient.invalidateQueries({ queryKey: projectQueryKeys.canonDecisionsFamily(projectId) })];
+  const keys = [
+    queryClient.invalidateQueries({ queryKey: projectQueryKeys.canonDecisionsFamily(projectId) }),
+    queryClient.invalidateQueries({ queryKey: projectQueryKeys.canonDecisionSearchFamily(projectId) }),
+    queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }),
+  ];
   if (entityType === "information_item") {
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.informationFamily(projectId) }));
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.informationSearchFamily(projectId) }));
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.informationItem(projectId, entityId) }));
+    keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.characterKnowledgeProjectFamily(projectId) }));
   } else if (entityType === "character") {
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.charactersFamily(projectId) }));
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.characterSearchFamily(projectId) }));
@@ -155,11 +186,21 @@ async function invalidateCanonQueries(
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.timelineEventsFamily(projectId) }));
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.timelineEventSearchFamily(projectId) }));
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.timelineEvent(projectId, entityId) }));
+    keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.timelineRangeFamily(projectId) }));
   } else if (entityType === "chapter" || entityType === "episode" || entityType === "scene") {
     keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }));
-    keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) }));
+    if (entityType === "episode") keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.episode(projectId, entityId) }));
+    if (entityType === "scene") keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.scene(projectId, entityId) }));
   } else if (entityType === "relationship") {
-    keys.push(queryClient.invalidateQueries({ queryKey: ["project", projectId, "relationships"] }));
+    keys.push(queryClient.invalidateQueries({ queryKey: projectQueryKeys.relationshipsFamily(projectId) }));
   }
   await Promise.all(keys);
+}
+
+function asCanonResource(value: unknown): CanonResource | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const resource = value as Partial<CanonResource>;
+  return typeof resource.id === "number" && typeof resource.canon_status === "string" && typeof resource.version === "number"
+    ? resource as CanonResource
+    : null;
 }

@@ -543,6 +543,12 @@ function CharacterEditor({
           setBaseline(current);
           setValues(toCharacterForm(current));
         }}
+        onLoadLatest={(latest) => {
+          const current = latest as CharacterRecord;
+          queryClient.setQueryData(projectQueryKeys.character(projectId, characterId), current);
+          setBaseline(current);
+          setValues(toCharacterForm(current));
+        }}
       />
       {conflictLatest && (
         <ConflictDialog
@@ -1140,6 +1146,7 @@ function RelationshipEditor({
           const current = rows.find((item) => item.id === baseline.id);
           if (current) adoptLatest(current);
         }}
+        onLoadLatest={(latest) => adoptLatest(latest as RelationshipRecord)}
       />
       {error && <p role="alert">{error}</p>}
       {conflictOpen && (

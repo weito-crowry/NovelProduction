@@ -521,6 +521,12 @@ function TimelineEventEditor({
           setBaseline(current);
           setValues(toEventForm(current));
         }}
+        onLoadLatest={(latest) => {
+          const current = latest as TimelineEventRecord;
+          queryClient.setQueryData(projectQueryKeys.timelineEvent(projectId, eventId), current);
+          setBaseline(current);
+          setValues(toEventForm(current));
+        }}
       />
       {latest && (
         <ConflictDialog

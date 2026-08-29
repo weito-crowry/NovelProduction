@@ -33,12 +33,18 @@ export const projectQueryKeys = {
     ["project", projectId, "character-search"] as const,
   relationships: (projectId: string, characterId: number) =>
     ["project", projectId, "relationships", characterId] as const,
+  relationshipsFamily: (projectId: string) =>
+    ["project", projectId, "relationships"] as const,
   characterState: (projectId: string, characterId: number, episodeId: number) =>
     ["project", projectId, "character-state", characterId, episodeId] as const,
   characterStateHistory: (projectId: string, characterId: number) =>
     ["project", projectId, "character-state-history", characterId] as const,
   characterKnowledge: (projectId: string, characterId: number, episodeId: number) =>
     ["project", projectId, "character-knowledge", characterId, episodeId] as const,
+  characterKnowledgeProjectFamily: (projectId: string) =>
+    ["project", projectId, "character-knowledge"] as const,
+  characterKnowledgeFamily: (projectId: string, characterId: number) =>
+    ["project", projectId, "character-knowledge", characterId] as const,
   characterKnowledgeExact: (
     projectId: string,
     characterId: number,
