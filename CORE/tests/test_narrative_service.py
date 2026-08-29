@@ -120,6 +120,82 @@ def test_hierarchy_update_accepts_all_authoring_fields(
     assert updated_scene.production_status == "drafting"
 
 
+def test_create_episode_accepts_json_array_string(
+    service: NarrativeService,
+) -> None:
+    chapter = service.create_chapter("第一章")
+
+    episode = service.create_episode(
+        chapter.id,
+        "第一話",
+        foreshadowing_notes='["赤い光", {"kind":"hint"}]',
+    )
+
+    assert episode.foreshadowing_notes_json == '["赤い光",{"kind":"hint"}]'
+
+
+def test_update_episode_none_keeps_existing_foreshadowing_notes(
+    service: NarrativeService,
+) -> None:
+    chapter = service.create_chapter("第一章")
+    episode = service.create_episode(
+        chapter.id, "第一話", foreshadowing_notes=["赤い光"]
+    )
+
+    updated = service.update_episode(
+        episode.id, expected_version=episode.version, title="第一話 改稿"
+    )
+
+    assert updated.foreshadowing_notes_json == '["赤い光"]'
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"hint": "legacy"},
+        '{"hint":"legacy"}',
+        '"legacy hint"',
+        "1",
+        True,
+    ],
+)
+def test_create_episode_rejects_non_array_foreshadowing_notes(
+    service: NarrativeService, value: object
+) -> None:
+    chapter = service.create_chapter("第一章")
+
+    with pytest.raises(ValidationError) as exc_info:
+        service.create_episode(chapter.id, "第一話", foreshadowing_notes=value)
+
+    assert exc_info.value.field == "foreshadowing_notes"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"hint": "legacy"},
+        '{"hint":"legacy"}',
+        '"legacy hint"',
+        "1",
+        True,
+    ],
+)
+def test_update_episode_rejects_non_array_foreshadowing_notes(
+    service: NarrativeService, value: object
+) -> None:
+    chapter = service.create_chapter("第一章")
+    episode = service.create_episode(chapter.id, "第一話")
+
+    with pytest.raises(ValidationError) as exc_info:
+        service.update_episode(
+            episode.id,
+            expected_version=episode.version,
+            foreshadowing_notes=value,
+        )
+
+    assert exc_info.value.field == "foreshadowing_notes"
+
+
 def test_hierarchy_validates_statuses_and_missing_parents(
     service: NarrativeService,
 ) -> None:
