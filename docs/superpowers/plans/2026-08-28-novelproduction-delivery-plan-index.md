@@ -25,12 +25,12 @@
 
 4. **Phase D — WEBUI**
    - Plan: `docs/superpowers/plans/2026-08-29-novelproduction-phase-d-webui.md`
-   - Status: planned / awaiting plan review. Implementation is intentionally split into D1–D5 reviewable PRs and has not started.
-   - Exit state: React/Vite UI covering the Phase 1–3 data surface with explicit save, conflict comparison, project switching, production static serving through FastAPI, browser E2E, and post-merge stable dogfood.
+   - Status: complete. D1–D5 implementation and stable-dogfood blocker follow-ups PR #24 and #25 are merged; certified main is `026a7fcf8c42693bd01c49965dd4e9f22da51f72`, main CI is green, and final stable WEBUI dogfood passed. Issue #10 remains open until this bookkeeping record is reviewed and merged.
+   - Exit state: React/Vite UI covering the Phase 1–3 data surface with explicit save, conflict comparison, project switching, production static serving through FastAPI, browser E2E, and certified stable dogfood.
 
 5. **Phase E — Structured draft editor**
    - Plan: to be written after the basic WEBUI CRUD/editor shell is stable.
-   - Status: not started.
+   - Status: not started. Eligible to begin after Phase D bookkeeping is merged and Issue #10 is closed.
    - Exit state: NovelProduction Document Schema v1, migration 005, deterministic plain-text rendering, TipTap adapter, block metadata editing, append-only structured draft revisions.
 
 ## Planning rule
