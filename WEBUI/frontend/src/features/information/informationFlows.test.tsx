@@ -63,6 +63,23 @@ describe("D4 information flows", () => {
     expect(await screen.findByText("Search result")).toBeInTheDocument();
   });
 
+  it("renders the empty state after an empty browse without querying search", async () => {
+    const requests: Array<{ url: string; method: string | undefined }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method });
+      if (url.endsWith("/information?limit=50&offset=0")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute("/projects/A/information");
+
+    expect(await screen.findByText("No information items yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading information…" })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(requests).toEqual([{ url: "/api/v1/projects/A/information?limit=50&offset=0", method: undefined }]);
+  });
+
   it("prevents invalid JSON and sends a minimal versioned update", async () => {
     const original = item();
     const updated = item(1, "Updated", 2);
