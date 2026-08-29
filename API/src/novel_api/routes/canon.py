@@ -60,6 +60,18 @@ def set_canon_status(
         return envelope(project_id, decision)
 
 
+@router.get("/decisions", response_model=ProjectEnvelope[Any])
+def list_canon_decisions(
+    request: Request,
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ProjectEnvelope[Any]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        return envelope(project_id, services.canon.list_decisions(limit, offset))
+
+
 @router.get("/decisions/search", response_model=ProjectEnvelope[Any])
 def search_canon_decisions(
     request: Request,

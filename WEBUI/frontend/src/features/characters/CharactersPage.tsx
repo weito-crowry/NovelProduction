@@ -26,6 +26,7 @@ import type {
 import { AppShell } from "../../components/layout/AppShell";
 import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { ConflictDialog } from "../conflicts/ConflictDialog";
+import { CanonStatusControl } from "../canon/CanonStatusControl";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { FieldLabel, TextArea, TextInput } from "../../components/ui/Field";
@@ -530,6 +531,25 @@ function CharacterEditor({
         <KnowledgePanel projectId={projectId} characterId={characterId} />
       )}
       <DirtyNavigationGuard dirty={overallDirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="character"
+        record={baseline}
+        dirty={overallDirty}
+        readCurrent={() => fetchCharacter(projectId, characterId)}
+        onStatusChanged={async () => {
+          const current = await fetchCharacter(projectId, characterId);
+          queryClient.setQueryData(projectQueryKeys.character(projectId, characterId), current);
+          setBaseline(current);
+          setValues(toCharacterForm(current));
+        }}
+        onLoadLatest={(latest) => {
+          const current = latest as CharacterRecord;
+          queryClient.setQueryData(projectQueryKeys.character(projectId, characterId), current);
+          setBaseline(current);
+          setValues(toCharacterForm(current));
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           local={values}
@@ -1112,6 +1132,29 @@ function RelationshipEditor({
       >
         Save relationship
       </Button>
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="relationship"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={async () => {
+          const rows = await fetchRelationships(projectId, characterId);
+          return rows.find((item) => item.id === baseline.id) ?? null;
+        }}
+        onStatusChanged={async () => {
+          const rows = await fetchRelationships(projectId, characterId);
+          const current = rows.find((item) => item.id === baseline.id);
+          if (current) adoptLatest(current);
+        }}
+        onLoadLatest={(latest) => {
+          const current = latest as RelationshipRecord;
+          adoptLatest(current);
+          queryClient.setQueryData<RelationshipRecord[] | undefined>(
+            projectQueryKeys.relationships(projectId, characterId),
+            (rows) => rows?.map((item) => (item.id === current.id ? current : item)),
+          );
+        }}
+      />
       {error && <p role="alert">{error}</p>}
       {conflictOpen && (
         <ConflictDialog

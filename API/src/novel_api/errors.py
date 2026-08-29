@@ -138,7 +138,7 @@ async def _handle_request_validation(request: Request, exc: Exception) -> Respon
     return _error_response(
         request,
         _VALIDATION,
-        status_code=422 if _is_d3_browse_query_validation(request, exc) else None,
+        status_code=422 if _is_browse_query_validation(request, exc) else None,
     )
 
 
@@ -236,12 +236,14 @@ def _error_response(
     )
 
 
-def _is_d3_browse_query_validation(request: Request, exc: Exception) -> bool:
+def _is_browse_query_validation(request: Request, exc: Exception) -> bool:
     if request.url.path.rsplit("/", 1)[-1] not in {
         "world-facts",
         "characters",
         "events",
         "relations",
+        "information",
+        "decisions",
     }:
         return False
     if not request.url.path.startswith("/api/v1/projects/"):

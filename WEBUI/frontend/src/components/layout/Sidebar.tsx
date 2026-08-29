@@ -1,6 +1,5 @@
 import { NavLink, Link } from "react-router-dom";
 
-const futureSections = ["Information", "Manuscript", "Canon / History"];
 
 export function Sidebar({
   projectId,
@@ -60,13 +59,9 @@ export function Sidebar({
         >
           Timeline
         </NavLink>
-        <div className="nav-future" aria-label="Future sections">
-          {futureSections.map((section) => (
-            <span key={section} className="nav-link disabled" aria-disabled="true">
-              {section}
-            </span>
-          ))}
-        </div>
+        <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/information`} onClick={onClose}>Information</NavLink>
+        <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/manuscript`} onClick={onClose}>Manuscript</NavLink>
+        <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/canon`} onClick={onClose}>Canon / History</NavLink>
       </nav>
     </aside>
   );

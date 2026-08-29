@@ -145,6 +145,13 @@ class InformationService:
             work_id=self._work_id(), query=normalized, limit=limit
         )
 
+    def list(self, limit: int, offset: int) -> tuple[InformationItemRecord, ...]:
+        if limit <= 0 or offset < 0:
+            return ()
+        return self._repository.list(
+            work_id=self._work_id(), limit=limit, offset=offset
+        )
+
     def _fields(self, **values: Any) -> dict[str, object]:
         fields = {
             "statement": self._required_text(values["statement"], "statement"),

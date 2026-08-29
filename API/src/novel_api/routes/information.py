@@ -43,6 +43,18 @@ def create_information(
         return envelope(project_id, created)
 
 
+@router.get("/information", response_model=ProjectEnvelope[Any])
+def list_information(
+    request: Request,
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ProjectEnvelope[Any]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        return envelope(project_id, services.information.list(limit, offset))
+
+
 @router.get("/information/search", response_model=ProjectEnvelope[Any])
 def search_information(
     request: Request,
@@ -118,6 +130,19 @@ def set_reader_disclosure(
         return envelope(project_id, disclosure)
 
 
+@router.get(
+    "/information/{information_item_id}/reader-disclosure",
+    response_model=ProjectEnvelope[Any],
+)
+def get_reader_disclosure(
+    request: Request, project_id: str, information_item_id: int
+) -> ProjectEnvelope[Any]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        disclosure = services.disclosure.get_reader_disclosure(information_item_id)
+        return envelope(project_id, disclosure)
+
+
 @router.put(
     "/characters/{character_id}/knowledge/{information_item_id}",
     response_model=ProjectEnvelope[Any],
@@ -156,3 +181,22 @@ def get_character_knowledge(
     with open_project_read_services(target) as services:
         knowledge = services.knowledge.get_character_knowledge(character_id, episode_id)
         return envelope(project_id, knowledge)
+
+
+@router.get(
+    "/characters/{character_id}/knowledge/{information_item_id}",
+    response_model=ProjectEnvelope[Any],
+)
+def get_character_knowledge_event(
+    request: Request,
+    project_id: str,
+    character_id: int,
+    information_item_id: int,
+    episode_id: int = Query(),
+) -> ProjectEnvelope[Any]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        event = services.knowledge.get_character_knowledge_event(
+            character_id, information_item_id, episode_id
+        )
+        return envelope(project_id, event)

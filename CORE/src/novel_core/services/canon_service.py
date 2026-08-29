@@ -255,6 +255,15 @@ class CanonService:
             limit=min(limit, MAX_SEARCH_LIMIT),
         )
 
+    def list_decisions(
+        self, limit: int, offset: int
+    ) -> tuple[CanonDecisionRecord, ...]:
+        if limit <= 0 or offset < 0:
+            return ()
+        return self._repository.list_decisions(
+            work_id=self._work_id(), limit=limit, offset=offset
+        )
+
     def _entity_or_not_found(
         self, work_id: int, entity_type: str, entity_id: int
     ) -> dict[str, object]:

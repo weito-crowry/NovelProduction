@@ -2,12 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { isApiError } from "../../api/errors";
 import { projectQueryKeys } from "../../api/queryKeys";
-import type { ChapterRecord, EpisodeRecord, SceneRecord } from "../../api/types";
+import type { ChapterRecord, EpisodeRecord, EpisodeView, OutlineView, SceneRecord } from "../../api/types";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { FieldLabel, TextArea, TextInput } from "../../components/ui/Field";
 import { ConflictDialog } from "../conflicts/ConflictDialog";
+import { CanonStatusControl } from "../canon/CanonStatusControl";
 import { StatusSelect } from "./NarrativeCreateForms";
 import {
   buildChapterUpdate,
@@ -130,6 +131,31 @@ export function ChapterEditor({
         <EditorActions onSave={() => void save()} pending={mutation.isPending} version={baseline.version} />
       </Card>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="chapter"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={async () => {
+          const latestOutline = await fetchOutline(projectId);
+          return latestOutline.chapters.find(({ chapter: item }) => item.id === chapter.id)?.chapter ?? null;
+        }}
+        onStatusChanged={async () => {
+          const latestOutline = await fetchOutline(projectId);
+          const current = latestOutline.chapters.find(({ chapter: item }) => item.id === chapter.id)?.chapter;
+          if (current) { setBaseline(current); setValues(chapterToForm(current)); }
+        }}
+        onLoadLatest={(latest) => {
+          const current = latest as ChapterRecord;
+          queryClient.setQueryData<OutlineView | undefined>(
+            projectQueryKeys.outline(projectId),
+            (cached) => replaceChapterInOutline(cached, current),
+          );
+          setBaseline(current);
+          setValues(chapterToForm(current));
+          setSaved(false);
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           entityLabel="chapter"
@@ -250,6 +276,37 @@ export function EpisodeEditor({
         </Card>
       </div>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="episode"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={() => fetchEpisode(projectId, episode.id)}
+        onStatusChanged={async () => {
+          const current = await fetchEpisode(projectId, episode.id);
+          setBaseline(current);
+          setValues(episodeToForm(current));
+        }}
+        onLoadLatest={async (latest) => {
+          const current = latest as EpisodeRecord;
+          queryClient.setQueryData(projectQueryKeys.episode(projectId, current.id), current);
+          queryClient.setQueryData<EpisodeView | undefined>(
+            projectQueryKeys.episodeView(projectId, current.id),
+            (cached) => replaceEpisodeInView(cached, current),
+          );
+          queryClient.setQueryData<OutlineView | undefined>(
+            projectQueryKeys.outline(projectId),
+            (cached) => replaceEpisodeInOutline(cached, current),
+          );
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, current.id) }),
+            queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+          ]);
+          setBaseline(current);
+          setValues(episodeToForm(current));
+          setSaved(false);
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           entityLabel="episode"
@@ -363,6 +420,37 @@ function SceneEditorForm({ projectId, scene }: { projectId: string; scene: Scene
         <EditorActions onSave={() => void save()} pending={mutation.isPending} version={baseline.version} />
       </Card>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="scene"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={() => fetchScene(projectId, scene.id)}
+        onStatusChanged={async () => {
+          const current = await fetchScene(projectId, scene.id);
+          setBaseline(current);
+          setValues(sceneToForm(current));
+        }}
+        onLoadLatest={async (latest) => {
+          const current = latest as SceneRecord;
+          queryClient.setQueryData(projectQueryKeys.scene(projectId, current.id), current);
+          queryClient.setQueryData<OutlineView | undefined>(
+            projectQueryKeys.outline(projectId),
+            (cached) => replaceSceneInOutline(cached, current),
+          );
+          queryClient.setQueryData<EpisodeView | undefined>(
+            projectQueryKeys.episodeView(projectId, current.episode_id),
+            (cached) => replaceSceneInView(cached, current),
+          );
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: projectQueryKeys.outline(projectId) }),
+            queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeView(projectId, current.episode_id) }),
+          ]);
+          setBaseline(current);
+          setValues(sceneToForm(current));
+          setSaved(false);
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           entityLabel="scene"
@@ -469,4 +557,61 @@ function safeErrorMessage(error: unknown, fallback: string): string {
 function asRecord<T extends object>(value: unknown): T | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as T;
+}
+
+function replaceChapterInOutline(outline: OutlineView | undefined, latest: ChapterRecord): OutlineView | undefined {
+  if (!outline) return outline;
+  return {
+    ...outline,
+    chapters: outline.chapters.map((entry) =>
+      entry.chapter.id === latest.id ? { ...entry, chapter: latest } : entry,
+    ),
+  };
+}
+
+function replaceEpisodeInOutline(outline: OutlineView | undefined, latest: EpisodeRecord): OutlineView | undefined {
+  if (!outline) return outline;
+  return {
+    ...outline,
+    chapters: outline.chapters.map((chapterEntry) => ({
+      ...chapterEntry,
+      episodes: chapterEntry.episodes.map((episodeEntry) =>
+        episodeEntry.episode.id === latest.id ? { ...episodeEntry, episode: latest } : episodeEntry,
+      ),
+    })),
+  };
+}
+
+function replaceSceneInOutline(outline: OutlineView | undefined, latest: SceneRecord): OutlineView | undefined {
+  if (!outline) return outline;
+  return {
+    ...outline,
+    chapters: outline.chapters.map((chapterEntry) => ({
+      ...chapterEntry,
+      episodes: chapterEntry.episodes.map((episodeEntry) => ({
+        ...episodeEntry,
+        scenes: episodeEntry.scenes.map((scene) => scene.id === latest.id ? latest : scene),
+      })),
+    })),
+  };
+}
+
+function replaceEpisodeInView(view: EpisodeView | undefined, latest: EpisodeRecord): EpisodeView | undefined {
+  if (!view) return view;
+  return {
+    ...view,
+    episode: latest,
+    outline: { ...view.outline, episode: latest },
+    context: { ...view.context, episode: latest },
+  };
+}
+
+function replaceSceneInView(view: EpisodeView | undefined, latest: SceneRecord): EpisodeView | undefined {
+  if (!view) return view;
+  return {
+    ...view,
+    scenes: view.scenes.map((scene) => scene.id === latest.id ? latest : scene),
+    outline: { ...view.outline, scenes: view.outline.scenes.map((scene) => scene.id === latest.id ? latest : scene) },
+    context: { ...view.context, scenes: view.context.scenes.map((scene) => scene.id === latest.id ? latest : scene) },
+  };
 }

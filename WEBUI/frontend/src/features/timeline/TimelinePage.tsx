@@ -6,6 +6,7 @@ import { projectQueryKeys } from "../../api/queryKeys";
 import { AppShell } from "../../components/layout/AppShell";
 import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { ConflictDialog } from "../conflicts/ConflictDialog";
+import { CanonStatusControl } from "../canon/CanonStatusControl";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { FieldLabel, TextArea, TextInput } from "../../components/ui/Field";
@@ -508,6 +509,25 @@ function TimelineEventEditor({
       />
       <TimelineRelationsPanel projectId={projectId} eventId={eventId} />
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="timeline_event"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={() => fetchTimelineEvent(projectId, eventId)}
+        onStatusChanged={async () => {
+          const current = await fetchTimelineEvent(projectId, eventId);
+          queryClient.setQueryData(projectQueryKeys.timelineEvent(projectId, eventId), current);
+          setBaseline(current);
+          setValues(toEventForm(current));
+        }}
+        onLoadLatest={(latest) => {
+          const current = latest as TimelineEventRecord;
+          queryClient.setQueryData(projectQueryKeys.timelineEvent(projectId, eventId), current);
+          setBaseline(current);
+          setValues(toEventForm(current));
+        }}
+      />
       {latest && (
         <ConflictDialog
           local={values}

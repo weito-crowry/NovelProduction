@@ -79,7 +79,7 @@ def test_each_phase1_handler_resolves_and_opens_services_exactly_once() -> None:
             and any(isinstance(item, ast.Call) for item in node.decorator_list)
         )
 
-    assert len(handlers) == 27
+    assert len(handlers) == 28
     for handler in handlers:
         calls = [
             node.func.id

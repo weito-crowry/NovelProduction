@@ -12,6 +12,7 @@ import type {
 import { AppShell } from "../../components/layout/AppShell";
 import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { ConflictDialog } from "../../features/conflicts/ConflictDialog";
+import { CanonStatusControl } from "../canon/CanonStatusControl";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { FieldLabel, TextArea, TextInput } from "../../components/ui/Field";
@@ -422,6 +423,25 @@ function WorldFactEditor({
         </div>
       </Card>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="world_fact"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={() => fetchWorldFact(projectId, factId)}
+        onStatusChanged={async () => {
+          const current = await fetchWorldFact(projectId, factId);
+          queryClient.setQueryData(projectQueryKeys.worldFact(projectId, factId), current);
+          setBaseline(current);
+          setValues(toWorldFactForm(current));
+        }}
+        onLoadLatest={(latest) => {
+          const current = latest as WorldFactRecord;
+          queryClient.setQueryData(projectQueryKeys.worldFact(projectId, factId), current);
+          setBaseline(current);
+          setValues(toWorldFactForm(current));
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           local={values}

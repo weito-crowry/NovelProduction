@@ -472,6 +472,61 @@ export interface InformationItemRecord {
   updated_at: string;
 }
 
+export interface InformationCreate {
+  statement: string;
+  truth_status?: string;
+  authoring_guard?: string;
+  notes_json?: unknown;
+  canon_status?: CanonStatus;
+  importance?: number;
+}
+
+export interface InformationUpdate {
+  expected_version: number;
+  statement?: string;
+  truth_status?: string;
+  authoring_guard?: string;
+  notes_json?: unknown;
+  importance?: number;
+  canon_status?: CanonStatus;
+  reason?: string;
+}
+
+export interface ReaderDisclosureRecord {
+  id: number;
+  work_id: number;
+  information_item_id: number;
+  episode_id: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReaderDisclosureSet {
+  episode_id: number;
+  expected_version?: number;
+}
+
+export interface CharacterKnowledgeEventRecord {
+  id: number;
+  work_id: number;
+  character_id: number;
+  information_item_id: number;
+  episode_id: number;
+  knowledge_state: string;
+  note: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CharacterKnowledgeSet {
+  episode_id: number;
+  knowledge_state: string;
+  note: string;
+  expected_version?: number;
+}
+
 export interface EffectiveKnowledgeRecord {
   knowledge_state: string;
   event_episode_id: number;
@@ -653,4 +708,34 @@ export interface TimelineRelationCreate {
   source_id: number;
   target_id: number;
   relation_type: string;
+}
+
+export interface CanonChange {
+  entity_type: string;
+  entity_id: number;
+  action: string;
+  before_payload: Record<string, unknown>;
+  after_payload: Record<string, unknown>;
+}
+
+export interface CanonDecisionRecord {
+  id: number;
+  summary: string;
+  reason: string;
+  changes: CanonChange[];
+}
+
+export interface CanonStatusSet {
+  entity_type: string;
+  entity_id: number;
+  target_status: string;
+  expected_version: number;
+  reason?: string;
+}
+
+export interface DraftSave {
+  body: string;
+  expected_parent_draft_id: number | null;
+  source_agent: "webui";
+  change_summary: string;
 }

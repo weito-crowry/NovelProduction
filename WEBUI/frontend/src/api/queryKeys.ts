@@ -33,12 +33,60 @@ export const projectQueryKeys = {
     ["project", projectId, "character-search"] as const,
   relationships: (projectId: string, characterId: number) =>
     ["project", projectId, "relationships", characterId] as const,
+  relationshipsFamily: (projectId: string) =>
+    ["project", projectId, "relationships"] as const,
   characterState: (projectId: string, characterId: number, episodeId: number) =>
     ["project", projectId, "character-state", characterId, episodeId] as const,
   characterStateHistory: (projectId: string, characterId: number) =>
     ["project", projectId, "character-state-history", characterId] as const,
   characterKnowledge: (projectId: string, characterId: number, episodeId: number) =>
     ["project", projectId, "character-knowledge", characterId, episodeId] as const,
+  characterKnowledgeProjectFamily: (projectId: string) =>
+    ["project", projectId, "character-knowledge"] as const,
+  characterKnowledgeFamily: (projectId: string, characterId: number) =>
+    ["project", projectId, "character-knowledge", characterId] as const,
+  characterKnowledgeExact: (
+    projectId: string,
+    characterId: number,
+    informationItemId: number,
+    episodeId: number,
+  ) =>
+    [
+      "project",
+      projectId,
+      "character-knowledge-exact",
+      characterId,
+      informationItemId,
+      episodeId,
+    ] as const,
+  information: (projectId: string, limit = 50, offset = 0) =>
+    ["project", projectId, "information", limit, offset] as const,
+  informationFamily: (projectId: string) =>
+    ["project", projectId, "information"] as const,
+  informationItem: (projectId: string, informationItemId: number) =>
+    ["project", projectId, "information-item", informationItemId] as const,
+  informationSearch: (projectId: string, query: string, limit = 50) =>
+    ["project", projectId, "information-search", query, limit] as const,
+  informationSearchFamily: (projectId: string) =>
+    ["project", projectId, "information-search"] as const,
+  readerDisclosure: (projectId: string, informationItemId: number) =>
+    ["project", projectId, "reader-disclosure", informationItemId] as const,
+  canonDecisions: (projectId: string, limit = 50, offset = 0) =>
+    ["project", projectId, "canon-decisions", limit, offset] as const,
+  canonDecisionsFamily: (projectId: string) =>
+    ["project", projectId, "canon-decisions"] as const,
+  canonDecision: (projectId: string, decisionId: number) =>
+    ["project", projectId, "canon-decision", decisionId] as const,
+  canonDecisionSearch: (projectId: string, query: string, limit = 50) =>
+    ["project", projectId, "canon-decision-search", query, limit] as const,
+  canonDecisionSearchFamily: (projectId: string) =>
+    ["project", projectId, "canon-decision-search"] as const,
+  latestDraft: (projectId: string, episodeId: number) =>
+    ["project", projectId, "latest-draft", episodeId] as const,
+  draftHistory: (projectId: string, episodeId: number, limit = 20) =>
+    ["project", projectId, "draft-history", episodeId, limit] as const,
+  draftRevision: (projectId: string, episodeId: number, revision: number) =>
+    ["project", projectId, "draft-revision", episodeId, revision] as const,
   timelineEvents: (projectId: string, limit = 50, offset = 0) =>
     ["project", projectId, "timeline-events", limit, offset] as const,
   timelineEventsFamily: (projectId: string) =>

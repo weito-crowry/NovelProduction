@@ -7,6 +7,9 @@ import { StructureRoute } from "./StructureRoute";
 import { WorldRoute } from "./WorldRoute";
 import { CharactersRoute } from "./CharactersRoute";
 import { TimelineRoute } from "./TimelineRoute";
+import { InformationPage } from "../features/information/InformationPage";
+import { CanonPage } from "../features/canon/CanonPage";
+import { ManuscriptPage } from "../features/manuscript/ManuscriptPage";
 
 export const appRoutes: RouteObject[] = [
   { path: "/", element: createElement(ProjectPickerPage) },
@@ -36,5 +39,11 @@ export const appRoutes: RouteObject[] = [
   { path: "/projects/:projectId/characters/:characterId", element: createElement(CharactersRoute) },
   { path: "/projects/:projectId/timeline", element: createElement(TimelineRoute) },
   { path: "/projects/:projectId/timeline/:eventId", element: createElement(TimelineRoute) },
+  { path: "/projects/:projectId/information", element: createElement(InformationPage) },
+  { path: "/projects/:projectId/information/:informationId", element: createElement(InformationPage) },
+  { path: "/projects/:projectId/canon", element: createElement(CanonPage) },
+  { path: "/projects/:projectId/canon/:decisionId", element: createElement(CanonPage) },
+  { path: "/projects/:projectId/manuscript", element: createElement(ManuscriptPage) },
+  { path: "/projects/:projectId/manuscript/:episodeId", element: createElement(ManuscriptPage) },
   { path: "*", element: createElement(NotFound) },
 ];

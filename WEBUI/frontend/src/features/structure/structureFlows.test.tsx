@@ -467,6 +467,98 @@ describe("D2 structure administration flows", () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
   });
 
+  it("stores a Canon latest chapter in the outline cache before remount", async () => {
+    const data = recordSet("A");
+    const latest = { ...data.chapter, title: "Latest chapter", canon_status: "canon", version: 8 };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/canon/status") && init?.method === "POST") {
+        return response({ error: { code: "VERSION_CONFLICT", message: "Changed elsewhere", details: { current_resource: latest } } }, 409);
+      }
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+    queryClient.setQueryData(projectQueryKeys.outline("A"), data.outline);
+    const router = renderWithQueryClient("/projects/A/structure/chapters/1", queryClient);
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A chapter");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Target canon status" }), "canon");
+    await user.click(screen.getByRole("button", { name: "Change canon status" }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Load latest and discard local edits" }));
+    await waitFor(() => expect(queryClient.getQueryData<OutlineView>(projectQueryKeys.outline("A"))?.chapters[0].chapter).toEqual(latest));
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+    await router.navigate("/projects/A/structure");
+    await router.navigate("/projects/A/structure/chapters/1");
+    expect(await screen.findByDisplayValue("Latest chapter")).toBeInTheDocument();
+    expect(screen.getByText("Current status: canon · version 8")).toBeInTheDocument();
+  });
+
+  it("synchronizes Canon latest episode detail, view, and outline caches", async () => {
+    const data = recordSet("A");
+    const latest = { ...data.episode, title: "Latest episode", canon_status: "canon", version: 9 };
+    const latestOutline: OutlineView = { ...data.outline, chapters: [{ ...data.outline.chapters[0], episodes: [{ ...data.outline.chapters[0].episodes[0], episode: latest }] }] };
+    const latestView: EpisodeView = { ...data.view, episode: latest, outline: { ...data.view.outline, episode: latest }, context: { ...data.view.context, episode: latest } };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/canon/status") && init?.method === "POST") return response({ error: { code: "VERSION_CONFLICT", message: "Changed elsewhere", details: { current_resource: latest } } }, 409);
+      if (url.endsWith("/views/outline")) return response({ project_id: "A", data: latestOutline });
+      if (url.endsWith("/views/episodes/2")) return response({ project_id: "A", data: latestView });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+    queryClient.setQueryData(projectQueryKeys.outline("A"), data.outline);
+    queryClient.setQueryData(projectQueryKeys.episode("A", 2), data.episode);
+    queryClient.setQueryData(projectQueryKeys.episodeView("A", 2), data.view);
+    const router = renderWithQueryClient("/projects/A/structure/episodes/2", queryClient);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "A episode" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Target canon status" }), "canon");
+    await user.click(screen.getByRole("button", { name: "Change canon status" }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Load latest and discard local edits" }));
+    await waitFor(() => expect(queryClient.getQueryData(projectQueryKeys.episode("A", 2))).toEqual(latest));
+    expect(queryClient.getQueryData<EpisodeView>(projectQueryKeys.episodeView("A", 2))?.episode).toEqual(latest);
+    expect(queryClient.getQueryData<OutlineView>(projectQueryKeys.outline("A"))?.chapters[0].episodes[0].episode).toEqual(latest);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+    await router.navigate("/projects/A/structure");
+    await router.navigate("/projects/A/structure/episodes/2");
+    expect(await screen.findByRole("heading", { name: "Latest episode" })).toBeInTheDocument();
+  });
+
+  it("synchronizes Canon latest scene detail and invalidates its derived caches", async () => {
+    const data = recordSet("A");
+    const latest = { ...data.scene, title: "Latest scene", canon_status: "canon", version: 10 };
+    const latestOutline: OutlineView = { ...data.outline, chapters: [{ ...data.outline.chapters[0], episodes: [{ ...data.outline.chapters[0].episodes[0], scenes: [latest] }] }] };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/canon/status") && init?.method === "POST") return response({ error: { code: "VERSION_CONFLICT", message: "Changed elsewhere", details: { current_resource: latest } } }, 409);
+      if (url.endsWith("/views/outline")) return response({ project_id: "A", data: latestOutline });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+    queryClient.setQueryData(projectQueryKeys.outline("A"), data.outline);
+    queryClient.setQueryData(projectQueryKeys.scene("A", 3), data.scene);
+    queryClient.setQueryData(projectQueryKeys.episodeView("A", 2), data.view);
+    renderWithQueryClient("/projects/A/structure/scenes/3", queryClient);
+    const user = userEvent.setup();
+    await screen.findByDisplayValue("A scene");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Target canon status" }), "canon");
+    await user.click(screen.getByRole("button", { name: "Change canon status" }));
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "Load latest and discard local edits" }));
+    await waitFor(() => expect(queryClient.getQueryData(projectQueryKeys.scene("A", 3))).toEqual(latest));
+    expect(queryClient.getQueryData<OutlineView>(projectQueryKeys.outline("A"))?.chapters[0].episodes[0].scenes[0]).toEqual(latest);
+    expect(queryClient.getQueryData<EpisodeView>(projectQueryKeys.episodeView("A", 2))?.scenes[0]).toEqual(latest);
+    expect(queryClient.getQueryState(projectQueryKeys.episodeView("A", 2))?.isInvalidated).toBe(true);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
   it("keeps chapter edits when Stay is chosen in the dirty navigation guard", async () => {
     const data = recordSet("A");
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
