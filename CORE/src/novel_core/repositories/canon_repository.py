@@ -294,6 +294,16 @@ class CanonRepository:
             return None
         return self._record_from_row(row)
 
+    def list_decisions(
+        self, *, work_id: int, limit: int, offset: int
+    ) -> tuple[CanonDecisionRecord, ...]:
+        rows = self._connection.execute(
+            """SELECT id, summary, reason FROM canon_decisions
+               WHERE work_id = ? ORDER BY id LIMIT ? OFFSET ?""",
+            (work_id, limit, offset),
+        ).fetchall()
+        return tuple(self._record_from_row(row) for row in rows)
+
     def search_decisions(
         self, *, work_id: int, query: str, limit: int
     ) -> tuple[CanonDecisionRecord, ...]:

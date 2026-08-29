@@ -8,6 +8,7 @@ import { Card } from "../../components/ui/Card";
 import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { FieldLabel, TextArea, TextInput } from "../../components/ui/Field";
 import { ConflictDialog } from "../conflicts/ConflictDialog";
+import { CanonStatusControl } from "../canon/CanonStatusControl";
 import { StatusSelect } from "./NarrativeCreateForms";
 import {
   buildChapterUpdate,
@@ -130,6 +131,21 @@ export function ChapterEditor({
         <EditorActions onSave={() => void save()} pending={mutation.isPending} version={baseline.version} />
       </Card>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="chapter"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={async () => {
+          const latestOutline = await fetchOutline(projectId);
+          return latestOutline.chapters.find(({ chapter: item }) => item.id === chapter.id)?.chapter ?? null;
+        }}
+        onStatusChanged={async () => {
+          const latestOutline = await fetchOutline(projectId);
+          const current = latestOutline.chapters.find(({ chapter: item }) => item.id === chapter.id)?.chapter;
+          if (current) { setBaseline(current); setValues(chapterToForm(current)); }
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           entityLabel="chapter"
@@ -250,6 +266,18 @@ export function EpisodeEditor({
         </Card>
       </div>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="episode"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={() => fetchEpisode(projectId, episode.id)}
+        onStatusChanged={async () => {
+          const current = await fetchEpisode(projectId, episode.id);
+          setBaseline(current);
+          setValues(episodeToForm(current));
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           entityLabel="episode"
@@ -363,6 +391,18 @@ function SceneEditorForm({ projectId, scene }: { projectId: string; scene: Scene
         <EditorActions onSave={() => void save()} pending={mutation.isPending} version={baseline.version} />
       </Card>
       <DirtyNavigationGuard dirty={dirty} />
+      <CanonStatusControl
+        projectId={projectId}
+        entityType="scene"
+        record={baseline}
+        dirty={dirty}
+        readCurrent={() => fetchScene(projectId, scene.id)}
+        onStatusChanged={async () => {
+          const current = await fetchScene(projectId, scene.id);
+          setBaseline(current);
+          setValues(sceneToForm(current));
+        }}
+      />
       {conflictLatest && (
         <ConflictDialog
           entityLabel="scene"

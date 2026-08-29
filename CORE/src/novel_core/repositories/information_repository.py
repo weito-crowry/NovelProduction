@@ -72,6 +72,16 @@ class InformationRepository:
         ).fetchone()
         return None if row is None else int(row[0])
 
+    def list(
+        self, *, work_id: int, limit: int, offset: int
+    ) -> tuple[InformationItemRecord, ...]:
+        rows = self._connection.execute(
+            f"SELECT {_COLUMNS} FROM information_items "
+            "WHERE work_id = ? ORDER BY id LIMIT ? OFFSET ?",
+            (work_id, limit, offset),
+        ).fetchall()
+        return tuple(InformationItemRecord(*row) for row in rows)
+
     def update(
         self,
         *,

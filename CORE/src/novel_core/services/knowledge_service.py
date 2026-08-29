@@ -160,6 +160,20 @@ class KnowledgeService:
             )
         return tuple(results)
 
+    def get_character_knowledge_event(
+        self, character_id: int, information_item_id: int, episode_id: int
+    ) -> CharacterKnowledgeEventRecord | None:
+        work_id = self._work_id()
+        self._validate_character(work_id, character_id)
+        self._validate_information(work_id, information_item_id)
+        self._validate_episode(work_id, episode_id)
+        return self._repository.get(
+            work_id=work_id,
+            character_id=character_id,
+            information_item_id=information_item_id,
+            episode_id=episode_id,
+        )
+
     def get_known_information(
         self, character_id: int, episode_id: int
     ) -> tuple[InformationItemRecord, ...]:

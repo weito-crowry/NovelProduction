@@ -5,6 +5,8 @@ import type {
   CharacterStateRecord,
   CharacterStateSet,
   CharacterUpdate,
+  CharacterKnowledgeEventRecord,
+  CharacterKnowledgeSet,
   EffectiveKnowledgeRecord,
   RelationshipCreate,
   RelationshipRecord,
@@ -123,5 +125,32 @@ export function fetchCharacterKnowledge(
   return apiRequest<EffectiveKnowledgeRecord[]>(
     `${characterPath(projectId, `/characters/${characterId}/knowledge`)}?episode_id=${episodeId}`,
     { projectId },
+  );
+}
+
+export function fetchCharacterKnowledgeExact(
+  projectId: string,
+  characterId: number,
+  informationItemId: number,
+  episodeId: number,
+): Promise<CharacterKnowledgeEventRecord | null> {
+  return apiRequest<CharacterKnowledgeEventRecord | null>(
+    `${characterPath(projectId, `/characters/${characterId}/knowledge/${informationItemId}`)}?episode_id=${episodeId}`,
+    { projectId },
+  );
+}
+
+export function setCharacterKnowledge(
+  projectId: string,
+  characterId: number,
+  informationItemId: number,
+  input: CharacterKnowledgeSet,
+): Promise<CharacterKnowledgeEventRecord> {
+  return apiRequest<CharacterKnowledgeEventRecord>(
+    characterPath(
+      projectId,
+      `/characters/${characterId}/knowledge/${informationItemId}`,
+    ),
+    { method: "PUT", body: input, projectId },
   );
 }
