@@ -15,6 +15,16 @@ class DocumentSchemaError(ValueError, NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class DocumentStorageError(NovelMcpError):
+    """Raised when persisted Canonical Document JSON is structurally invalid."""
+
+    code = "DOCUMENT_STORAGE_ERROR"
+
+    def __init__(self, message: str = "stored Canonical Document is invalid") -> None:
+        self.message = message
+        super().__init__(f"{self.code}: {message}")
+
+
 class MigrationError(NovelMcpError):
     """Raised when migrations cannot be applied safely."""
 

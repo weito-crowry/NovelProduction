@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,10 +25,9 @@ def _open_database(db_path: Path) -> sqlite3.Connection:
 
 @pytest.fixture
 def services(tmp_path: Path):
-    db_path = tmp_path / "story.db"
-    connection = _open_database(db_path)
+    connection = _open_database(tmp_path / "story.db")
     try:
-        initialize_test_work(connection, "Phase 3")
+        initialize_test_work(connection, "Structured drafts")
         yield SimpleNamespace(
             connection=connection,
             narrative=NarrativeService(connection),
@@ -44,31 +42,45 @@ def _episode(services, title: str = "対象話"):
     return services.narrative.create_episode(chapter.id, title)
 
 
-def test_draft_save_preserves_exact_body_and_hash(services) -> None:
-    episode = _episode(services)
-    body = "\n  先頭空白\n末尾改行\n"
+def _canonical_json(html: str) -> str:
+    return (
+        '{"schema_version":1,"type":"novel_document","blocks":['
+        '{"id":"blk_11111111111111111111111111111111",'
+        f'"type":"narration","html":"{html}","attrs":{{}},"annotations":{{}}'
+        "]}"
+    )
 
-    first = services.drafts.save_draft(
+
+def test_draft_save_persists_canonical_document_without_legacy_fields(services) -> None:
+    episode = _episode(services)
+
+    result = services.drafts.save_draft(
         episode.id,
-        body,
+        plain_text="\n  先頭空白\n末尾改行\n",
         source_agent="ChatGPT",
         change_summary="初稿",
     )
 
-    assert first.revision == 1
-    assert first.parent_draft_id is None
-    assert first.body == body
-    assert first.content_hash == hashlib.sha256(body.encode("utf-8")).hexdigest()
-    assert services.drafts.get_draft(episode.id) == first
-    assert services.drafts.get_draft(episode.id, revision=1) == first
+    snapshot = services.drafts.get_draft(episode.id)
+    assert snapshot is not None
+    assert result.revision == 1
+    assert snapshot.document.blocks[0].html == "  先頭空白<br>末尾改行"
+    assert not hasattr(snapshot, "body")
+    assert not hasattr(snapshot, "content_hash")
+    columns = {
+        row[1] for row in services.connection.execute("PRAGMA table_info(drafts)")
+    }
+    assert "document_json" in columns
+    assert "body" not in columns
+    assert "content_hash" not in columns
 
 
 def test_draft_save_is_linear_and_history_is_metadata_only(services) -> None:
     episode = _episode(services)
-    first = services.drafts.save_draft(episode.id, "revision one")
+    first = services.drafts.save_draft(episode.id, plain_text="revision one")
     second = services.drafts.save_draft(
         episode.id,
-        "revision two",
+        html='<p id="known">revision two</p>',
         expected_parent_draft_id=first.id,
         source_agent="human",
         change_summary="二稿",
@@ -81,41 +93,50 @@ def test_draft_save_is_linear_and_history_is_metadata_only(services) -> None:
     assert history[-1].parent_draft_id == first.id
     assert history[-1].source_agent == "human"
     assert history[-1].change_summary == "二稿"
-    assert history[-1].content_hash == second.content_hash
-    assert history[-1].body_chars == len("revision two")
     assert not hasattr(history[-1], "body")
-    assert services.drafts.get_draft(episode.id) == second
+    assert not hasattr(history[-1], "content_hash")
+    assert services.drafts.get_draft(episode.id).revision == 2
 
 
 def test_stale_parent_is_rejected_without_partial_revision(services) -> None:
     episode = _episode(services)
-    first = services.drafts.save_draft(episode.id, "one")
+    first = services.drafts.save_draft(episode.id, plain_text="one")
     second = services.drafts.save_draft(
-        episode.id, "two", expected_parent_draft_id=first.id
+        episode.id,
+        html='<p id="known">two</p>',
+        expected_parent_draft_id=first.id,
     )
 
     with pytest.raises(VersionConflictError, match="VERSION_CONFLICT"):
         services.drafts.save_draft(
-            episode.id, "stale", expected_parent_draft_id=first.id
+            episode.id,
+            html='<p id="known">stale</p>',
+            expected_parent_draft_id=first.id,
         )
 
     assert [item.revision for item in services.drafts.history(episode.id)] == [1, 2]
-    assert services.drafts.get_draft(episode.id) == second
+    assert services.drafts.get_draft(episode.id).id == second.id
 
 
-def test_draft_input_bounds_are_validated(services) -> None:
+def test_draft_input_bounds_and_initial_modes_are_validated(services) -> None:
     episode = _episode(services)
 
-    with pytest.raises(ValidationError, match="body"):
-        services.drafts.save_draft(episode.id, "")
-    with pytest.raises(ValidationError, match="body"):
-        services.drafts.save_draft(episode.id, 123)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="exactly one"):
+        services.drafts.save_draft(episode.id)
+    with pytest.raises(ValidationError, match="plain_text"):
+        services.drafts.save_draft(episode.id, plain_text=123)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        services.drafts.save_draft(episode.id, plain_text="a", html="<p>a</p>")
     with pytest.raises(ValidationError, match="source_agent"):
-        services.drafts.save_draft(episode.id, "body", source_agent="")
+        services.drafts.save_draft(episode.id, plain_text="body", source_agent="")
     with pytest.raises(ValidationError, match="source_agent"):
-        services.drafts.save_draft(episode.id, "body", source_agent="a" * 121)
+        services.drafts.save_draft(
+            episode.id, plain_text="body", source_agent="a" * 121
+        )
     with pytest.raises(ValidationError, match="change_summary"):
-        services.drafts.save_draft(episode.id, "body", change_summary="a" * 1001)
+        services.drafts.save_draft(
+            episode.id, plain_text="body", change_summary="a" * 1001
+        )
     with pytest.raises(ValidationError, match="limit"):
         services.drafts.history(episode.id, limit=0)
     with pytest.raises(ValidationError, match="limit"):
@@ -126,39 +147,41 @@ def test_draft_input_bounds_are_validated(services) -> None:
 
 def test_draft_rows_are_append_only_at_sqlite_boundary(services) -> None:
     episode = _episode(services)
-    draft = services.drafts.save_draft(episode.id, "immutable")
+    draft = services.drafts.save_draft(episode.id, plain_text="immutable")
 
     with pytest.raises(sqlite3.IntegrityError):
         services.connection.execute(
-            "UPDATE drafts SET body = ? WHERE id = ?", ("changed", draft.id)
+            "UPDATE drafts SET document_json = ? WHERE id = ?",
+            (_canonical_json("changed"), draft.id),
         )
     with pytest.raises(sqlite3.IntegrityError):
         services.connection.execute("DELETE FROM drafts WHERE id = ?", (draft.id,))
     services.connection.rollback()
 
-    assert services.drafts.get_draft(episode.id).body == "immutable"
+    assert services.drafts.get_draft(episode.id).document.blocks[0].html == "immutable"
 
 
 def test_draft_parent_foreign_key_cannot_cross_episode(services) -> None:
     first_episode = _episode(services, "第一話")
     second_episode = _episode(services, "第二話")
-    first = services.drafts.save_draft(first_episode.id, "first")
-    body = "invalid parent"
+    first = services.drafts.save_draft(first_episode.id, plain_text="first")
+    second_work_id = services.connection.execute(
+        "SELECT work_id FROM episodes WHERE id = ?", (second_episode.id,)
+    ).fetchone()[0]
 
     with pytest.raises(sqlite3.IntegrityError):
         services.connection.execute(
             """
             INSERT INTO drafts
-                (work_id, episode_id, revision, parent_draft_id, body, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (work_id, episode_id, revision, parent_draft_id, document_json)
+            VALUES (?, ?, ?, ?, ?)
             """,
             (
-                first.work_id,
+                second_work_id,
                 second_episode.id,
                 1,
                 first.id,
-                body,
-                hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                _canonical_json("invalid"),
             ),
         )
     services.connection.rollback()
@@ -166,10 +189,14 @@ def test_draft_parent_foreign_key_cannot_cross_episode(services) -> None:
 
 def test_draft_history_limit_is_stable_and_bounded(services) -> None:
     episode = _episode(services)
-    current_parent = None
-    for index in range(3):
+    first = services.drafts.save_draft(episode.id, plain_text="revision 0")
+    current_parent = first.id
+    for index in range(1, 3):
+        block_id = services.drafts.get_draft(episode.id).document.blocks[0].id
         draft = services.drafts.save_draft(
-            episode.id, f"revision {index}", expected_parent_draft_id=current_parent
+            episode.id,
+            html=f'<p id="{block_id}">revision {index}</p>',
+            expected_parent_draft_id=current_parent,
         )
         current_parent = draft.id
 
