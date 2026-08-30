@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRoutes } from "../../app/routes";
+import { projectQueryKeys } from "../../api/queryKeys";
 import type { CharacterRecord, DraftDocumentRead, DraftExport, DraftHistoryItem, DraftHtmlRead, DraftWebRead, NovelDocument } from "../../api/types";
 
 function response(value: unknown, status = 200): Response {
@@ -18,6 +19,7 @@ function deferred<T>() {
 
 const episode = { id: 2, work_id: 7, chapter_id: 1, position: 1, title: "Episode", summary: "", purpose: "", foreshadowing_notes_json: "[]", canon_status: "draft", production_status: "planned", version: 1, created_at: "", updated_at: "" };
 const outline = { chapters: [{ chapter: { id: 1, work_id: 7, position: 1, title: "Chapter", summary: "", purpose: "", canon_status: "draft", production_status: "planned", version: 1, created_at: "", updated_at: "" }, episodes: [{ episode, scenes: [] }] }] };
+const navigationOutline = { chapters: [{ ...outline.chapters[0], episodes: [{ episode, scenes: [] }, { episode: { ...episode, id: 3, position: 2, title: "Episode 2" }, scenes: [] }] }] };
 const blockId = "blk_0123456789abcdef0123456789abcdef";
 
 function documentRead(revision: number, id = revision, blocks: NovelDocument["blocks"] = [{
@@ -56,10 +58,11 @@ function routeFor(
   exportWarnings: DraftExport["warnings"] = [],
   authoringHtmlByRevision: Record<number, DraftHtmlRead> = latest ? { [latest.revision]: authoringHtml(latest) } : {},
   characters: CharacterRecord[] = [],
+  outlineView = outline,
 ) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://test");
-    if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+    if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outlineView });
     if (url.pathname.endsWith("/episodes/2/draft")) {
       if (url.searchParams.get("format") === "document") {
         const revision = url.searchParams.get("revision");
@@ -461,6 +464,57 @@ describe("Phase E manuscript read flows", () => {
     expect(confirmationReads).toBe(1);
   });
 
+  it("clears a previous committed save error when manual latest confirmation restarts", async () => {
+    const baseline = documentRead(2, 20);
+    const actual = documentRead(6, 61);
+    let saved = false;
+    let confirmationReads = 0;
+    const retryConfirmation = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") {
+          if (saved && init?.cache === "no-store") {
+            confirmationReads += 1;
+            if (confirmationReads === 1) throw new Error("confirmation network down");
+            return retryConfirmation.promise;
+          }
+          return response({ project_id: "A", data: baseline });
+        }
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: authoringHtml(baseline) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(actual) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        saved = true;
+        return response({ project_id: "A", data: { id: 61, revision: 6, parent_draft_id: 20, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(2)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 2");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.selectOptions(screen.getByLabelText("Block type"), "heading");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Save succeeded as revision 6, but the latest manuscript could not be reloaded.");
+    const reload = screen.getByRole("button", { name: "Reload latest" });
+    await waitFor(() => expect(reload).toBeEnabled());
+    await user.click(reload);
+    expect(reload).toBeDisabled();
+    expect(screen.getByText("Confirming latest manuscript…")).toHaveAttribute("role", "status");
+    expect(screen.queryByText("Save succeeded as revision 6, but the latest manuscript could not be reloaded.")).not.toBeInTheDocument();
+
+    retryConfirmation.resolve(response({ project_id: "A", data: actual }));
+    expect(await screen.findByText("Latest revision 6")).toBeInTheDocument();
+  });
+
   it("single-flights automatic save confirmation and disables manual reload while it is pending", async () => {
     const baseline = documentRead(2, 20);
     const actual = documentRead(6, 61);
@@ -613,6 +667,263 @@ describe("Phase E manuscript read flows", () => {
     expect(screen.queryByRole("textbox", { name: "Manuscript editor" })).not.toBeInTheDocument();
   });
 
+  it("traps dirty Cancel confirmation and blocks editor actions before and during discard", async () => {
+    const baseline = documentRead(2, 20);
+    const external = documentRead(3, 30);
+    let current = baseline;
+    let holdCancel = false;
+    let postCount = 0;
+    const cancelRefresh = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") {
+          if (init?.cache === "no-store" && holdCancel) {
+            holdCancel = false;
+            return cancelRefresh.promise;
+          }
+          return response({ project_id: "A", data: current });
+        }
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: authoringHtml(current) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(current) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        postCount += 1;
+        return response({ project_id: "A", data: { id: 31, revision: 3, parent_draft_id: 20, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(current.revision)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 2");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.type(editor, " local");
+
+    await user.click(screen.getByRole("button", { name: "Cancel editing" }));
+    const dialog = screen.getByRole("dialog");
+    const keep = screen.getByRole("button", { name: "Keep editing" });
+    const discard = screen.getByRole("button", { name: "Discard edits" });
+    expect(screen.getByRole("button", { name: "Save manuscript" })).toBeDisabled();
+    expect(keep).toHaveFocus();
+    await user.tab();
+    expect(discard).toHaveFocus();
+    await user.tab();
+    expect(keep).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(discard).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(dialog).not.toBeInTheDocument();
+    expect(editor).toHaveTextContent("local");
+
+    current = external;
+    holdCancel = true;
+    await user.click(screen.getByRole("button", { name: "Cancel editing" }));
+    await user.click(screen.getByRole("button", { name: "Discard edits" }));
+    expect(screen.getByRole("button", { name: "Save manuscript" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel editing" })).toBeDisabled();
+    expect(postCount).toBe(0);
+
+    cancelRefresh.resolve(response({ project_id: "A", data: external }));
+    expect(await screen.findByText("Latest revision 3")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Manuscript editor" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an already observed newer latest after stale save confirmation", async () => {
+    const baseline = documentRead(4, 40);
+    const saved = documentRead(5, 50);
+    const newer = documentRead(7, 70);
+    const staleConfirmation = documentRead(6, 60);
+    let saveCompleted = false;
+    const confirmation = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") {
+          if (saveCompleted && init?.cache === "no-store") return confirmation.promise;
+          return response({ project_id: "A", data: baseline });
+        }
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: authoringHtml(baseline) });
+        if (url.searchParams.get("format") === "web") {
+          const revision = Number(url.searchParams.get("revision"));
+          return response({ project_id: "A", data: webRead(revision === 7 ? newer : staleConfirmation) });
+        }
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        saveCompleted = true;
+        return response({ project_id: "A", data: { id: saved.id, revision: saved.revision, parent_draft_id: 40, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(baseline.revision)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { queryClient } = renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 4");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.selectOptions(screen.getByLabelText("Block type"), "heading");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    queryClient.setQueryData(projectQueryKeys.draftDocument("A", 2, "latest"), newer);
+    confirmation.resolve(response({ project_id: "A", data: staleConfirmation }));
+
+    await waitFor(() => expect(screen.getByText("Latest revision 7")).toBeInTheDocument());
+    expect(queryClient.getQueryData(projectQueryKeys.draftDocument("A", 2, "latest"))).toEqual(newer);
+  });
+
+  it("saves whole-manuscript deletion as empty HTML and an empty canonical document", async () => {
+    const baseline = documentRead(1, 10);
+    const empty = documentRead(2, 20, []);
+    let current = baseline;
+    const postBodies: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") return response({ project_id: "A", data: current });
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: current.content.blocks.length === 0 ? authoringHtml(empty, "") : authoringHtml(baseline) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(current, current.content.blocks.length === 0 ? "" : "<p>canonical</p>") });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        postBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        current = empty;
+        return response({ project_id: "A", data: { id: 20, revision: 2, parent_draft_id: 10, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(current.revision)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.click(editor);
+    await user.keyboard("{Control>}a{/Control}");
+    await user.keyboard("{Backspace}");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).toEqual(expect.objectContaining({ html: "" }));
+    expect(await screen.findByText("Latest revision 2")).toBeInTheDocument();
+    expect(screen.getByText("This manuscript revision is empty.")).toBeInTheDocument();
+    expect(current.content.blocks).toEqual([]);
+  });
+
+  it("guards manuscript route navigation while dirty and never posts on discard", async () => {
+    const latest = documentRead(1, 10);
+    const route = routeFor(latest, [historyItem(1)], { 1: webRead(latest) }, [], { 1: authoringHtml(latest) }, [], navigationOutline);
+    let postCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") postCount += 1;
+      return route(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { router } = renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.type(editor, " local");
+    await waitFor(() => expect(screen.getByText("Unsaved changes")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("link", { name: "Back to manuscript" }));
+    expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(router.state.location.pathname).toBe("/projects/A/manuscript/2");
+    expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toHaveTextContent("local");
+
+    const secondEpisode = screen.getByRole("link", { name: /Episode 2/ });
+    await user.click(secondEpisode);
+    expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(router.state.location.pathname).toBe("/projects/A/manuscript/2");
+    expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toHaveTextContent("local");
+
+    await user.click(secondEpisode);
+    await user.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/projects/A/manuscript/3"));
+    expect(postCount).toBe(0);
+  });
+
+  it("reports invalid ordinary save identity with save-specific wording", async () => {
+    const latest = documentRead(1, 10);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") return response({ project_id: "A", data: latest });
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: authoringHtml(latest) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(latest) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") return response({ project_id: "A", data: { id: 0, revision: 0, parent_draft_id: 10, id_map: {} } }, 201);
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(1)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.type(editor, " local");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The draft save response has an invalid revision identity.");
+    expect(alert).not.toHaveTextContent("restore response");
+    expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toBeInTheDocument();
+  });
+
+  it("keeps a newer latest cache when a background document refresh completes late", async () => {
+    const baseline = documentRead(4, 40);
+    const newer = documentRead(7, 70);
+    const stale = documentRead(6, 60);
+    let holdRefresh = false;
+    const backgroundRefresh = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") {
+          if (holdRefresh && init?.cache === "no-store") return backgroundRefresh.promise;
+          return response({ project_id: "A", data: baseline });
+        }
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(url.searchParams.get("revision") === "7" ? newer : baseline) });
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(baseline.revision)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { queryClient } = renderRoute();
+
+    await screen.findByText("Latest revision 4");
+    holdRefresh = true;
+    const refresh = queryClient.refetchQueries({ queryKey: projectQueryKeys.draftDocument("A", 2, "latest"), exact: true });
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.cache === "no-store")).toHaveLength(2));
+    queryClient.setQueryData(projectQueryKeys.draftDocument("A", 2, "latest"), newer);
+    backgroundRefresh.resolve(response({ project_id: "A", data: stale }));
+    await refresh;
+
+    await waitFor(() => expect(screen.getByText("Latest revision 7")).toBeInTheDocument());
+    expect(queryClient.getQueryData(projectQueryKeys.draftDocument("A", 2, "latest"))).toEqual(newer);
+  });
+
   it("keeps local conflict edits and shows latest reload failure inside the conflict dialog", async () => {
     const baseline = documentRead(1, 10);
     const latest = documentRead(2, 20);
@@ -710,6 +1021,10 @@ describe("Phase E manuscript read flows", () => {
     const load = await screen.findByRole("button", { name: "Load latest and discard local edits" });
     await user.click(load);
     await waitFor(() => expect(load).toBeDisabled());
+    const dialog = screen.getByRole("dialog");
+    expect(screen.getByRole("button", { name: "Keep local edits" })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(freshReads).toBe(1);
     await user.click(load);
     expect(freshReads).toBe(1);

@@ -20,6 +20,7 @@ import { AppShell } from "../../components/layout/AppShell";
 import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
+import { useModalFocus } from "../../components/ui/useModalFocus";
 import { ConflictDialog } from "../conflicts/ConflictDialog";
 import {
   fetchAllCharacters,
@@ -40,6 +41,7 @@ import {
   assertWebIdentity,
   isFormalBlockId,
   projectableUnknownAnnotations,
+  reconcileLatestObservation,
   restoreRefreshStatus,
 } from "./manuscriptRead";
 import { fetchOutline } from "../structure/structureApi";
@@ -74,7 +76,14 @@ export function ManuscriptPage() {
           {selectedId === null ? (
             <Card><p className="eyebrow">Manuscript</p><h2>Select an episode</h2><p>Choose an episode to read its structured manuscript.</p></Card>
           ) : (
-            <ManuscriptReader key={`${project}-${selectedId}`} projectId={project} episodeId={selectedId} scenes={outlineQuery.data?.chapters.flatMap((chapter) => chapter.episodes).find((entry) => entry.episode.id === selectedId)?.scenes ?? []} />
+            <ManuscriptReader
+              key={`${project}-${selectedId}`}
+              projectId={project}
+              episodeId={selectedId}
+              scenes={outlineQuery.data?.chapters.flatMap((chapter) => chapter.episodes).find((entry) => entry.episode.id === selectedId)?.scenes ?? []}
+              scenesLoading={outlineQuery.isPending}
+              scenesError={outlineQuery.isError ? "Unable to load scenes. Existing scene references were kept." : null}
+            />
           )}
         </section>
       </div>
@@ -111,7 +120,19 @@ function EpisodeList({
   );
 }
 
-function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string; episodeId: number; scenes: SceneRecord[] }) {
+function ManuscriptReader({
+  projectId,
+  episodeId,
+  scenes,
+  scenesLoading,
+  scenesError,
+}: {
+  projectId: string;
+  episodeId: number;
+  scenes: SceneRecord[];
+  scenesLoading: boolean;
+  scenesError: string | null;
+}) {
   const queryClient = useQueryClient();
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
   const [includeNotes, setIncludeNotes] = useState(false);
@@ -159,6 +180,12 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     retry: false,
     staleTime: selectedRevision === null ? 10_000 : Infinity,
     refetchOnMount: selectedRevision === null ? "always" : false,
+    structuralSharing: selectedRevision === null
+      ? (previous, incoming) => safeReconcileLatestObservation(
+        previous as DraftDocumentRead | null | undefined,
+        incoming as DraftDocumentRead | null | undefined,
+      )
+      : undefined,
   });
   const documentRead = documentQuery.data ?? null;
   const displayRevision = documentRead?.revision ?? null;
@@ -194,13 +221,13 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     setSaveSuccess(null);
     try {
       const latest = await getFreshDocument(projectId, episodeId);
-      if (latest === null) {
+      const adopted = setLatestDocument(queryClient, projectId, episodeId, latest);
+      if (adopted === null) {
         setEditSession({ key: Date.now(), baselineDocument: null, baselineDraftId: null, initialHtml: "" });
       } else {
-        const html = await getMatchingAuthoringHtml(projectId, episodeId, latest);
-        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
+        const html = await getMatchingAuthoringHtml(projectId, episodeId, adopted);
         setSelectedRevision(null);
-        setEditSession({ key: Date.now(), baselineDocument: latest, baselineDraftId: latest.id, initialHtml: html.content });
+        setEditSession({ key: Date.now(), baselineDocument: adopted, baselineDraftId: adopted.id, initialHtml: html.content });
       }
       setEditDirty(false);
     } catch (caught) {
@@ -211,7 +238,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
   }
 
   async function saveEditedHtml(html: string) {
-    if (cancelRefreshInFlight.current) return;
+    if (discardDialogOpen || cancelRefreshInFlight.current) return;
     const session = editSession;
     if (session === null || editSaving) return;
     setEditSaving(true);
@@ -253,14 +280,15 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     if (conflictReloadInFlight.current) return;
     conflictReloadInFlight.current = true;
     setConflictReloadPending(true);
+    setEditError(null);
     try {
       const latest = await getFreshDocument(projectId, episodeId);
-      if (latest === null) {
+      const adopted = setLatestDocument(queryClient, projectId, episodeId, latest);
+      if (adopted === null) {
         setEditSession({ key: Date.now(), baselineDocument: null, baselineDraftId: null, initialHtml: "" });
       } else {
-        const html = await getMatchingAuthoringHtml(projectId, episodeId, latest);
-        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
-        setEditSession({ key: Date.now(), baselineDocument: latest, baselineDraftId: latest.id, initialHtml: html.content });
+        const html = await getMatchingAuthoringHtml(projectId, episodeId, adopted);
+        setEditSession({ key: Date.now(), baselineDocument: adopted, baselineDraftId: adopted.id, initialHtml: html.content });
       }
       setEditDirty(false);
       setEditConflict(null);
@@ -280,11 +308,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     setEditError(null);
     try {
       const latest = await getFreshDocument(projectId, episodeId);
-      if (latest !== null) {
-        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
-      } else {
-        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), null);
-      }
+      setLatestDocument(queryClient, projectId, episodeId, latest);
       await invalidateAfterSave(queryClient, projectId, episodeId);
       setEditSession(null);
       setEditDirty(false);
@@ -299,17 +323,22 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     }
   }
 
+  function keepLocalConflict() {
+    if (conflictReloadInFlight.current) return;
+    setEditConflict(null);
+  }
+
   async function confirmCommittedSave(committed: CommittedSave) {
     if (committedSaveRefreshInFlight.current) return;
     committedSaveRefreshInFlight.current = true;
     setCommittedSaveRefreshPending(true);
+    setCommittedSaveError(null);
     try {
-      const actualLatest = await getFreshDocument(projectId, episodeId);
+      const actualLatest = setLatestDocument(queryClient, projectId, episodeId, await getFreshDocument(projectId, episodeId));
       if (actualLatest === null || restoreRefreshStatus(actualLatest, { revision: committed.createdRevision, id: committed.createdDraftId }) !== "confirmed") {
         setCommittedSaveError(saveRefreshMessage(committed.createdRevision));
         return;
       }
-      queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), actualLatest);
       await invalidateAfterSave(queryClient, projectId, episodeId);
       setSelectedRevision(null);
       setSelectedBlockId(null);
@@ -359,7 +388,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     setRestoreError(null);
     setPostRefreshError(null);
     try {
-      const latest = await getFreshDocument(projectId, episodeId);
+      const latest = setLatestDocument(queryClient, projectId, episodeId, await getFreshDocument(projectId, episodeId));
       if (latest === null) throw new Error("No latest manuscript draft is available.");
       if (committedRestore !== null) {
         const status = restoreRefreshStatus(latest, { revision: committedRestore.createdRevision, id: committedRestore.createdDraftId });
@@ -369,7 +398,6 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
         }
         setCommittedRestore(null);
       }
-      queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
       setSelectedRevision(null);
       setSelectedBlockId(null);
     } catch (caught) {
@@ -384,10 +412,9 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     setRestoreError(null);
     setPostRefreshError(null);
     try {
-      const freshLatest = await getFreshDocument(projectId, episodeId);
+      const freshLatest = setLatestDocument(queryClient, projectId, episodeId, await getFreshDocument(projectId, episodeId));
       if (freshLatest === null) throw new Error("Restore cannot proceed because there is no current manuscript revision.");
       if (freshLatest.revision === sourceRevision) {
-        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), freshLatest);
         setRestoreRevision(null);
         setSelectedRevision(null);
         setSelectedBlockId(null);
@@ -428,13 +455,12 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
 
   async function refreshAfterRestore(committed: CommittedRestore) {
     try {
-      const actualLatest = await getFreshDocument(projectId, episodeId);
+      const actualLatest = setLatestDocument(queryClient, projectId, episodeId, await getFreshDocument(projectId, episodeId));
       if (actualLatest === null || restoreRefreshStatus(actualLatest, { revision: committed.createdRevision, id: committed.createdDraftId }) !== "confirmed") {
         await invalidateAfterRestore(queryClient, projectId, episodeId);
         setPostRefreshError(refreshMessage(committed.createdRevision));
         return;
       }
-      queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), actualLatest);
       await invalidateAfterRestore(queryClient, projectId, episodeId);
       setSelectedRevision(null);
       setSelectedBlockId(null);
@@ -496,18 +522,21 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
             initialHtml={editSession.initialHtml}
             baselineDocument={editSession.baselineDocument}
             scenes={scenes}
+            scenesLoading={scenesLoading}
+            scenesError={scenesError}
             characters={charactersQuery.data ?? []}
             charactersLoading={charactersQuery.isPending}
             charactersError={charactersQuery.isError ? "Unable to load characters. Existing speaker references were kept." : null}
             saving={editSaving}
             cancelPending={discardPending}
+            interactionBlocked={discardDialogOpen}
             onDirtyChange={setEditDirty}
             onSave={(html) => void saveEditedHtml(html)}
             onCancel={(dirty) => dirty ? setDiscardDialogOpen(true) : void cancelEditing()}
           />
         </>
       )}
-      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={() => setEditConflict(null)} onDiscard={() => void loadLatestIntoEditor()} errorMessage={editError} discardPending={conflictReloadPending} />}
+      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={keepLocalConflict} onDiscard={() => void loadLatestIntoEditor()} errorMessage={editError} discardPending={conflictReloadPending} />}
       {committedSave && (
         <Card>
           <p className="saved-indicator">Save succeeded as revision {committedSave.createdRevision}.</p>
@@ -646,7 +675,26 @@ function RestoreDialog({ revision, pending, onCancel, onConfirm }: { revision: n
 }
 
 function DiscardDialog({ pending, onKeep, onDiscard }: { pending: boolean; onKeep: () => void; onDiscard: () => void }) {
-  return <div className="dialog-backdrop"><div className="dialog" role="dialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Discard unsaved manuscript edits?</h2><p>Your local manuscript changes will be discarded after the latest revision is loaded.</p><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onKeep} disabled={pending}>Keep editing</Button><Button type="button" variant="danger" onClick={onDiscard} disabled={pending}>{pending ? "Loading latest…" : "Discard edits"}</Button></div></div></div>;
+  const keepButtonRef = useRef<HTMLButtonElement>(null);
+  const { dialogRef, onKeyDown } = useModalFocus(true, {
+    initialFocusRef: keepButtonRef,
+    onEscape: () => {
+      if (!pending) onKeep();
+    },
+  });
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <section ref={dialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby="discard-title" onKeyDown={onKeyDown}>
+        <h2 id="discard-title">Discard unsaved manuscript edits?</h2>
+        <p>Your local manuscript changes will be discarded after the latest revision is loaded.</p>
+        <div className="dialog-actions">
+          <Button ref={keepButtonRef} type="button" variant="secondary" onClick={onKeep} disabled={pending}>Keep editing</Button>
+          <Button type="button" variant="danger" onClick={onDiscard} disabled={pending}>{pending ? "Loading latest…" : "Discard edits"}</Button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 type CommittedRestore = { sourceRevision: number; createdRevision: number; createdDraftId: number };
@@ -657,6 +705,42 @@ type EditConflict = { localHtml: string; latest: DraftDocumentRead | ReturnType<
 async function getFreshDocument(projectId: string, episodeId: number): Promise<DraftDocumentRead | null> {
   const read = await fetchFreshLatestDocument(projectId, episodeId);
   return read === null ? null : assertDocumentIdentity(read, episodeId);
+}
+
+function safeReconcileLatestObservation(
+  previous: DraftDocumentRead | null | undefined,
+  incoming: DraftDocumentRead | null | undefined,
+): DraftDocumentRead | null | undefined {
+  try {
+    return reconcileLatestObservation(previous, incoming);
+  } catch {
+    return previous;
+  }
+}
+
+function setLatestDocument(
+  queryClient: ReturnType<typeof useQueryClient>,
+  projectId: string,
+  episodeId: number,
+  incoming: DraftDocumentRead | null,
+): DraftDocumentRead | null {
+  let adopted: DraftDocumentRead | null | undefined;
+  let inconsistency: unknown = null;
+  queryClient.setQueryData<DraftDocumentRead | null>(
+    projectQueryKeys.draftDocument(projectId, episodeId, "latest"),
+    (previous) => {
+      try {
+        adopted = reconcileLatestObservation(previous, incoming);
+        return adopted ?? null;
+      } catch (caught) {
+        inconsistency = caught;
+        adopted = previous;
+        return previous ?? null;
+      }
+    },
+  );
+  if (inconsistency !== null) throw inconsistency;
+  return adopted ?? null;
 }
 
 async function getMatchingAuthoringHtml(projectId: string, episodeId: number, document: DraftDocumentRead) {
@@ -700,7 +784,7 @@ function displayJson(value: JsonValue | undefined): string {
 }
 
 function assertSaveResult(value: DraftSaveResult): asserts value is DraftSaveResult {
-  if (!Number.isInteger(value.id) || value.id <= 0 || !Number.isInteger(value.revision) || value.revision <= 0) throw new Error("The restore response has an invalid revision identity.");
+  if (!Number.isInteger(value.id) || value.id <= 0 || !Number.isInteger(value.revision) || value.revision <= 0) throw new Error("The draft save response has an invalid revision identity.");
 }
 
 function assertExport(value: DraftExport): asserts value is DraftExport {

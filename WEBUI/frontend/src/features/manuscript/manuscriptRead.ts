@@ -24,6 +24,18 @@ export interface DraftHtmlPreview {
   format: "html";
 }
 
+export function reconcileLatestObservation(
+  previous: DraftDocumentRead | null | undefined,
+  incoming: DraftDocumentRead | null | undefined,
+): DraftDocumentRead | null | undefined {
+  if (previous === undefined || previous === null) return incoming;
+  if (incoming === null || incoming === undefined) return previous;
+  if (incoming.revision > previous.revision) return incoming;
+  if (incoming.revision < previous.revision) return previous;
+  if (incoming.id !== previous.id) throw new Error("The latest manuscript snapshots are inconsistent.");
+  return incoming;
+}
+
 export function asDraftHtmlPreview(value: unknown): DraftHtmlPreview | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;

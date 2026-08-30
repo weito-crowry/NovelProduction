@@ -163,13 +163,49 @@ describe("Phase E manuscript API adapter", () => {
     ]);
   });
 
-  it("stops when a character page repeats", async () => {
+  it("rejects when a character page repeats", async () => {
     const page = Array.from({ length: 100 }, (_, index) => ({
       ...character,
       id: index + 1,
       character_key: `character-${index + 1}`,
     }));
     charactersMock.mockResolvedValueOnce(page).mockResolvedValueOnce(page);
+
+    await expect(fetchAllCharacters("A")).rejects.toThrow("duplicate");
+    expect(charactersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a partially overlapping character page", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...character,
+      id: index + 1,
+      character_key: `character-${index + 1}`,
+    }));
+    const overlappingPage = Array.from({ length: 100 }, (_, index) => ({
+      ...character,
+      id: index + 100,
+      character_key: `character-${index + 100}`,
+    }));
+    charactersMock.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(overlappingPage);
+
+    await expect(fetchAllCharacters("A")).rejects.toThrow("duplicate");
+    expect(charactersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects duplicate character IDs within one page", async () => {
+    charactersMock.mockResolvedValueOnce([{ ...character }, { ...character, character_key: "duplicate" }]);
+
+    await expect(fetchAllCharacters("A")).rejects.toThrow("duplicate");
+    expect(charactersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts an empty final character page", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      ...character,
+      id: index + 1,
+      character_key: `character-${index + 1}`,
+    }));
+    charactersMock.mockResolvedValueOnce(firstPage).mockResolvedValueOnce([]);
 
     await expect(fetchAllCharacters("A")).resolves.toHaveLength(100);
     expect(charactersMock).toHaveBeenCalledTimes(2);

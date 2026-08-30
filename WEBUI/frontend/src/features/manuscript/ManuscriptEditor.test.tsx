@@ -57,8 +57,11 @@ function renderEditor(overrides: Partial<ComponentProps<typeof ManuscriptEditor>
       characters={[]}
       charactersLoading={false}
       charactersError={null}
+      scenesLoading={false}
+      scenesError={null}
       saving={false}
       cancelPending={false}
+      interactionBlocked={false}
       onDirtyChange={onDirtyChange}
       onSave={onSave}
       onCancel={onCancel}
@@ -201,5 +204,34 @@ describe("ManuscriptEditor", () => {
     expect(editor.querySelector("p")).toHaveAttribute("data-np-speaker-id", "888");
     await user.click(screen.getByRole("button", { name: "Save manuscript" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.stringContaining('data-np-scene-id="999"')));
+  });
+
+  it.each([
+    { label: "loading", scenesLoading: true, scenesError: null },
+    { label: "error", scenesLoading: false, scenesError: "Unable to load scenes." },
+  ])("disables the Scene selector and preserves its attr while candidates are $label", async ({ scenesLoading, scenesError }) => {
+    renderEditor({
+      initialHtml: '<p id="blk_known" data-np-type="dialogue" data-np-scene-id="999">本文</p>',
+      scenes: [],
+      scenesLoading,
+      scenesError,
+    });
+    const user = userEvent.setup();
+
+    expect(screen.getByLabelText("Scene")).toBeDisabled();
+    expect(screen.getByLabelText("Block type")).toBeEnabled();
+    expect(screen.getByLabelText("Speaker")).toBeEnabled();
+    expect(screen.getByLabelText("Emotions annotation")).toBeEnabled();
+    expect(screen.getByRole("option", { name: "Current unavailable scene #999" })).toBeInTheDocument();
+    if (scenesLoading) {
+      expect(screen.getByText("Loading scenes…")).toBeInTheDocument();
+    } else {
+      expect(screen.getByRole("alert")).toHaveTextContent("Unable to load scenes.");
+    }
+
+    const editor = screen.getByRole("textbox", { name: "Manuscript editor" });
+    await user.click(editor);
+    await user.type(editor, "追記");
+    expect(editor.querySelector("p")).toHaveAttribute("data-np-scene-id", "999");
   });
 });

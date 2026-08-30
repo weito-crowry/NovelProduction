@@ -5,6 +5,7 @@ import {
   assertHtmlIdentity,
   assertWebIdentity,
   projectableUnknownAnnotations,
+  reconcileLatestObservation,
   restoreRefreshStatus,
 } from "./manuscriptRead";
 
@@ -77,5 +78,21 @@ describe("manuscript read safety", () => {
     expect(restoreRefreshStatus({ revision: 5, id: 99 }, { revision: 5, id: 10 })).toBe("inconsistent");
     expect(restoreRefreshStatus({ revision: 4, id: 9 }, { revision: 5, id: 10 })).toBe("stale");
     expect(restoreRefreshStatus(null, { revision: 5, id: 10 })).toBe("refresh-failed");
+  });
+
+  it("reconciles latest observations without moving the cache backward", () => {
+    const older = { ...documentRead, id: 40, revision: 3 };
+    const newer = { ...documentRead, id: 60, revision: 6 };
+    const same = { ...documentRead };
+    const inconsistent = { ...documentRead, id: 99 };
+
+    expect(reconcileLatestObservation(undefined, documentRead)).toBe(documentRead);
+    expect(reconcileLatestObservation(null, documentRead)).toBe(documentRead);
+    expect(reconcileLatestObservation(documentRead, null)).toBe(documentRead);
+    expect(reconcileLatestObservation(documentRead, undefined)).toBe(documentRead);
+    expect(reconcileLatestObservation(documentRead, older)).toBe(documentRead);
+    expect(reconcileLatestObservation(documentRead, newer)).toBe(newer);
+    expect(reconcileLatestObservation(documentRead, same)).toBe(same);
+    expect(() => reconcileLatestObservation(documentRead, inconsistent)).toThrow("inconsistent");
   });
 });

@@ -27,7 +27,9 @@ export function ConflictDialog<TLocal, TLatest>({
   const keepButtonRef = useRef<HTMLButtonElement>(null);
   const { dialogRef, onKeyDown } = useModalFocus(true, {
     initialFocusRef: keepButtonRef,
-    onEscape: onKeep,
+    onEscape: () => {
+      if (!discardPending) onKeep();
+    },
   });
 
   return (
@@ -62,6 +64,7 @@ export function ConflictDialog<TLocal, TLatest>({
             type="button"
             variant="secondary"
             onClick={onKeep}
+            disabled={discardPending}
           >
             {keepActionLabel}
           </Button>

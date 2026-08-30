@@ -46,11 +46,14 @@ export interface ManuscriptEditorProps {
   initialHtml: string;
   baselineDocument: DraftDocumentRead | null;
   scenes: SceneRecord[];
+  scenesLoading: boolean;
+  scenesError: string | null;
   characters: CharacterRecord[];
   charactersLoading: boolean;
   charactersError: string | null;
   saving: boolean;
   cancelPending: boolean;
+  interactionBlocked: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onSave: (html: string) => void;
   onCancel: (dirty: boolean) => void;
@@ -60,11 +63,14 @@ export function ManuscriptEditor({
   initialHtml,
   baselineDocument,
   scenes,
+  scenesLoading,
+  scenesError,
   characters,
   charactersLoading,
   charactersError,
   saving,
   cancelPending,
+  interactionBlocked,
   onDirtyChange,
   onSave,
   onCancel,
@@ -158,6 +164,7 @@ export function ManuscriptEditor({
   }
 
   function changeScene(value: string) {
+    if (scenesLoading || scenesError !== null) return;
     const next = value === "" ? clearableReferenceValue(selectedBaseline, "scene_id") : value;
     updateAttributes({ "data-np-scene-id": next });
   }
@@ -305,12 +312,14 @@ export function ManuscriptEditor({
           )}
           <label className="field-group" htmlFor="scene-selector">
             Scene
-            <select id="scene-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-scene-id"]) ?? ""} onChange={(event) => changeScene(event.target.value)}>
+            <select id="scene-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-scene-id"]) ?? ""} disabled={scenesLoading || scenesError !== null} onChange={(event) => changeScene(event.target.value)}>
               <option value="">No scene</option>
               {sceneOptions.current !== null && !scenes.some((scene) => scene.id === sceneOptions.current) && <option value={String(sceneOptions.current)}>Current unavailable scene #{sceneOptions.current}</option>}
               {scenes.map((scene) => <option key={scene.id} value={String(scene.id)}>{scene.title} (#{scene.id})</option>)}
             </select>
           </label>
+          {scenesLoading && <p className="helper-text">Loading scenes…</p>}
+          {scenesError && <p className="helper-text" role="alert">{scenesError}</p>}
           <label className="field-group" htmlFor="speaker-selector">
             Speaker
             <select id="speaker-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-speaker-id"]) ?? ""} disabled={charactersLoading || charactersError !== null} onChange={(event) => changeSpeaker(event.target.value)}>
@@ -330,8 +339,8 @@ export function ManuscriptEditor({
       {editorError && <p role="alert">{editorError}</p>}
       {!ready && <p role="status">Preparing manuscript editor…</p>}
       <div className="form-actions">
-        <Button type="button" onClick={save} disabled={!ready || !dirty || saving || cancelPending || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
-        <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={saving || cancelPending}>Cancel editing</Button>
+        <Button type="button" onClick={save} disabled={!ready || !dirty || saving || cancelPending || interactionBlocked || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
+        <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={saving || cancelPending || interactionBlocked}>Cancel editing</Button>
       </div>
       {rubyOpen && <RubyDialog base={rubyBase} reading={rubyReading} onConfirm={confirmRuby} onCancel={() => setRubyOpen(false)} />}
     </section>

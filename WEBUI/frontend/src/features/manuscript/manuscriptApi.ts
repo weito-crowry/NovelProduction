@@ -119,13 +119,18 @@ export function saveDraftHtml(
 
 export async function fetchAllCharacters(projectId: string): Promise<CharacterRecord[]> {
   const characters: CharacterRecord[] = [];
-  const seenPages = new Set<string>();
+  const seenIds = new Set<number>();
   let offset = 0;
   while (true) {
     const page = await fetchCharacters(projectId, 100, offset);
-    const pageKey = page.map((character) => character.id).join(",");
-    if (seenPages.has(pageKey)) return characters;
-    seenPages.add(pageKey);
+    const pageIds = new Set<number>();
+    for (const character of page) {
+      if (seenIds.has(character.id) || pageIds.has(character.id)) {
+        throw new Error("Character pagination returned duplicate IDs.");
+      }
+      pageIds.add(character.id);
+    }
+    for (const id of pageIds) seenIds.add(id);
     characters.push(...page);
     if (page.length < 100) return characters;
     const nextOffset = offset + page.length;
