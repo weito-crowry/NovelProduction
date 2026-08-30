@@ -72,6 +72,26 @@ def test_annotations_use_string_namespace_and_emotions_codec() -> None:
 
 
 @pytest.mark.parametrize(
+    "attribute_value",
+    ["foo DATA-NP-BAR", "foo DATA-ANN-BAR baz"],
+)
+def test_namespace_spelling_ignores_reserved_tokens_inside_attribute_values(
+    attribute_value: str,
+) -> None:
+    parsed = parse_authoring_html(f'<p data-ann-note="{attribute_value}">本文</p>')
+
+    assert parsed[0].annotations == {"note": attribute_value}
+
+
+@pytest.mark.parametrize("attribute_name", ["DATA-NP-TYPE", "DATA-ANN-FOO"])
+def test_namespace_spelling_rejects_mixed_case_attribute_names(
+    attribute_name: str,
+) -> None:
+    with pytest.raises(DocumentSchemaError):
+        parse_authoring_html(f'<p {attribute_name}="x">本文</p>')
+
+
+@pytest.mark.parametrize(
     "html",
     [
         '<p id="">本文</p>',

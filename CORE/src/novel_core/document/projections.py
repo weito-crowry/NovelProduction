@@ -53,17 +53,19 @@ def render_context_html(
     ]
     selected: list[tuple[int, NovelBlock]] = []
     visible_count = 0
+    selected_substantive = False
     truncated = False
     for index, block in reversed(eligible):
         block_visible_count = len(base_visible_text(block.html))
-        if not selected:
+        if block_visible_count == 0:
+            selected.append((index, block))
+            continue
+        if not selected_substantive:
             selected.append((index, block))
             visible_count += block_visible_count
+            selected_substantive = True
             continue
-        if (
-            block_visible_count == 0
-            or visible_count + block_visible_count <= max_visible_chars
-        ):
+        if visible_count + block_visible_count <= max_visible_chars:
             selected.append((index, block))
             visible_count += block_visible_count
             continue

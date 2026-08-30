@@ -109,6 +109,56 @@ def test_context_includes_one_oversized_tail_block_without_cutting_it() -> None:
     assert result.truncated is False
 
 
+def test_context_keeps_oversized_tail_block_before_separator() -> None:
+    document = NovelDocument(
+        blocks=(
+            block("a", "narration", "A" * 5000),
+            block("b", "separator", ""),
+        )
+    )
+
+    result = render_context_html(document, max_visible_chars=4000)
+
+    assert result.html == (f'<p data-np-type="narration">{"A" * 5000}</p>\n<hr>')
+    assert result.selected_block_count == 2
+    assert result.visible_text_char_count == 5000
+    assert result.truncated is False
+
+
+def test_context_stops_before_earlier_blocks_after_oversized_tail_selection() -> None:
+    document = NovelDocument(
+        blocks=(
+            block("a", "narration", "earlier"),
+            block("b", "narration", "B" * 5000),
+            block("c", "separator", ""),
+        )
+    )
+
+    result = render_context_html(document, max_visible_chars=4000)
+
+    assert result.html == (f'<p data-np-type="narration">{"B" * 5000}</p>\n<hr>')
+    assert "earlier" not in result.html
+    assert result.selected_block_count == 2
+    assert result.visible_text_char_count == 5000
+    assert result.truncated is True
+
+
+def test_context_renders_zero_visible_blocks_without_substantive_text() -> None:
+    document = NovelDocument(
+        blocks=(
+            block("a", "separator", ""),
+            block("b", "separator", ""),
+        )
+    )
+
+    result = render_context_html(document, max_visible_chars=0)
+
+    assert result.html == "<hr>\n<hr>"
+    assert result.selected_block_count == 2
+    assert result.visible_text_char_count == 0
+    assert result.truncated is False
+
+
 def test_context_tail_output_returns_original_order_and_counts_ruby_base_only() -> None:
     document = NovelDocument(
         blocks=(

@@ -132,7 +132,7 @@ class _AuthoringParser(HTMLParser):
             return
         if tag not in _OUTER_TAGS:
             raise DocumentSchemaError(f"forbidden Authoring outer tag: {tag}")
-        _validate_namespace_spelling(source, tag)
+        _validate_namespace_spelling(source)
         metadata = _parse_metadata(tag, attrs)
         if tag == "hr":
             self._append_block(metadata, "")
@@ -144,7 +144,7 @@ class _AuthoringParser(HTMLParser):
         if self.current is None:
             if tag != "hr":
                 raise DocumentSchemaError(f"forbidden Authoring outer tag: {tag}")
-            _validate_namespace_spelling(source, tag)
+            _validate_namespace_spelling(source)
             self._append_block(_parse_metadata(tag, attrs), "")
             return
         if tag in _OUTER_TAGS:
@@ -394,13 +394,56 @@ def _source_start(tag: str, attrs: list[tuple[str, str | None]]) -> str:
     return f"<{tag}{rendered}>"
 
 
-def _validate_namespace_spelling(source: str, tag: str) -> None:
-    match = re.match(r"<\s*[^\s/>]+(.*?)/?>\s*$", source, re.DOTALL)
+def _validate_namespace_spelling(source: str) -> None:
+    match = re.match(r"<\s*[^\s/>]+", source)
     if match is None:
         return
-    for attribute in re.finditer(r"(?:^|\s)([^\s=/>]+)", match.group(1)):
-        name = attribute.group(1)
+
+    position = match.end()
+    while position < len(source):
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position >= len(source) or source[position] in "/>":
+            return
+
+        name_start = position
+        while (
+            position < len(source)
+            and not source[position].isspace()
+            and source[position] not in "=/>"
+        ):
+            position += 1
+        if position == name_start:
+            position += 1
+            continue
+
+        name = source[name_start:position]
         if name.lower().startswith(("data-ann-", "data-np-")) and name != name.lower():
             raise DocumentSchemaError(
                 "data annotation and metadata names must be lowercase"
             )
+
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position >= len(source) or source[position] != "=":
+            continue
+
+        position += 1
+        while position < len(source) and source[position].isspace():
+            position += 1
+        if position >= len(source):
+            return
+        if source[position] in "\"'":
+            quote = source[position]
+            position += 1
+            while position < len(source) and source[position] != quote:
+                position += 1
+            if position < len(source):
+                position += 1
+            continue
+        while (
+            position < len(source)
+            and not source[position].isspace()
+            and source[position] != ">"
+        ):
+            position += 1

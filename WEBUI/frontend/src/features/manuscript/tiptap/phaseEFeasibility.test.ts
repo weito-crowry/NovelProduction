@@ -21,6 +21,18 @@ describe("Phase E TipTap boundary feasibility", () => {
     expect(semanticHtml(editor.getHTML())).toEqual(semanticHtml(fixtureHtml));
     editor.destroy();
   });
+
+  test("semantic comparison includes every element attribute", () => {
+    expect(
+      semanticHtml('<p data-np-type="dialogue" id="block-1">本文</p>'),
+    ).toEqual(semanticHtml('<p id="block-1" data-np-type="dialogue">本文</p>'));
+    expect(
+      semanticHtml('<p id="block-1" data-extra="unexpected">本文</p>'),
+    ).not.toEqual(semanticHtml('<p id="block-1">本文</p>'));
+    expect(
+      semanticHtml('<ruby data-extra="unexpected">東京<rt>とうきょう</rt></ruby>'),
+    ).not.toEqual(semanticHtml('<ruby>東京<rt>とうきょう</rt></ruby>'));
+  });
 });
 
 function semanticHtml(html: string): string[] {
@@ -42,25 +54,22 @@ function semanticNode(node: Node): string {
     throw new Error("unexpected non-element semantic node");
   }
   const tag = node.tagName.toLowerCase();
+  const attributes = Array.from(node.attributes)
+    .map(({ name, value }) => [name, value] as const)
+    .sort(([leftName, leftValue], [rightName, rightValue]) => {
+      const nameOrder = leftName.localeCompare(rightName);
+      return nameOrder !== 0 ? nameOrder : leftValue.localeCompare(rightValue);
+    })
+    .map(([name, value]) => `${name}=${value}`)
+    .join(",");
   if (tag === "ruby") {
     const reading = node.querySelector(":scope > rt")?.textContent ?? "";
     const base = Array.from(node.childNodes)
       .filter((child) => !(child instanceof Element && child.tagName.toLowerCase() === "rt"))
       .map((child) => child.textContent ?? "")
       .join("");
-    return `ruby(${base}|${reading})`;
+    return `ruby[${attributes}](${base}|${reading})`;
   }
-  const attributes = [
-    "id",
-    "data-np-type",
-    "data-np-scene-id",
-    "data-np-speaker-id",
-    "data-ann-emotions",
-    "data-emphasis",
-  ]
-    .map((name) => `${name}=${node.getAttribute(name) ?? ""}`)
-    .filter((entry) => !entry.endsWith("="))
-    .join(",");
   const children = Array.from(node.childNodes)
     .filter((child) => !(child.nodeType === Node.TEXT_NODE && !child.textContent))
     .map((child) => semanticNode(child))
