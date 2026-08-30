@@ -26,7 +26,7 @@ The API becomes the only supported runtime data-access entry point. MCP and WEBU
 5. Extract reusable domain logic from `novel_mcp` into a component that is independent of MCP and WEBUI.
 6. Make FastAPI the single supported runtime path to SQLite.
 7. Preserve optimistic version checking and fail closed on conflicts.
-8. Add structured JSON draft documents that can carry metadata on narrative blocks while retaining rendered plain text for LLM, search, and export use.
+8. Add a structured Canonical Document for manuscript authoring, with projections for LLM, search, reading, and export use.
 9. Keep the production runtime simple: one FastAPI process serves both the API and the built React application, while the source tree remains logically separated.
 10. Keep the system evolvable: API versioning, document schema versioning, and adapter boundaries must permit future changes without rewriting stored history.
 
@@ -398,126 +398,24 @@ Keep the migration lifecycle's EOL-independent checksum behavior when it moves i
 
 New schema changes begin with migration `005`.
 
-## 11. Structured draft document design
+## 11. Structured manuscript architecture summary
 
-### 11.1 Storage model
+The detailed Phase E behavior is defined in
+[`2026-08-30-novelproduction-phase-e-structured-manuscript-design.md`](2026-08-30-novelproduction-phase-e-structured-manuscript-design.md).
+That document is the Phase E source of truth and supersedes the earlier
+structured-draft details that were formerly in this architecture document.
 
-Existing draft behavior is append-only and remains append-only.
+The architecture-level commitments are:
 
-A new migration extends drafts with structured-document fields conceptually equivalent to:
+- Canonical `document_json` is the only persistent manuscript representation.
+- CORE owns NovelProduction Document Schema v1 and Restricted HTML projections.
+- Draft history remains append-only with optimistic CAS.
+- WEBUI is Read-first with a thin TipTap editor; TipTap JSON is not a persistence contract.
+- MCP keeps the existing 59-tool contract and extends the existing draft tools.
+- Publication export is WEBUI/API-only and has an extensible format boundary.
+- Migration 005 is destructive, and Phase E development after its introduction is isolated from the stable Phase D runtime.
 
-```text
-document_json
-document_schema_version
-document_hash
-```
-
-Existing `body` remains a rendered plain-text representation.
-
-For structured drafts:
-
-```text
-document_json = canonical structured draft content
-      -> CORE renderer
-body = derived plain-text content
-```
-
-`body` and `document_json` must not be independently editable through the public API when structured content is present.
-
-### 11.2 Document schema
-
-Initial document envelope:
-
-```json
-{
-  "schema_version": 1,
-  "type": "novel_document",
-  "content": [
-    {
-      "id": "blk_001",
-      "type": "dialogue",
-      "text": "また雪か。",
-      "attrs": {
-        "speaker_character_id": 3,
-        "scene_id": 4
-      },
-      "annotations": {}
-    }
-  ]
-}
-```
-
-The stable block core is:
-
-- `id`
-- `type`
-- `text`
-- `attrs`
-- `annotations`
-
-Initial block types:
-
-- `narration`
-- `dialogue`
-- `thought`
-- `description`
-- `quote`
-- `separator`
-- `heading`
-- `note`
-
-`attrs` represents semantic attributes needed to interpret the block, for example:
-
-- `speaker_character_id`
-- `addressee_character_ids`
-- `scene_id`
-- language or other later structural attributes
-
-`annotations` is intentionally extensible and may later include:
-
-- emotion
-- intent
-- tags
-- foreshadowing/thread references
-- AI analysis output
-- continuity annotations
-
-New metadata keys must be addable without a database schema change.
-
-### 11.3 Schema evolution
-
-The top-level `schema_version` is mandatory for structured drafts.
-
-Past draft revisions are never rewritten merely to upgrade the document schema. Compatibility is handled by document readers/adapters, or by saving a new draft revision in a newer schema.
-
-Unknown metadata must not be silently discarded by adapters. New document types and fields must be able to coexist with older code in a fail-safe/preservation-oriented way.
-
-### 11.4 Plain-text rendering
-
-CORE is the authoritative renderer from structured document to `body`.
-
-The renderer defines how each block becomes plain novel text. Production notes (`note`) may be excluded from the rendered public/plain manuscript according to the document rendering contract.
-
-Search, ordinary MCP draft retrieval, and text export use `body` by default.
-
-Detailed clients may explicitly request the structured document.
-
-### 11.5 TipTap boundary
-
-TipTap/ProseMirror is an editor implementation detail, not the persistence schema.
-
-```text
-TipTap JSON
-   -> WEBUI editor adapter
-NovelProduction Document Schema
-   -> API
-CORE validation + renderer
-   -> SQLite
-```
-
-The reverse adapter reconstructs editor state from the NovelProduction document schema.
-
-This keeps future editor replacement possible without rewriting stored draft history.
+The earlier Phase A–D architecture and completion history remain unchanged.
 
 ## 12. MCP adapter design
 
@@ -668,25 +566,11 @@ The initial UI does not attempt semantic auto-merge of prose or domain records.
 
 ## 14. Editor UX and metadata
 
-The structured draft editor looks like a normal novel editor rather than a JSON editor.
-
-Selecting a block exposes metadata in the detail/metadata pane.
-
-Example dialogue metadata:
-
-```text
-Type: dialogue
-Speaker: <character>
-Addressees: <characters>
-Scene: <scene>
-
-Annotations
-Emotion: optional
-Intent: optional
-Tags: optional
-```
-
-The UI may provide rich editing controls, but all persisted data passes through the WEBUI adapter into the independent NovelProduction document schema.
+The structured manuscript editor looks like a normal novel editor rather than
+a JSON editor. Its Read-first behavior, editable metadata, Restricted HTML
+boundary, raw metadata views, and explicit-save interaction are defined by the
+Phase E specification. All persisted data passes through the WEBUI adapter
+into the independent NovelProduction Canonical Document schema.
 
 ## 15. Runtime and LAN deployment
 
@@ -771,7 +655,7 @@ Cover:
 - transaction boundaries;
 - document schema validation;
 - document render behavior;
-- hash generation;
+- document normalization and projection;
 - project initialization;
 - regression: search followed by write on supported flows.
 
@@ -810,8 +694,10 @@ Cover:
 - explicit-save flows;
 - version-conflict comparison UI;
 - structure tree/reorder interactions;
-- TipTap <-> NovelProduction document adapter round trips;
-- metadata editing without loss of unknown fields.
+- TipTap <-> Restricted Authoring HTML semantic round trips;
+- metadata editing without loss of unknown annotations;
+- raw Canonical Document visibility; and
+- explicit-save/read-first behavior.
 
 ### 17.5 End-to-end
 
@@ -823,7 +709,7 @@ Critical E2E scenarios include:
 4. Search followed by write succeeds in a fresh request model.
 5. MCP calls API with explicit `project_id` and receives the same `project_id` in the result.
 6. MCP fails closed when API is unavailable.
-7. Structured draft JSON saves as a new append-only revision and renders deterministic `body` text.
+7. Structured manuscript JSON saves as a new append-only revision, preserves Canonical metadata, and exposes the specified HTML/document projections.
 8. React production build is served by the FastAPI process.
 
 ### 17.6 CI
@@ -890,14 +776,17 @@ Exit condition: routine story administration and outline editing no longer requi
 
 ### Phase E — Structured draft editor
 
-- Finalize migration 005 structured draft columns.
-- Implement NovelProduction Document Schema v1.
-- Implement validation, rendering, document hash, and schema-version adapters in CORE.
-- Implement TipTap editor adapter and metadata pane.
-- Preserve append-only draft revision behavior.
-- Keep `body` as the derived plain-text representation.
+Phase E is governed by the detailed specification in
+[`2026-08-30-novelproduction-phase-e-structured-manuscript-design.md`](2026-08-30-novelproduction-phase-e-structured-manuscript-design.md).
+Its architecture summary is Canonical `document_json` persistence, CORE-owned
+Document Schema v1 and Restricted HTML projections, append-only history with
+optimistic CAS, a Read-first thin TipTap WEBUI, extensions to the existing
+59-tool MCP contract, and WEBUI/API-only extensible publication export.
 
-Exit condition: structured manuscript blocks and metadata round-trip WEBUI -> API -> CORE -> SQLite -> WEBUI, while MCP can retrieve normal plain text and optionally structured content.
+Migration 005 is destructive. From the point it is introduced, the Phase E
+checkout must be isolated from the stable Phase D runtime. Final Cutover is a
+separate, explicitly gated operational step after implementation, certification,
+E2E, static checks, CI, and ChatGPT review.
 
 ## 19. Architectural invariants
 
@@ -911,7 +800,7 @@ The implementation must preserve these invariants:
 6. Project archive is organizational, not an authorization/read-only state.
 7. Writes remain optimistic-version checked and transactional.
 8. Existing draft revisions remain append-only.
-9. Structured draft JSON is canonical when present; `body` is derived.
+9. Canonical `document_json` is the only persistent manuscript representation.
 10. TipTap JSON is not the persistence contract.
 11. Past document revisions are not rewritten for schema upgrades.
 12. Production/common use may bundle API + static WEBUI into one process without coupling their source responsibilities.
