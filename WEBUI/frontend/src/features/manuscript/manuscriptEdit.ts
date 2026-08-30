@@ -1,9 +1,12 @@
 import type { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
-import { NodeSelection } from "@tiptap/pm/state";
+import { NodeSelection, TextSelection } from "@tiptap/pm/state";
+import { canJoin, canSplit } from "@tiptap/pm/transform";
 import type { NovelBlock, NovelBlockType } from "../../api/types";
 
 export type EditableBlockType = NovelBlockType;
+
+export type CustomEditorKeyAction = "split" | "join" | null;
 
 const paragraphTypes = new Set<EditableBlockType>([
   "narration",
@@ -40,6 +43,36 @@ export function assertNoDuplicateBlockIds(editor: Editor): void {
     }
     seen.add(id);
   }
+}
+
+export function customEditorKeyAction(
+  event: Pick<KeyboardEvent, "key" | "isComposing" | "keyCode" | "shiftKey" | "ctrlKey" | "metaKey" | "altKey">,
+): CustomEditorKeyAction {
+  if (event.isComposing || event.keyCode === 229) return null;
+  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return null;
+  if (event.key === "Enter") return "split";
+  if (event.key === "Backspace") return "join";
+  return null;
+}
+
+export function canAddRubyToSelection(editor: Editor | null): boolean {
+  if (editor === null) return false;
+  const { selection, doc } = editor.state;
+  if (!(selection instanceof TextSelection) || selection.empty || !selection.$from.sameParent(selection.$to)) return false;
+  if (!selection.$from.parent.isTextblock) return false;
+
+  let valid = true;
+  let hasSubstantiveText = false;
+  doc.nodesBetween(selection.from, selection.to, (node) => {
+    if (!valid) return false;
+    if (node.isText) {
+      hasSubstantiveText ||= (node.text ?? "").trim().length > 0;
+      if (node.marks.length > 0) valid = false;
+      return;
+    }
+    if (node.isInline) valid = false;
+  });
+  return valid && hasSubstantiveText;
 }
 
 export function getSelectedTopLevelBlock(editor: Editor): PMNode | null {
@@ -123,11 +156,15 @@ export function splitSelectedBlock(editor: Editor): boolean {
       customBlockAttributes.includes(key as CustomAttribute) ? null : value,
     ]),
   );
-  const transaction = editor.state.tr.split(selection.from, 1, [
-    { type: block.type, attrs },
-  ]);
-  editor.view.dispatch(transaction);
-  return true;
+  try {
+    const typesAfter = [{ type: block.type, attrs }];
+    if (!canSplit(editor.state.doc, selection.from, 1, typesAfter)) return false;
+    const transaction = editor.state.tr.split(selection.from, 1, typesAfter);
+    editor.view.dispatch(transaction);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function joinSelectedBlockBackward(editor: Editor): boolean {
@@ -139,8 +176,14 @@ export function joinSelectedBlockBackward(editor: Editor): boolean {
   if (position === null || selection.from !== position + 1) return false;
   const blockIndex = topLevelBlockIndex(editor, block);
   if (blockIndex <= 0 || !isTextBearingBlock(doc.child(blockIndex - 1))) return false;
-  editor.view.dispatch(editor.state.tr.join(position));
-  return true;
+  if (doc.child(blockIndex - 1).type !== block.type) return false;
+  try {
+    if (!canJoin(editor.state.doc, position)) return false;
+    editor.view.dispatch(editor.state.tr.join(position));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function insertSeparatorAfterSelection(editor: Editor): boolean {

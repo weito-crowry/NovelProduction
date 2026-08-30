@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -49,7 +49,7 @@ function renderEditor(overrides: Partial<ComponentProps<typeof ManuscriptEditor>
   const onDirtyChange = vi.fn();
   const onSave = vi.fn();
   const onCancel = vi.fn();
-  render(
+  const rendered = render(
     <ManuscriptEditor
       initialHtml={'<p id="blk_known" data-np-type="dialogue" data-np-scene-id="3" data-np-speaker-id="12" data-ann-emotions=\'["焦り"]\'>本文</p>'}
       baselineDocument={baseline}
@@ -58,13 +58,14 @@ function renderEditor(overrides: Partial<ComponentProps<typeof ManuscriptEditor>
       charactersLoading={false}
       charactersError={null}
       saving={false}
+      cancelPending={false}
       onDirtyChange={onDirtyChange}
       onSave={onSave}
       onCancel={onCancel}
       {...overrides}
     />,
   );
-  return { onDirtyChange, onSave, onCancel };
+  return { ...rendered, onDirtyChange, onSave, onCancel };
 }
 
 describe("ManuscriptEditor", () => {
@@ -96,24 +97,64 @@ describe("ManuscriptEditor", () => {
     await user.click(screen.getByRole("button", { name: "Add emotion" }));
     expect(screen.getByLabelText("Emotion 2")).toHaveValue("");
     await user.type(screen.getByLabelText("Emotion 2"), "緊張");
+    expect(screen.getByLabelText("Emotion 2")).toHaveFocus();
     expect(screen.queryByRole("textbox", { name: "Emotions JSON" })).not.toBeInTheDocument();
+  });
+
+  it("keeps plain Enter split semantics while delegating Shift+Enter", async () => {
+    renderEditor({ initialHtml: "<p>本文</p>", baselineDocument: null });
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter", shiftKey: true });
+    expect(editor.querySelectorAll("p")).toHaveLength(1);
+
+    fireEvent.keyDown(editor, { key: "Enter", code: "Enter" });
+    expect(editor.querySelectorAll("p")).toHaveLength(2);
+
+  });
+
+  it("disables Add Ruby for selections across blocks, marked text, hard breaks, and whitespace", async () => {
+    const cases = [
+      { html: "<p>前</p><p>後</p>", expectedParagraphs: 2 },
+      { html: "<p><strong>本文</strong></p>", expectedParagraphs: 1 },
+      { html: "<p>前<br>後</p>", expectedParagraphs: 1 },
+      { html: "<p>   </p>", expectedParagraphs: 1 },
+    ];
+
+    for (const testCase of cases) {
+      const { unmount } = renderEditor({ initialHtml: testCase.html, baselineDocument: null });
+      const user = userEvent.setup();
+      const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+      await user.click(editor);
+      await user.keyboard("{Control>}a{/Control}");
+      expect(screen.getByRole("button", { name: "Ruby" })).toBeDisabled();
+      expect(editor.querySelectorAll("p")).toHaveLength(testCase.expectedParagraphs);
+      unmount();
+    }
+  });
+
+  it("does not allow a whitespace-only Ruby reading", async () => {
+    renderEditor({ initialHtml: "<p><ruby>本文<rt>ほんぶん</rt></ruby></p>", baselineDocument: null });
+    const user = userEvent.setup();
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.click(editor.querySelector("ruby") as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Ruby" }));
+    expect(screen.getByLabelText("Reading")).toHaveValue("ほんぶん");
+    await user.clear(screen.getByLabelText("Reading"));
+    await user.type(screen.getByLabelText("Reading"), "   ");
+
+    expect(screen.getByRole("button", { name: "Confirm Ruby" })).toBeDisabled();
+    expect(editor.querySelector("ruby")).toHaveTextContent("本文ほんぶん");
   });
 
   it("preserves the base prose when a selected Ruby is removed", async () => {
     const { onDirtyChange } = renderEditor({
-      initialHtml: '<p id="blk_known" data-np-type="dialogue">東京</p>',
+      initialHtml: '<p id="blk_known" data-np-type="dialogue"><ruby>東京<rt>とうきょう</rt></ruby></p>',
       baselineDocument: { ...baseline, content: { ...baseline.content, blocks: [{ ...baseline.content.blocks[0], annotations: {} }] } },
     });
     const user = userEvent.setup();
 
     const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
-    await user.click(editor);
-    await user.keyboard("{Control>}a{/Control}");
-    await user.click(screen.getByRole("button", { name: "Ruby" }));
-    await user.type(screen.getByLabelText("Reading"), "とうきょう");
-    await user.click(screen.getByRole("button", { name: "Confirm Ruby" }));
-    expect(editor.querySelector("ruby")).toHaveTextContent("東京とうきょう");
-
     await user.click(editor.querySelector("ruby") as HTMLElement);
     await user.click(screen.getByRole("button", { name: "Ruby" }));
     const reading = screen.getByLabelText("Reading");

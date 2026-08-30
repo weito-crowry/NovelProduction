@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { NovelBlock } from "../../api/types";
 import {
   assertNoDuplicateBlockIds,
+  canAddRubyToSelection,
+  customEditorKeyAction,
   getSelectedTopLevelBlock,
   insertSeparatorAfterSelection,
   joinSelectedBlockBackward,
@@ -98,6 +100,64 @@ describe("Phase E manuscript editor adapter", () => {
       "data-np-speaker-id": null,
     });
     instance.destroy();
+  });
+
+  it("does not join different structural node types", () => {
+    const instance = editor("<h1>Heading</h1><p>Paragraph</p>");
+    instance.commands.setTextSelection(4);
+    const before = instance.getHTML();
+
+    expect(joinSelectedBlockBackward(instance)).toBe(false);
+    expect(instance.getHTML()).toBe(before);
+    instance.destroy();
+  });
+
+  it("returns false instead of throwing when split cannot use the selection boundary", () => {
+    const instance = editor("<p>本文</p>");
+    instance.commands.setNodeSelection(0);
+    const before = instance.getHTML();
+
+    expect(splitSelectedBlock(instance)).toBe(false);
+    expect(instance.getHTML()).toBe(before);
+    instance.destroy();
+  });
+
+  it("allows Ruby only for a plain text selection in one textblock", () => {
+    const plain = editor("<p>本文</p>");
+    plain.commands.setTextSelection({ from: 1, to: 3 });
+    expect(canAddRubyToSelection(plain)).toBe(true);
+    plain.destroy();
+
+    const marked = editor("<p><strong>本文</strong></p>");
+    marked.commands.setTextSelection({ from: 1, to: 3 });
+    expect(canAddRubyToSelection(marked)).toBe(false);
+    marked.destroy();
+
+    const hardBreak = editor("<p>前<br>後</p>");
+    hardBreak.commands.setTextSelection({ from: 1, to: 7 });
+    expect(canAddRubyToSelection(hardBreak)).toBe(false);
+    hardBreak.destroy();
+
+    const multipleBlocks = editor("<p>前</p><p>後</p>");
+    multipleBlocks.commands.setTextSelection({ from: 1, to: 4 });
+    expect(canAddRubyToSelection(multipleBlocks)).toBe(false);
+    multipleBlocks.destroy();
+
+    const whitespace = editor("<p>   </p>");
+    whitespace.commands.setTextSelection({ from: 1, to: 4 });
+    expect(canAddRubyToSelection(whitespace)).toBe(false);
+    whitespace.destroy();
+  });
+
+  it("allows only plain unmodified keyboard actions for custom split and join", () => {
+    const base = { isComposing: false, keyCode: 13, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false };
+    expect(customEditorKeyAction({ ...base, key: "Enter" })).toBe("split");
+    expect(customEditorKeyAction({ ...base, key: "Enter", shiftKey: true })).toBe(null);
+    expect(customEditorKeyAction({ ...base, key: "Enter", ctrlKey: true })).toBe(null);
+    expect(customEditorKeyAction({ ...base, key: "Enter", isComposing: true })).toBe(null);
+    expect(customEditorKeyAction({ ...base, key: "Enter", keyCode: 229 })).toBe(null);
+    expect(customEditorKeyAction({ ...base, key: "Backspace", keyCode: 8 })).toBe("join");
+    expect(customEditorKeyAction({ ...base, key: "Backspace", keyCode: 8, altKey: true })).toBe(null);
   });
 
   it("transforms a selected block without losing known metadata", () => {

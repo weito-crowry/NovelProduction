@@ -1,6 +1,6 @@
 import { EditorContent, useEditor } from "@tiptap/react";
 import { NodeSelection } from "@tiptap/pm/state";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Editor as TiptapEditor } from "@tiptap/core";
 import type {
   CharacterRecord,
@@ -12,7 +12,9 @@ import { Button } from "../../components/ui/Button";
 import { useModalFocus } from "../../components/ui/useModalFocus";
 import {
   assertNoDuplicateBlockIds,
+  canAddRubyToSelection,
   clearableReferenceValue,
+  customEditorKeyAction,
   getSelectedTopLevelBlock,
   insertSeparatorAfterSelection,
   joinSelectedBlockBackward,
@@ -48,6 +50,7 @@ export interface ManuscriptEditorProps {
   charactersLoading: boolean;
   charactersError: string | null;
   saving: boolean;
+  cancelPending: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onSave: (html: string) => void;
   onCancel: (dirty: boolean) => void;
@@ -61,6 +64,7 @@ export function ManuscriptEditor({
   charactersLoading,
   charactersError,
   saving,
+  cancelPending,
   onDirtyChange,
   onSave,
   onCancel,
@@ -90,8 +94,9 @@ export function ManuscriptEditor({
       handleKeyDown: (_view, event) => {
         const activeEditor = editorRef.current;
         if (!activeEditor) return false;
-        if (event.key === "Enter" && splitSelectedBlock(activeEditor)) return true;
-        if (event.key === "Backspace" && joinSelectedBlockBackward(activeEditor)) return true;
+        const action = customEditorKeyAction(event);
+        if (action === "split" && splitSelectedBlock(activeEditor)) return true;
+        if (action === "join" && joinSelectedBlockBackward(activeEditor)) return true;
         return false;
       },
       handleClickOn: (view, _pos, node, nodePos) => {
@@ -201,7 +206,7 @@ export function ManuscriptEditor({
       setRubyOpen(true);
       return;
     }
-    if (!hasTextSelection) return;
+    if (!canAddRubyToSelection(editor)) return;
     setRubyBase(editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, ""));
     setRubyReading("");
     setRubyRange({ from: editor.state.selection.from, to: editor.state.selection.to, node: false });
@@ -209,7 +214,7 @@ export function ManuscriptEditor({
   }
 
   function confirmRuby(reading: string) {
-    if (!editor || rubyRange === null || !rubyBase) return;
+    if (!editor || rubyRange === null || !rubyBase.trim() || !reading.trim()) return;
     const chain = editor.chain().focus();
     if (rubyRange.node) {
       chain.setNodeSelection(rubyRange.from);
@@ -243,6 +248,15 @@ export function ManuscriptEditor({
     changeType("note");
   }
 
+  function handleEditorClick(event: MouseEvent<HTMLDivElement>) {
+    if (!editor || !(event.target instanceof Element)) return;
+    const ruby = event.target.closest("ruby");
+    if (!ruby || !editor.view.dom.contains(ruby)) return;
+    const position = editor.view.posAtDOM(ruby, 0);
+    if (editor.state.doc.nodeAt(position)?.type.name !== "phaseERuby") return;
+    editor.view.dispatch(editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, position)));
+  }
+
   function save() {
     if (!editor || !ready || !dirty || saving || duplicateIds) return;
     try {
@@ -266,14 +280,14 @@ export function ManuscriptEditor({
         <span className={dirty ? "dirty-indicator" : "read-only-meta"}>{dirty ? "Unsaved changes" : "No unsaved changes"}</span>
       </div>
       <div className="manuscript-editor-toolbar" aria-label="Formatting toolbar">
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={openRuby} disabled={!hasTextSelection && selectedRuby === null}>Ruby</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={openRuby} disabled={!canAddRubyToSelection(editor) && selectedRuby === null}>Ruby</Button>
         <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={removeRuby} disabled={selectedRuby === null}>Remove Ruby</Button>
         <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={toggleEmphasis} disabled={!hasTextSelection}>Emphasis dots</Button>
         <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => changeType("heading")} disabled={selectedBlock === null}>Heading</Button>
         <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={insertSeparator}>Insert separator</Button>
         <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={insertNote} disabled={selectedBlock === null || selectedBlock.type.name === "horizontalRule"}>Note</Button>
       </div>
-      <EditorContent editor={editor} />
+      <div onClick={handleEditorClick}><EditorContent editor={editor} /></div>
       {editor && selectedBlock && (
         <div className="manuscript-metadata-pane">
           <h2>Selected block</h2>
@@ -317,7 +331,7 @@ export function ManuscriptEditor({
       {!ready && <p role="status">Preparing manuscript editor…</p>}
       <div className="form-actions">
         <Button type="button" onClick={save} disabled={!ready || !dirty || saving || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
-        <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={saving}>Cancel editing</Button>
+        <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={saving || cancelPending}>Cancel editing</Button>
       </div>
       {rubyOpen && <RubyDialog base={rubyBase} reading={rubyReading} onConfirm={confirmRuby} onCancel={() => setRubyOpen(false)} />}
     </section>
@@ -339,7 +353,7 @@ function EmotionsEditor({
       <legend>Emotions annotation</legend>
       <label><input type="checkbox" checked={emotions !== null} onChange={(event) => event.target.checked ? onSet([]) : onRemove()} /> Emotions annotation</label>
       {emotions !== null && <>
-        {values.map((emotion, index) => <div className="inline-field" key={`${index}-${emotion}`}><label htmlFor={`emotion-${index}`}>Emotion {index + 1}</label><input id={`emotion-${index}`} className="field-control" value={emotion} onChange={(event) => onSet(values.map((current, currentIndex) => currentIndex === index ? event.target.value : current))} /><Button type="button" variant="ghost" aria-label={`Remove emotion ${index + 1}`} onClick={() => onSet(values.filter((_, currentIndex) => currentIndex !== index))}>Remove</Button></div>)}
+        {values.map((emotion, index) => <div className="inline-field" key={index}><label htmlFor={`emotion-${index}`}>Emotion {index + 1}</label><input id={`emotion-${index}`} className="field-control" value={emotion} onChange={(event) => onSet(values.map((current, currentIndex) => currentIndex === index ? event.target.value : current))} /><Button type="button" variant="ghost" aria-label={`Remove emotion ${index + 1}`} onClick={() => onSet(values.filter((_, currentIndex) => currentIndex !== index))}>Remove</Button></div>)}
         <div className="form-actions"><Button type="button" variant="secondary" onClick={() => onSet([...values, ""])}>Add emotion</Button><Button type="button" variant="danger" onClick={onRemove}>Remove emotions annotation</Button></div>
       </>}
     </fieldset>
@@ -370,7 +384,7 @@ function RubyDialog({
         <h2 id={headingId}>Ruby</h2>
         <label className="field-group" htmlFor="ruby-base">Base text<input id="ruby-base" className="field-control" value={base} readOnly /></label>
         <label className="field-group" htmlFor="ruby-reading">Reading<input ref={readingRef} id="ruby-reading" className="field-control" value={value} onChange={(event) => setValue(event.target.value)} /></label>
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button><Button type="button" onClick={() => onConfirm(value)} disabled={!value}>Confirm Ruby</Button></div>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button><Button type="button" onClick={() => onConfirm(value)} disabled={!value.trim()}>Confirm Ruby</Button></div>
       </section>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { isApiError } from "../../api/errors";
 import { projectQueryKeys } from "../../api/queryKeys";
@@ -137,6 +137,9 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
   const [committedSave, setCommittedSave] = useState<CommittedSave | null>(null);
   const [committedSaveError, setCommittedSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<DraftSaveResult | null>(null);
+  const [committedSaveRefreshPending, setCommittedSaveRefreshPending] = useState(false);
+  const committedSaveRefreshInFlight = useRef(false);
+  const cancelRefreshInFlight = useRef(false);
 
   const documentKey = projectQueryKeys.draftDocument(projectId, episodeId, selectedRevision ?? "latest");
   const documentQuery = useQuery({
@@ -262,6 +265,8 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
   }
 
   async function cancelEditing() {
+    if (cancelRefreshInFlight.current) return;
+    cancelRefreshInFlight.current = true;
     setDiscardPending(true);
     setEditError(null);
     try {
@@ -271,6 +276,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
       } else {
         queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), null);
       }
+      await invalidateAfterSave(queryClient, projectId, episodeId);
       setEditSession(null);
       setEditDirty(false);
       setDiscardDialogOpen(false);
@@ -279,11 +285,15 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     } catch (caught) {
       setEditError(caught instanceof Error ? caught.message : "The latest manuscript could not be loaded. Your local edits were kept.");
     } finally {
+      cancelRefreshInFlight.current = false;
       setDiscardPending(false);
     }
   }
 
   async function confirmCommittedSave(committed: CommittedSave) {
+    if (committedSaveRefreshInFlight.current) return;
+    committedSaveRefreshInFlight.current = true;
+    setCommittedSaveRefreshPending(true);
     try {
       const actualLatest = await getFreshDocument(projectId, episodeId);
       if (actualLatest === null || restoreRefreshStatus(actualLatest, { revision: committed.createdRevision, id: committed.createdDraftId }) !== "confirmed") {
@@ -298,6 +308,9 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
       setCommittedSaveError(null);
     } catch {
       setCommittedSaveError(saveRefreshMessage(committed.createdRevision));
+    } finally {
+      committedSaveRefreshInFlight.current = false;
+      setCommittedSaveRefreshPending(false);
     }
   }
 
@@ -478,18 +491,19 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
             charactersLoading={charactersQuery.isPending}
             charactersError={charactersQuery.isError ? "Unable to load characters. Existing speaker references were kept." : null}
             saving={editSaving}
+            cancelPending={discardPending}
             onDirtyChange={setEditDirty}
             onSave={(html) => void saveEditedHtml(html)}
             onCancel={(dirty) => dirty ? setDiscardDialogOpen(true) : void cancelEditing()}
           />
         </>
       )}
-      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={() => setEditConflict(null)} onDiscard={() => void loadLatestIntoEditor()} />}
+      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={() => setEditConflict(null)} onDiscard={() => void loadLatestIntoEditor()} errorMessage={editError} />}
       {committedSave && (
         <Card>
           <p className="saved-indicator">Save succeeded as revision {committedSave.createdRevision}.</p>
           <p role={committedSaveError ? "alert" : "status"}>{committedSaveError ?? "Confirming latest manuscript…"}</p>
-          <Button type="button" variant="secondary" onClick={() => void reloadCommittedSave()} disabled={editPending}>Reload latest</Button>
+          <Button type="button" variant="secondary" onClick={() => void reloadCommittedSave()} disabled={editPending || committedSaveRefreshPending}>Reload latest</Button>
         </Card>
       )}
       {!editSession && committedSave === null && (
