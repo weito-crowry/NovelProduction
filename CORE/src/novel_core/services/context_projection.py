@@ -100,7 +100,7 @@ def build_context_meta(
     *,
     target_order: tuple[int, int],
     previous_summaries_max: int,
-    previous_draft_tail_chars_max: int,
+    previous_draft_context_visible_chars_max: int,
     world_facts_max: int,
     timeline_events_max: int,
     information_items_max: int,
@@ -112,8 +112,9 @@ def build_context_meta(
     information_total: int,
     previous_returned: int,
     previous_total: int,
-    previous_draft_tail: int,
-    draft_truncated: bool,
+    previous_draft_context_blocks: int,
+    previous_draft_context_visible_chars: int,
+    previous_draft_context_truncated: bool,
     guard_count: int,
 ) -> dict[str, object]:
     return {
@@ -123,14 +124,19 @@ def build_context_meta(
         },
         "limits": {
             "previous_episode_summaries": previous_summaries_max,
-            "previous_draft_tail_chars": previous_draft_tail_chars_max,
+            "previous_draft_context_visible_chars": (
+                previous_draft_context_visible_chars_max
+            ),
             "world_facts_max": world_facts_max,
             "timeline_events_max": timeline_events_max,
             "information_items_max": information_items_max,
         },
         "returned_counts": {
             "previous_episode_summaries": previous_returned,
-            "previous_draft_tail_chars": previous_draft_tail,
+            "previous_draft_context_blocks": previous_draft_context_blocks,
+            "previous_draft_context_visible_chars": (
+                previous_draft_context_visible_chars
+            ),
             "world_facts": world_facts_returned,
             "timeline_events": timeline_events_returned,
             "information_items": information_returned,
@@ -146,6 +152,6 @@ def build_context_meta(
             "world_facts": world_facts_total > world_facts_max,
             "timeline_events": timeline_events_total > timeline_events_max,
             "information_items": information_total > information_items_max,
-            "previous_draft_tail": draft_truncated,
+            "previous_draft_context": previous_draft_context_truncated,
         },
     }

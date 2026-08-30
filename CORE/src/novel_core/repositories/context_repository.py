@@ -10,7 +10,6 @@ from novel_core.repositories.disclosure_repository import (
     DisclosureRepository,
     ReaderDisclosureRecord,
 )
-from novel_core.repositories.draft_repository import DraftRecord, DraftRepository
 from novel_core.repositories.information_repository import (
     InformationItemRecord,
     InformationRepository,
@@ -40,7 +39,6 @@ class ContextRepository:
         self._knowledge = KnowledgeRepository(connection)
         self._information = InformationRepository(connection, force_fallback=True)
         self._disclosures = DisclosureRepository(connection)
-        self._drafts = DraftRepository(connection)
 
     def get_episode(self, work_id: int, episode_id: int) -> EpisodeRecord | None:
         return self._narrative.get_episode(work_id=work_id, episode_id=episode_id)
@@ -113,6 +111,3 @@ class ContextRepository:
             (work_id, episode_id),
         ).fetchall()
         return tuple(ReaderDisclosureRecord(*row) for row in rows)
-
-    def latest_draft(self, work_id: int, episode_id: int) -> DraftRecord | None:
-        return self._drafts.latest(work_id=work_id, episode_id=episode_id)

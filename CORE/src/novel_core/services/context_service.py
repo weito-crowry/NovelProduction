@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from novel_core.document import ContextProjectionResult, render_context_html
 from novel_core.errors import NarrativeNotFoundError, WorkNotFoundError
 from novel_core.models.context import (
     ContextParticipant,
@@ -32,12 +33,13 @@ from novel_core.services.context_projection import (
     safe_information,
     safe_relationship,
 )
+from novel_core.services.draft_service import DraftService
 from novel_core.services.knowledge_service import KNOWN_STATES
 from novel_core.services.outline_service import OutlineService
 from novel_core.services.relationship_service import RelationshipService
 
 PREVIOUS_SUMMARIES_MAX = 2
-PREVIOUS_DRAFT_TAIL_CHARS = 4000
+PREVIOUS_DRAFT_CONTEXT_VISIBLE_CHARS = 4000
 WORLD_FACTS_MAX = 30
 TIMELINE_EVENTS_MAX = 30
 INFORMATION_ITEMS_MAX = 50
@@ -53,6 +55,7 @@ class _InformationCandidate:
 class ContextService:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._repository = ContextRepository(connection)
+        self._draft_service = DraftService(connection)
         self._work_repository = WorkRepository(connection)
         self._outline_service = OutlineService(connection)
         self._relationship_service = RelationshipService(connection)
@@ -93,13 +96,13 @@ class ContextService:
                 key=lambda item: (-item.importance, item.time_start or "", item.id),
             )[:TIMELINE_EVENTS_MAX]
         )
-        recent_context, previous_omitted, draft_truncated = self._recent_context(
+        recent_context, previous_omitted, draft_projection = self._recent_context(
             work.id, target_order
         )
         context_meta = build_context_meta(
             target_order=target_order,
             previous_summaries_max=PREVIOUS_SUMMARIES_MAX,
-            previous_draft_tail_chars_max=PREVIOUS_DRAFT_TAIL_CHARS,
+            previous_draft_context_visible_chars_max=PREVIOUS_DRAFT_CONTEXT_VISIBLE_CHARS,
             world_facts_max=WORLD_FACTS_MAX,
             timeline_events_max=TIMELINE_EVENTS_MAX,
             information_items_max=INFORMATION_ITEMS_MAX,
@@ -116,8 +119,9 @@ class ContextService:
             previous_returned=len(recent_context.previous_episode_summaries),
             previous_total=previous_omitted
             + len(recent_context.previous_episode_summaries),
-            previous_draft_tail=len(recent_context.previous_draft_tail),
-            draft_truncated=draft_truncated,
+            previous_draft_context_blocks=draft_projection.selected_block_count,
+            previous_draft_context_visible_chars=draft_projection.visible_text_char_count,
+            previous_draft_context_truncated=draft_projection.truncated,
             guard_count=len(guards),
         )
         return EpisodeContext(
@@ -345,7 +349,7 @@ class ContextService:
 
     def _recent_context(
         self, work_id: int, target_order: tuple[int, int]
-    ) -> tuple[RecentContext, int, bool]:
+    ) -> tuple[RecentContext, int, ContextProjectionResult]:
         all_previous = self._previous_episodes(work_id, target_order)
         previous = all_previous[-PREVIOUS_SUMMARIES_MAX:]
         summaries = tuple(
@@ -358,19 +362,23 @@ class ContextService:
             )
             for episode, order in previous
         )
-        previous_draft = (
-            self._repository.latest_draft(work_id, all_previous[-1][0].id)
-            if all_previous
-            else None
+        draft_projection = ContextProjectionResult(
+            html="", selected_block_count=0, visible_text_char_count=0, truncated=False
         )
-        body = "" if previous_draft is None else previous_draft.body
+        if all_previous:
+            previous_draft = self._draft_service.get_draft(all_previous[-1][0].id)
+            if previous_draft is not None:
+                draft_projection = render_context_html(
+                    previous_draft.document,
+                    max_visible_chars=PREVIOUS_DRAFT_CONTEXT_VISIBLE_CHARS,
+                )
         return (
             RecentContext(
                 previous_episode_summaries=summaries,
-                previous_draft_tail=body[-PREVIOUS_DRAFT_TAIL_CHARS:],
+                previous_draft_context_html=draft_projection.html,
             ),
             max(0, len(all_previous) - len(summaries)),
-            len(body) > PREVIOUS_DRAFT_TAIL_CHARS,
+            draft_projection,
         )
 
     def _previous_episodes(

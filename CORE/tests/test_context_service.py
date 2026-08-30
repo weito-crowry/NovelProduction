@@ -53,17 +53,24 @@ def services(tmp_path: Path):
         connection.close()
 
 
-def test_context_applies_fixed_bounds_and_previous_draft_tail(services) -> None:
+def test_context_applies_fixed_bounds_and_previous_draft_projection(services) -> None:
     chapter = services.narrative.create_chapter("章")
     previous = services.narrative.create_episode(chapter.id, "前話", summary="前話要約")
     current = services.narrative.create_episode(chapter.id, "対象話")
     services.narrative.create_episode(chapter.id, "未来話")
-    parent = None
-    previous_body = "x" * 5001
-    draft = services.drafts.save_draft(
-        previous.id, previous_body, expected_parent_draft_id=parent
+    scene = services.narrative.create_scene(previous.id, "前話シーン")
+    speaker = services.character.create("話者")
+    previous_body = (
+        '<p id="earlier" data-ann-emotions="[&quot;焦り&quot;]">前の本文</p>'
+        f'<p id="latest" data-np-scene-id="{scene.id}" '
+        f'data-np-speaker-id="{speaker.id}">' + "x" * 5001 + "</p>"
     )
-    assert draft.body == previous_body
+    draft = services.drafts.save_draft(
+        previous.id,
+        html=previous_body,
+        metadata_updates={"latest": {"annotations": {"mood": "tense"}}},
+    )
+    assert draft.revision == 1
 
     for index in range(40):
         fact = services.world.create(
@@ -82,18 +89,29 @@ def test_context_applies_fixed_bounds_and_previous_draft_tail(services) -> None:
 
     assert len(context.world_facts) == 30
     assert len(context.timeline_events) == 30
-    assert context.recent_context.previous_draft_tail == "x" * 4000
+    assert context.recent_context.previous_draft_context_html == (
+        f'<p data-np-type="narration" data-np-scene-id="{scene.id}" '
+        f'data-np-speaker-id="{speaker.id}">' + "x" * 5001 + "</p>"
+    )
     assert len(context.recent_context.previous_episode_summaries) == 1
     assert context.context_meta["limits"] == {
         "previous_episode_summaries": 2,
-        "previous_draft_tail_chars": 4000,
+        "previous_draft_context_visible_chars": 4000,
         "world_facts_max": 30,
         "timeline_events_max": 30,
         "information_items_max": 50,
     }
     assert context.context_meta["omitted_counts"]["world_facts"] == 10
     assert context.context_meta["omitted_counts"]["timeline_events"] == 10
-    assert context.context_meta["truncated"]["previous_draft_tail"] is True
+    assert context.context_meta["returned_counts"]["previous_draft_context_blocks"] == 1
+    assert (
+        context.context_meta["returned_counts"]["previous_draft_context_visible_chars"]
+        == 5001
+    )
+    assert context.context_meta["truncated"]["previous_draft_context"] is True
+    assert ' id="' not in context.recent_context.previous_draft_context_html
+    assert "data-np-ann-" not in context.recent_context.previous_draft_context_html
+    assert "前の本文" not in context.recent_context.previous_draft_context_html
 
 
 def test_context_composes_effective_participant_state_relationship_and_knowledge(
@@ -227,7 +245,7 @@ def test_context_previous_data_follows_reordered_narrative_order(services) -> No
         chapter.id, "直前話", summary="直前要約"
     )
     services.narrative.reorder_episode(target.id, 3, target.version)
-    services.drafts.save_draft(latest_previous.id, "直前話本文")
+    services.drafts.save_draft(latest_previous.id, plain_text="直前話本文")
 
     context = services.context.build_episode_context(target.id)
 
@@ -235,4 +253,21 @@ def test_context_previous_data_follows_reordered_narrative_order(services) -> No
         summary.episode_id
         for summary in context.recent_context.previous_episode_summaries
     ] == [previous.id, latest_previous.id]
-    assert context.recent_context.previous_draft_tail == "直前話本文"
+    assert context.recent_context.previous_draft_context_html == (
+        '<p data-np-type="narration">直前話本文</p>'
+    )
+
+
+def test_context_has_empty_previous_draft_projection_when_no_draft(services) -> None:
+    chapter = services.narrative.create_chapter("章")
+    services.narrative.create_episode(chapter.id, "前話")
+    current = services.narrative.create_episode(chapter.id, "対象話")
+
+    context = services.context.build_episode_context(current.id)
+
+    assert context.recent_context.previous_draft_context_html == ""
+    assert context.context_meta["returned_counts"]["previous_draft_context_blocks"] == 0
+    assert (
+        context.context_meta["returned_counts"]["previous_draft_context_visible_chars"]
+        == 0
+    )

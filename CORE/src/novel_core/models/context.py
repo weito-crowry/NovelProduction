@@ -68,7 +68,7 @@ class PreviousEpisodeSummary:
 @dataclass(frozen=True, slots=True)
 class RecentContext:
     previous_episode_summaries: tuple[PreviousEpisodeSummary, ...]
-    previous_draft_tail: str
+    previous_draft_context_html: str
 
 
 @dataclass(frozen=True, slots=True)
