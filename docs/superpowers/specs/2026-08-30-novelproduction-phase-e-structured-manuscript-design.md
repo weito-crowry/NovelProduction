@@ -215,6 +215,16 @@ is `A C`; `B` is deleted.
 Omitting metadata while retaining an existing block inherits that block's
 parent metadata. Omitting the block itself deletes it.
 
+When `html` is present in a save request, its snapshot semantics and
+`metadata_updates` are evaluated together. A parent-known block may be
+targeted by `metadata_updates` only if that block is present in the submitted
+HTML. A same-request correlation ID may be targeted only if that ID is present
+in the submitted HTML as well. A parent-known block omitted from the snapshot
+is deleted and cannot also be updated in the same request. A
+`metadata_updates`-only save has no submitted HTML snapshot, so parent-known
+blocks remain normally targetable; a same-request correlation ID still must
+exist in HTML.
+
 ## 12. Block ID reuse, split, and merge
 
 Normal authoring must not reuse a deleted historical ID for a new logical
@@ -383,7 +393,20 @@ together, and same-request correlation IDs may be referenced.
 If HTML and `metadata_updates` explicitly set the same block field, equal
 values after normalization are accepted and unequal values are validation
 errors. Setting and removing the same field in one request is also a
-validation error. Precedence is never used to resolve these conflicts.
+validation error. If `metadata_updates` targets a known block that the
+submitted HTML snapshot deletes, the request is a self-conflict and is
+rejected as a validation error. The entire save is rejected with no database
+change. Precedence is never used to resolve these conflicts.
+
+For example:
+
+```text
+Parent:            A B C
+Request HTML:      A C
+metadata_updates:  B.emotions = ["焦り"]
+Result:            VALIDATION ERROR
+Reason:            HTML deletes B while metadata_updates updates B.
+```
 
 ## 26. Initial draft
 
@@ -445,6 +468,18 @@ History is metadata-only and contains at least:
 Past content is obtained with `episode_draft_get(revision=N)`. Restore is a new
 append, not a mutation of the past revision.
 
+The existing draft revision metadata contract remains unchanged. `source_agent`
+is optional and may be null; when it is a string, it is 1–120 characters.
+`change_summary` is a string with default `""` and a maximum length of 1,000
+characters. These fields are draft revision metadata, not fields inside the
+Canonical Document.
+
+The same contract is available for initial saves, normal saves,
+metadata-only saves, and restore. For restore, the caller may provide
+`source_agent` and `change_summary` for the newly created revision. Restore
+does not copy the historical revision's metadata; it copies only the
+historical Canonical Document snapshot.
+
 ## 33. Migration 005
 
 Migrations 001 through 004 are unchanged. Migration 005 drops and recreates
@@ -493,9 +528,11 @@ Export omits block IDs, metadata, and `note`.
 
 ## 36. WEBUI edit annotations
 
-The normal TipTap projection uses selected annotations such as
-`selected(["emotions"])`; it does not pass all unknown annotations into
-TipTap. Raw metadata is inspected with `format=document`.
+During normal Phase E editing, the TipTap projection is exactly
+`selected(["emotions"])`. Unknown annotations, whether simple or complex, are
+not added to the editable TipTap projection. They are inspected through the
+Raw annotations view or `format=document`. A future phase may expand the
+editable projection, but Phase E supports `emotions` only.
 
 ## 37. MCP annotations
 

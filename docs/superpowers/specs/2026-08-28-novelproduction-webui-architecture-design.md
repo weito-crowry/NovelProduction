@@ -1,7 +1,7 @@
 # NovelProduction Shared CORE/API and WEBUI Architecture Design
 
 Date: 2026-08-28
-Status: Proposed — awaiting written-spec review
+Status: Accepted — implemented through Phase D; Phase E design approved for implementation planning; Phase E implementation not yet complete
 Repository: `weito-crowry/NovelProduction`
 
 ## 1. Purpose
@@ -748,7 +748,6 @@ Exit condition: existing Phase 1–3 behavior passes through CORE with no intend
 - Add project discovery/create/archive.
 - Add fine-grained resource APIs and WEBUI query/view APIs.
 - Formalize new-project initialization under CORE.
-- Add migration 005 scaffolding as needed for structured drafts, but structured editor work may remain deferred to Phase E.
 
 At the explicit cutover step, the current real story database may be backed up, deleted, and recreated under the new CORE lifecycle. Data migration from the old story content is not required by this design.
 
