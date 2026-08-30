@@ -1,13 +1,14 @@
 # NovelProduction Phase E — Structured Manuscript / Rich Authoring Design
 
-Status: **E0–E5 implementation and ChatGPT review complete; Final Cutover pending**
+Status: **Phase E COMPLETE — E0–E5 and Final Cutover certified**
 
 This document is the detailed source of truth for Phase E. It supersedes the
 earlier Phase E structured-draft details in
 [`2026-08-28-novelproduction-webui-architecture-design.md`](2026-08-28-novelproduction-webui-architecture-design.md).
-> Implementation status (non-normative): E0–E5 implementation and ChatGPT
-> review are complete on the Phase E integration line. Final Cutover remains
-> pending and gated by §53.
+> Implementation status (non-normative): E0–E5 implementation, ChatGPT review,
+> and Final Cutover are certified on stable main. The certified stable baseline
+> uses migrations 001–005; detailed evidence is recorded in
+> [`2026-08-31-phase-e-final-cutover.md`](../reports/2026-08-31-phase-e-final-cutover.md).
 
 Phase E is documented here only; this document does not authorize the Final
 Cutover, which remains gated by §53.
