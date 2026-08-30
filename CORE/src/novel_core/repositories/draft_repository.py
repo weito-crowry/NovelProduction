@@ -11,10 +11,9 @@ class DraftRecord:
     episode_id: int
     revision: int
     parent_draft_id: int | None
-    body: str
+    document_json: str
     source_agent: str | None
     change_summary: str
-    content_hash: str
     created_at: str
 
 
@@ -26,18 +25,16 @@ class DraftMetadata:
     parent_draft_id: int | None
     source_agent: str | None
     change_summary: str
-    content_hash: str
-    body_chars: int
     created_at: str
 
 
 _RECORD_COLUMNS = (
-    "id, work_id, episode_id, revision, parent_draft_id, body, source_agent, "
-    "change_summary, content_hash, created_at"
+    "id, work_id, episode_id, revision, parent_draft_id, document_json, "
+    "source_agent, change_summary, created_at"
 )
 _METADATA_COLUMNS = (
     "id, episode_id, revision, parent_draft_id, source_agent, change_summary, "
-    "content_hash, length(body), created_at"
+    "created_at"
 )
 
 
@@ -81,27 +78,25 @@ class DraftRepository:
         episode_id: int,
         revision: int,
         parent_draft_id: int | None,
-        body: str,
+        document_json: str,
         source_agent: str | None,
         change_summary: str,
-        content_hash: str,
     ) -> int:
         cursor = self._connection.execute(
             """
             INSERT INTO drafts
-                (work_id, episode_id, revision, parent_draft_id, body,
-                 source_agent, change_summary, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (work_id, episode_id, revision, parent_draft_id, document_json,
+                 source_agent, change_summary)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 work_id,
                 episode_id,
                 revision,
                 parent_draft_id,
-                body,
+                document_json,
                 source_agent,
                 change_summary,
-                content_hash,
             ),
         )
         if cursor.lastrowid is None:
