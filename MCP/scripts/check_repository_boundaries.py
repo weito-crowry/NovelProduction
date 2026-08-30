@@ -222,9 +222,6 @@ def collect_failures(
     _check_api_sqlite_imports(api_root, api_paths, failures)
     _check_api_route_sql(_python_files(api_root / "novel_api" / "routes"), failures)
 
-    migration_005_paths = sorted((repo_root / "CORE" / "migrations").glob("005*"))
-    for path in migration_005_paths:
-        failures.append(f"{path}: migration 005 is outside Phase B")
     if (repo_root / "MCP" / "migrations").is_dir():
         failures.append("MCP/migrations must remain absent; CORE owns migrations")
 

@@ -132,7 +132,7 @@ def test_boundary_checker_rejects_sqlite_outside_api_plumbing(tmp_path: Path) ->
     assert any("sqlite3 is restricted" in failure for failure in failures)
 
 
-def test_boundary_checker_rejects_migration_005(tmp_path: Path) -> None:
+def test_boundary_checker_accepts_core_migration_005(tmp_path: Path) -> None:
     migration = tmp_path / "CORE" / "migrations" / "005_structured_drafts.sql"
     migration.parent.mkdir(parents=True)
     migration.write_text("SELECT 1;\n", encoding="utf-8")
@@ -141,7 +141,7 @@ def test_boundary_checker_rejects_migration_005(tmp_path: Path) -> None:
         tmp_path, tool_names=tuple(str(index) for index in range(59))
     )
 
-    assert any("migration 005" in failure for failure in failures)
+    assert failures == []
 
 
 def test_boundary_checker_rejects_mcp_migration_ownership(tmp_path: Path) -> None:
