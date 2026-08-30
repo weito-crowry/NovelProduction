@@ -34,7 +34,7 @@ def test_all_phase3_tools_map_to_the_canonical_http_routes() -> None:
         "episode_draft_save": (
             "POST",
             "episodes/1/drafts",
-            {"project_id": "p", "episode_id": 1, "body": "本文"},
+            {"project_id": "p", "episode_id": 1, "plain_text": "本文"},
         ),
         "episode_draft_history": (
             "GET",
@@ -65,7 +65,7 @@ def test_all_phase3_tools_map_to_the_canonical_http_routes() -> None:
         _run(client.aclose())
 
     assert requests[2].url.params == httpx.QueryParams()
-    assert requests[3].content == '{"body":"本文","change_summary":""}'.encode()
+    assert requests[3].content == '{"plain_text":"本文","change_summary":""}'.encode()
 
 
 def test_draft_save_forwards_parent_cas_fields_and_preserves_error_details() -> None:
@@ -98,7 +98,7 @@ def test_draft_save_forwards_parent_cas_fields_and_preserves_error_details() -> 
             registrations["episode_draft_save"](
                 project_id="p",
                 episode_id=1,
-                body="本文",
+                plain_text="本文",
                 expected_parent_draft_id=4,
                 source_agent="agent",
                 change_summary="更新",
@@ -108,3 +108,41 @@ def test_draft_save_forwards_parent_cas_fields_and_preserves_error_details() -> 
         _run(client.aclose())
 
     assert result["error"]["details"]["current_resource"] == {"id": 5}
+
+
+def test_draft_get_forwards_projection_and_repeated_annotation_keys() -> None:
+    requests: list[httpx.Request] = []
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"project_id": "p", "data": {}})
+
+    client = ApiClient(
+        McpSettings("http://api.example"), transport=httpx.MockTransport(transport)
+    )
+    registrations: dict[str, Any] = {}
+    register_phase3_tools(
+        client, lambda name, handler, **_: registrations.update({name: handler})
+    )
+    try:
+        _run(
+            registrations["episode_draft_get"](
+                project_id="p",
+                episode_id=1,
+                revision=4,
+                format="html",
+                annotation_projection="selected",
+                annotation_keys=["emotions", "mood"],
+                include_notes=True,
+            )
+        )
+    finally:
+        _run(client.aclose())
+
+    assert requests[-1].url.params.multi_items() == [
+        ("revision", "4"),
+        ("annotation_projection", "selected"),
+        ("annotation_keys", "emotions"),
+        ("annotation_keys", "mood"),
+        ("include_notes", "true"),
+    ]

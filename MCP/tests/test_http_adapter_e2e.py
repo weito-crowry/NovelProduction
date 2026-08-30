@@ -122,7 +122,7 @@ def test_real_mcp_http_e2e_covers_isolation_search_write_conflicts_and_drafts(
         first = _ok(
             _run(
                 handlers["episode_draft_save"](
-                    project_id="project-a", episode_id=episode["id"], body="初稿"
+                    project_id="project-a", episode_id=episode["id"], plain_text="初稿"
                 )
             )
         )
@@ -131,7 +131,7 @@ def test_real_mcp_http_e2e_covers_isolation_search_write_conflicts_and_drafts(
                 handlers["episode_draft_save"](
                     project_id="project-a",
                     episode_id=episode["id"],
-                    body="第二稿",
+                    html="<p>第二稿</p>",
                     expected_parent_draft_id=first["id"],
                 )
             )
@@ -150,13 +150,14 @@ def test_real_mcp_http_e2e_covers_isolation_search_write_conflicts_and_drafts(
                 )
             )
         )
-        assert latest["body"] == "第二稿"
+        assert latest["format"] == "html"
+        assert latest["content"].endswith('" data-np-type="narration">第二稿</p>')
         assert [item["revision"] for item in history] == [1, 2]
         stale_parent = _run(
             handlers["episode_draft_save"](
                 project_id="project-a",
                 episode_id=episode["id"],
-                body="競合稿",
+                html="<p>競合稿</p>",
                 expected_parent_draft_id=first["id"],
             )
         )
