@@ -160,6 +160,7 @@ function ManuscriptReader({
   const [saveSuccess, setSaveSuccess] = useState<DraftSaveResult | null>(null);
   const [committedSaveRefreshPending, setCommittedSaveRefreshPending] = useState(false);
   const committedSaveRefreshInFlight = useRef(false);
+  const saveInFlight = useRef(false);
   const cancelRefreshInFlight = useRef(false);
   const [conflictReloadPending, setConflictReloadPending] = useState(false);
   const conflictReloadInFlight = useRef(false);
@@ -238,14 +239,15 @@ function ManuscriptReader({
   }
 
   async function saveEditedHtml(html: string) {
-    if (discardDialogOpen || cancelRefreshInFlight.current) return;
+    if (saveInFlight.current || discardDialogOpen || cancelRefreshInFlight.current) return;
     const session = editSession;
     if (session === null || editSaving) return;
+    saveInFlight.current = true;
     setEditSaving(true);
     setEditError(null);
     try {
       if (session.baselineDocument === null) {
-        const latest = await getFreshDocument(projectId, episodeId);
+        const latest = setLatestDocument(queryClient, projectId, episodeId, await getFreshDocument(projectId, episodeId));
         if (latest !== null) {
           setEditConflict({ localHtml: html, latest, initial: true });
           return;
@@ -272,6 +274,7 @@ function ManuscriptReader({
         setEditError(caught instanceof Error ? caught.message : "Unable to save the manuscript.");
       }
     } finally {
+      saveInFlight.current = false;
       setEditSaving(false);
     }
   }
@@ -529,7 +532,7 @@ function ManuscriptReader({
             charactersError={charactersQuery.isError ? "Unable to load characters. Existing speaker references were kept." : null}
             saving={editSaving}
             cancelPending={discardPending}
-            interactionBlocked={discardDialogOpen}
+            interactionBlocked={discardDialogOpen || editConflict !== null}
             onDirtyChange={setEditDirty}
             onSave={(html) => void saveEditedHtml(html)}
             onCancel={(dirty) => dirty ? setDiscardDialogOpen(true) : void cancelEditing()}

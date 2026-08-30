@@ -86,6 +86,9 @@ export function ManuscriptEditor({
   const [rubyRange, setRubyRange] = useState<{ from: number; to: number; node: boolean } | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const editorRef = useRef<TiptapEditor | null>(null);
+  const mutationBlocked = saving || cancelPending || interactionBlocked;
+  const mutationBlockedRef = useRef(mutationBlocked);
+  mutationBlockedRef.current = mutationBlocked;
 
   const editor = useEditor({
     extensions: phaseEExtensions,
@@ -99,7 +102,7 @@ export function ManuscriptEditor({
       },
       handleKeyDown: (_view, event) => {
         const activeEditor = editorRef.current;
-        if (!activeEditor) return false;
+        if (!activeEditor || mutationBlockedRef.current || !activeEditor.isEditable) return false;
         const action = customEditorKeyAction(event);
         if (action === "split" && splitSelectedBlock(activeEditor)) return true;
         if (action === "join" && joinSelectedBlockBackward(activeEditor)) return true;
@@ -121,6 +124,10 @@ export function ManuscriptEditor({
     setBaselineHtml(serializeEditorAuthoringHtml(editor));
     setReady(true);
   }, [editor]);
+
+  useEffect(() => {
+    if (editor) editor.setEditable(!mutationBlocked);
+  }, [editor, mutationBlocked]);
 
   const serializedHtml = editor ? serializeEditorAuthoringHtml(editor) : "";
   const dirty = ready && baselineHtml !== null && serializedHtml !== baselineHtml;
@@ -149,13 +156,13 @@ export function ManuscriptEditor({
   }, [characters, selectedBlock]);
 
   function updateAttributes(changes: Partial<PhaseEBlockAttributes>) {
-    if (!editor) return;
+    if (!editor || mutationBlocked) return;
     setTransformError(null);
     updateSelectedBlockAttributes(editor, changes);
   }
 
   function changeType(value: string) {
-    if (!editor || !editableTypes.includes(value as EditableBlockType)) return;
+    if (!editor || mutationBlocked || !editableTypes.includes(value as EditableBlockType)) return;
     setTransformError(null);
     const changed = transformSelectedBlock(editor, value as EditableBlockType);
     if (!changed && value === "separator") {
@@ -164,18 +171,19 @@ export function ManuscriptEditor({
   }
 
   function changeScene(value: string) {
-    if (scenesLoading || scenesError !== null) return;
+    if (mutationBlocked || scenesLoading || scenesError !== null) return;
     const next = value === "" ? clearableReferenceValue(selectedBaseline, "scene_id") : value;
     updateAttributes({ "data-np-scene-id": next });
   }
 
   function changeSpeaker(value: string) {
+    if (mutationBlocked) return;
     const next = value === "" ? clearableReferenceValue(selectedBaseline, "speaker_character_id") : value;
     updateAttributes({ "data-np-speaker-id": next });
   }
 
   function setEmotions(emotions: string[]) {
-    if (!editor || !selectedBlock) return;
+    if (!editor || mutationBlocked || !selectedBlock) return;
     updateSelectedBlockAttributes(
       editor,
       updateEmotionsAttributes(
@@ -190,7 +198,7 @@ export function ManuscriptEditor({
   }
 
   function removeEmotions() {
-    if (!editor || !selectedBlock) return;
+    if (!editor || mutationBlocked || !selectedBlock) return;
     updateSelectedBlockAttributes(
       editor,
       removeEmotionsAttributes(
@@ -204,7 +212,7 @@ export function ManuscriptEditor({
   }
 
   function openRuby() {
-    if (!editor) return;
+    if (!editor || mutationBlocked) return;
     const ruby = getSelectedRuby(editor);
     if (ruby) {
       setRubyBase(String(ruby.attrs.base ?? ""));
@@ -221,7 +229,7 @@ export function ManuscriptEditor({
   }
 
   function confirmRuby(reading: string) {
-    if (!editor || rubyRange === null || !rubyBase.trim() || !reading.trim()) return;
+    if (!editor || mutationBlocked || rubyRange === null || !rubyBase.trim() || !reading.trim()) return;
     const chain = editor.chain().focus();
     if (rubyRange.node) {
       chain.setNodeSelection(rubyRange.from);
@@ -234,7 +242,7 @@ export function ManuscriptEditor({
   }
 
   function removeRuby() {
-    if (!editor || !selectedRuby) return;
+    if (!editor || mutationBlocked || !selectedRuby) return;
     editor.chain()
       .focus()
       .deleteSelection()
@@ -243,16 +251,21 @@ export function ManuscriptEditor({
   }
 
   function toggleEmphasis() {
-    if (!editor || !hasTextSelection) return;
+    if (!editor || mutationBlocked || !hasTextSelection) return;
     editor.chain().focus().toggleMark("phaseEEmphasisDot").run();
   }
 
   function insertSeparator() {
-    if (editor) insertSeparatorAfterSelection(editor);
+    if (editor && !mutationBlocked) insertSeparatorAfterSelection(editor);
   }
 
   function insertNote() {
     changeType("note");
+  }
+
+  function changeHeadingLevel(value: string) {
+    if (!editor || mutationBlocked) return;
+    editor.chain().focus().updateAttributes("heading", { level: Number(value) }).run();
   }
 
   function handleEditorClick(event: MouseEvent<HTMLDivElement>) {
@@ -265,7 +278,7 @@ export function ManuscriptEditor({
   }
 
   function save() {
-    if (!editor || !ready || !dirty || saving || duplicateIds) return;
+    if (!editor || !ready || !dirty || mutationBlocked || duplicateIds) return;
     try {
       assertNoDuplicateBlockIds(editor);
       setEditorError(null);
@@ -287,32 +300,32 @@ export function ManuscriptEditor({
         <span className={dirty ? "dirty-indicator" : "read-only-meta"}>{dirty ? "Unsaved changes" : "No unsaved changes"}</span>
       </div>
       <div className="manuscript-editor-toolbar" aria-label="Formatting toolbar">
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={openRuby} disabled={!canAddRubyToSelection(editor) && selectedRuby === null}>Ruby</Button>
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={removeRuby} disabled={selectedRuby === null}>Remove Ruby</Button>
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={toggleEmphasis} disabled={!hasTextSelection}>Emphasis dots</Button>
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => changeType("heading")} disabled={selectedBlock === null}>Heading</Button>
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={insertSeparator}>Insert separator</Button>
-        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={insertNote} disabled={selectedBlock === null || selectedBlock.type.name === "horizontalRule"}>Note</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={openRuby} disabled={mutationBlocked || (!canAddRubyToSelection(editor) && selectedRuby === null)}>Ruby</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={removeRuby} disabled={mutationBlocked || selectedRuby === null}>Remove Ruby</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={toggleEmphasis} disabled={mutationBlocked || !hasTextSelection}>Emphasis dots</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={() => changeType("heading")} disabled={mutationBlocked || selectedBlock === null}>Heading</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={insertSeparator} disabled={mutationBlocked}>Insert separator</Button>
+        <Button type="button" variant="secondary" onMouseDown={(event) => event.preventDefault()} onClick={insertNote} disabled={mutationBlocked || selectedBlock === null || selectedBlock.type.name === "horizontalRule"}>Note</Button>
       </div>
       <div onClick={handleEditorClick}><EditorContent editor={editor} /></div>
       {editor && selectedBlock && (
         <div className="manuscript-metadata-pane">
           <h2>Selected block</h2>
           <label className="field-group" htmlFor="block-type">Block type</label>
-          <select id="block-type" className="field-control" value={selectedType} onChange={(event) => changeType(event.target.value)}>
+          <select id="block-type" className="field-control" value={selectedType} disabled={mutationBlocked} onChange={(event) => changeType(event.target.value)}>
             {editableTypes.map((type) => <option key={type} value={type}>{type}</option>)}
           </select>
           {selectedType === "heading" && (
             <label className="field-group" htmlFor="heading-level">
               Heading level
-              <select id="heading-level" className="field-control" value={String(selectedBlock.attrs.level ?? 1)} onChange={(event) => editor.chain().focus().updateAttributes("heading", { level: Number(event.target.value) }).run()}>
+              <select id="heading-level" className="field-control" value={String(selectedBlock.attrs.level ?? 1)} disabled={mutationBlocked} onChange={(event) => changeHeadingLevel(event.target.value)}>
                 {[1, 2, 3].map((level) => <option key={level} value={level}>{level}</option>)}
               </select>
             </label>
           )}
           <label className="field-group" htmlFor="scene-selector">
             Scene
-            <select id="scene-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-scene-id"]) ?? ""} disabled={scenesLoading || scenesError !== null} onChange={(event) => changeScene(event.target.value)}>
+            <select id="scene-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-scene-id"]) ?? ""} disabled={mutationBlocked || scenesLoading || scenesError !== null} onChange={(event) => changeScene(event.target.value)}>
               <option value="">No scene</option>
               {sceneOptions.current !== null && !scenes.some((scene) => scene.id === sceneOptions.current) && <option value={String(sceneOptions.current)}>Current unavailable scene #{sceneOptions.current}</option>}
               {scenes.map((scene) => <option key={scene.id} value={String(scene.id)}>{scene.title} (#{scene.id})</option>)}
@@ -322,7 +335,7 @@ export function ManuscriptEditor({
           {scenesError && <p className="helper-text" role="alert">{scenesError}</p>}
           <label className="field-group" htmlFor="speaker-selector">
             Speaker
-            <select id="speaker-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-speaker-id"]) ?? ""} disabled={charactersLoading || charactersError !== null} onChange={(event) => changeSpeaker(event.target.value)}>
+            <select id="speaker-selector" className="field-control" value={stringAttribute(selectedBlock.attrs["data-np-speaker-id"]) ?? ""} disabled={mutationBlocked || charactersLoading || charactersError !== null} onChange={(event) => changeSpeaker(event.target.value)}>
               <option value="">No speaker</option>
               {characterOptions.current !== null && !characters.some((character) => character.id === characterOptions.current) && <option value={String(characterOptions.current)}>Current unavailable character #{characterOptions.current}</option>}
               {characters.map((character) => <option key={character.id} value={String(character.id)}>{character.display_name} (#{character.id})</option>)}
@@ -330,7 +343,7 @@ export function ManuscriptEditor({
           </label>
           {charactersLoading && <p className="helper-text">Loading characters…</p>}
           {charactersError && <p className="helper-text" role="alert">{charactersError}</p>}
-          <EmotionsEditor emotions={selectedEmotions} onSet={setEmotions} onRemove={removeEmotions} />
+          <EmotionsEditor emotions={selectedEmotions} disabled={mutationBlocked} onSet={setEmotions} onRemove={removeEmotions} />
           <p className="helper-text">Unknown annotations are preserved and remain read-only.</p>
           {transformError && <p role="alert">{transformError}</p>}
         </div>
@@ -339,8 +352,8 @@ export function ManuscriptEditor({
       {editorError && <p role="alert">{editorError}</p>}
       {!ready && <p role="status">Preparing manuscript editor…</p>}
       <div className="form-actions">
-        <Button type="button" onClick={save} disabled={!ready || !dirty || saving || cancelPending || interactionBlocked || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
-        <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={saving || cancelPending || interactionBlocked}>Cancel editing</Button>
+        <Button type="button" onClick={save} disabled={!ready || !dirty || mutationBlocked || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
+        <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={mutationBlocked}>Cancel editing</Button>
       </div>
       {rubyOpen && <RubyDialog base={rubyBase} reading={rubyReading} onConfirm={confirmRuby} onCancel={() => setRubyOpen(false)} />}
     </section>
@@ -349,16 +362,18 @@ export function ManuscriptEditor({
 
 function EmotionsEditor({
   emotions,
+  disabled,
   onSet,
   onRemove,
 }: {
   emotions: string[] | null;
+  disabled: boolean;
   onSet: (emotions: string[]) => void;
   onRemove: () => void;
 }) {
   const values = emotions ?? [];
   return (
-    <fieldset className="annotation-editor">
+    <fieldset className="annotation-editor" disabled={disabled}>
       <legend>Emotions annotation</legend>
       <label><input type="checkbox" checked={emotions !== null} onChange={(event) => event.target.checked ? onSet([]) : onRemove()} /> Emotions annotation</label>
       {emotions !== null && <>
