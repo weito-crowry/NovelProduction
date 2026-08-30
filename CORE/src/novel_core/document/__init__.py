@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .authoring import AuthoringResolution, import_plain_text, resolve_authoring
 from .authoring_html import (
     AnnotationProjection,
     AuthoringBlockInput,
@@ -39,6 +40,7 @@ __all__ = [
     "BlockAttrs",
     "BlockType",
     "AnnotationProjection",
+    "AuthoringResolution",
     "AuthoringBlockInput",
     "ContextProjectionResult",
     "ExportResult",
@@ -47,6 +49,7 @@ __all__ = [
     "NovelBlock",
     "NovelDocument",
     "is_formal_block_id",
+    "import_plain_text",
     "base_visible_text",
     "normalize_inline_html",
     "new_block_id",
@@ -56,6 +59,7 @@ __all__ = [
     "parse_document_json",
     "render_context_html",
     "render_web_html",
+    "resolve_authoring",
     "export_document",
     "serialize_authoring_html",
     "serialize_inline_html",
