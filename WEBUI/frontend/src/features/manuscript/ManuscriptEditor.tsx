@@ -94,6 +94,11 @@ export function ManuscriptEditor({
         if (event.key === "Backspace" && joinSelectedBlockBackward(activeEditor)) return true;
         return false;
       },
+      handleClickOn: (view, _pos, node, nodePos) => {
+        if (node.type.name !== "phaseERuby") return false;
+        view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, nodePos)));
+        return true;
+      },
     },
     onUpdate: () => setDocumentVersion((version) => version + 1),
     onSelectionUpdate: () => setSelectionVersion((version) => version + 1),
