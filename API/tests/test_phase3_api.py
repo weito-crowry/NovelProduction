@@ -14,6 +14,7 @@ PHASE3_OPERATIONS = {
     ("GET", "/api/v1/projects/{project_id}/episodes/{episode_id}/draft"),
     ("POST", "/api/v1/projects/{project_id}/episodes/{episode_id}/drafts"),
     ("GET", "/api/v1/projects/{project_id}/episodes/{episode_id}/drafts"),
+    ("GET", "/api/v1/projects/{project_id}/episodes/{episode_id}/draft/export"),
 }
 
 
@@ -59,8 +60,8 @@ def _create_episode(
     )
 
 
-def test_phase3_registers_exactly_all_five_operations(client: TestClient) -> None:
-    assert len(PHASE3_OPERATIONS) == 5
+def test_phase3_registers_exactly_all_six_operations(client: TestClient) -> None:
+    assert len(PHASE3_OPERATIONS) == 6
     assert _phase3_operations(client.app) == PHASE3_OPERATIONS
 
 
@@ -76,7 +77,7 @@ def test_each_phase3_handler_resolves_and_opens_services_exactly_once() -> None:
         and any(isinstance(item, ast.Call) for item in node.decorator_list)
     ]
 
-    assert len(handlers) == 5
+    assert len(handlers) == 6
     for handler in handlers:
         calls = [
             node.func.id
@@ -192,7 +193,7 @@ def test_absent_draft_is_null_and_revision_query_is_validated(
     assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-def test_draft_saves_are_plain_append_only_and_history_is_metadata_only(
+def test_draft_saves_are_structured_append_only_and_history_is_metadata_only(
     client: TestClient,
 ) -> None:
     base = _create_project(client)
@@ -203,7 +204,7 @@ def test_draft_saves_are_plain_append_only_and_history_is_metadata_only(
         client.post(
             draft_url,
             json={
-                "body": "\n  第一稿\n",
+                "plain_text": "\n  第一稿\n",
                 "source_agent": "human",
                 "change_summary": "初稿",
             },
@@ -213,7 +214,7 @@ def test_draft_saves_are_plain_append_only_and_history_is_metadata_only(
         client.post(
             draft_url,
             json={
-                "body": "第二稿",
+                "html": "<p>第二稿</p>",
                 "expected_parent_draft_id": first["id"],
             },
         )
@@ -221,21 +222,32 @@ def test_draft_saves_are_plain_append_only_and_history_is_metadata_only(
 
     assert first["revision"] == 1
     assert first["parent_draft_id"] is None
-    assert first["body"] == "\n  第一稿\n"
+    assert set(first) == {"id", "revision", "parent_draft_id", "id_map"}
     assert second["revision"] == 2
     assert second["parent_draft_id"] == first["id"]
-    assert (
-        _data(
-            client.get(f"{base}/episodes/{episode['id']}/draft", params={"revision": 1})
-        )
-        == first
+    first_read = _data(
+        client.get(f"{base}/episodes/{episode['id']}/draft", params={"revision": 1})
     )
-    assert _data(client.get(f"{base}/episodes/{episode['id']}/draft")) == second
+    latest_read = _data(client.get(f"{base}/episodes/{episode['id']}/draft"))
+    assert first_read["content"].startswith('<p id="blk_') and first_read[
+        "content"
+    ].endswith('" data-np-type="narration">  第一稿</p>')
+    assert latest_read["content"].startswith('<p id="blk_') and latest_read[
+        "content"
+    ].endswith('" data-np-type="narration">第二稿</p>')
+    assert first_read["format"] == latest_read["format"] == "html"
 
     history = _data(client.get(draft_url))
     assert [item["revision"] for item in history] == [1, 2]
-    assert history[0]["body_chars"] == len(first["body"])
-    assert "body" not in history[0]
+    assert set(history[0]) == {
+        "id",
+        "episode_id",
+        "revision",
+        "parent_draft_id",
+        "source_agent",
+        "change_summary",
+        "created_at",
+    }
     assert history[1]["change_summary"] == ""
 
 
@@ -245,12 +257,12 @@ def test_stale_parent_returns_latest_snapshot_without_appending(
     base = _create_project(client)
     episode = _create_episode(client, base)
     draft_url = f"{base}/episodes/{episode['id']}/drafts"
-    first = _data(client.post(draft_url, json={"body": "first"}))
+    first = _data(client.post(draft_url, json={"plain_text": "first"}))
     latest = _data(
         client.post(
             draft_url,
             json={
-                "body": "latest",
+                "html": "<p>latest</p>",
                 "expected_parent_draft_id": first["id"],
             },
         )
@@ -258,10 +270,19 @@ def test_stale_parent_returns_latest_snapshot_without_appending(
 
     response = client.post(
         draft_url,
-        json={"body": "stale", "expected_parent_draft_id": first["id"]},
+        json={"html": "<p>stale</p>", "expected_parent_draft_id": first["id"]},
     )
 
     assert response.status_code == 409
+    current_resource = _data(
+        client.get(
+            f"{base}/episodes/{episode['id']}/draft",
+            params={
+                "annotation_projection": "selected",
+                "annotation_keys": "emotions",
+            },
+        )
+    )
     assert response.json()["error"] == {
         "code": "VERSION_CONFLICT",
         "message": "The resource was modified by another client.",
@@ -271,12 +292,14 @@ def test_stale_parent_returns_latest_snapshot_without_appending(
             "entity_id": episode["id"],
             "expected_version": first["id"],
             "current_version": latest["id"],
-            "current_resource": latest,
+            "current_resource": current_resource,
             "domain_code": "VersionConflictError",
         },
     }
     assert [item["revision"] for item in _data(client.get(draft_url))] == [1, 2]
-    assert _data(client.get(f"{base}/episodes/{episode['id']}/draft")) == latest
+    latest_read = _data(client.get(f"{base}/episodes/{episode['id']}/draft"))
+    assert latest_read["id"] == latest["id"]
+    assert latest_read["revision"] == latest["revision"]
 
 
 def test_draft_save_accepts_only_bounded_plain_body_fields(
@@ -287,13 +310,14 @@ def test_draft_save_accepts_only_bounded_plain_body_fields(
     draft_url = f"{base}/episodes/{episode['id']}/drafts"
 
     invalid_payloads = (
-        {"body": ""},
-        {"body": {"schema_version": 1, "content": []}},
-        {"body": "text", "expected_parent_draft_id": 0},
-        {"body": "text", "source_agent": ""},
-        {"body": "text", "source_agent": "a" * 121},
-        {"body": "text", "change_summary": "a" * 1001},
-        {"body": "text", "document_json": {"schema_version": 1}},
+        {},
+        {"plain_text": {"schema_version": 1, "content": []}},
+        {"plain_text": "text", "html": "<p>text</p>"},
+        {"plain_text": "text", "expected_parent_draft_id": 0},
+        {"plain_text": "text", "source_agent": ""},
+        {"plain_text": "text", "source_agent": "a" * 121},
+        {"plain_text": "text", "change_summary": "a" * 1001},
+        {"plain_text": "text", "document_json": {"schema_version": 1}},
     )
     for payload in invalid_payloads:
         response = client.post(draft_url, json=payload)
@@ -315,7 +339,7 @@ def test_phase3_cross_project_episode_ids_are_not_read_or_written(
         client.get(f"{base_b}/episodes/{episode_a['id']}/drafts"),
         client.post(
             f"{base_b}/episodes/{episode_a['id']}/drafts",
-            json={"body": "foreign write"},
+            json={"plain_text": "foreign write"},
         ),
     )
     for response in responses:

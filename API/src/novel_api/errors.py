@@ -19,6 +19,8 @@ from novel_core.errors import (
     CanonReasonRequired,
     CharacterNotFoundError,
     DeprecatedCanonForbiddenError,
+    DocumentSchemaError,
+    DocumentStorageError,
     NarrativeNotFoundError,
     NovelMcpError,
     OrderConflictError,
@@ -58,6 +60,12 @@ class _ErrorSpec:
 
 
 _VALIDATION = _ErrorSpec(400, "VALIDATION_ERROR", "The request is invalid.")
+_DOCUMENT_SCHEMA_ERROR = _ErrorSpec(
+    422, "DOCUMENT_SCHEMA_ERROR", "The Canonical Document is invalid."
+)
+_DOCUMENT_STORAGE_ERROR = _ErrorSpec(
+    500, "DOCUMENT_STORAGE_ERROR", "The stored Canonical Document is invalid."
+)
 _PROJECT_NOT_FOUND = _ErrorSpec(
     404, "PROJECT_NOT_FOUND", "The requested project was not found."
 )
@@ -166,6 +174,10 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _NOT_FOUND
     if isinstance(exc, VersionConflictError):
         return _VERSION_CONFLICT
+    if isinstance(exc, DocumentSchemaError):
+        return _DOCUMENT_SCHEMA_ERROR
+    if isinstance(exc, DocumentStorageError):
+        return _DOCUMENT_STORAGE_ERROR
     if isinstance(exc, OrderConflictError):
         return _ORDER_CONFLICT
     if isinstance(

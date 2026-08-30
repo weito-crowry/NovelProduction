@@ -287,7 +287,9 @@ def test_episode_view_returns_latest_draft_and_only_twenty_recent_revisions(
     parent_id: int | None = None
     latest: dict[str, Any] | None = None
     for revision in range(1, 23):
-        payload: dict[str, Any] = {"body": f"draft {revision}"}
+        payload: dict[str, Any] = {
+            "plain_text" if revision == 1 else "html": f"<p>draft {revision}</p>"
+        }
         if parent_id is not None:
             payload["expected_parent_draft_id"] = parent_id
         latest = _post(client, f"{base}/episodes/{episode_id}/drafts", payload)
@@ -296,7 +298,10 @@ def test_episode_view_returns_latest_draft_and_only_twenty_recent_revisions(
     view = _data(client.get(f"{base}/views/episodes/{episode_id}"))
 
     assert latest is not None
-    assert view["latest_draft"] == latest
+    assert view["latest_draft"]["id"] == latest["id"]
+    assert view["latest_draft"]["revision"] == latest["revision"]
+    assert "body" not in view["latest_draft"]
+    assert view["latest_draft"]["document"]["type"] == "novel_document"
     assert [item["revision"] for item in view["recent_draft_history"]] == list(
         range(3, 23)
     )
