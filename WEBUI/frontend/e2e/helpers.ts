@@ -81,6 +81,76 @@ export async function createScene(
   };
 }
 
+export async function createCharacter(
+  request: APIRequestContext,
+  projectId: string,
+  displayName: string,
+): Promise<{ id: number; display_name: string; version: number }> {
+  const response = await request.post(
+    `/api/v1/projects/${projectId}/characters`,
+    { data: { display_name: displayName } },
+  );
+  return (await readEnvelope(response, 201)) as {
+    id: number;
+    display_name: string;
+    version: number;
+  };
+}
+
+export async function saveStructuredDraft(
+  request: APIRequestContext,
+  projectId: string,
+  episodeId: number,
+  input: Record<string, unknown>,
+): Promise<{ id: number; revision: number; parent_draft_id: number | null; id_map: Record<string, string> }> {
+  const response = await request.post(
+    `/api/v1/projects/${projectId}/episodes/${episodeId}/drafts`,
+    { data: input },
+  );
+  const result = await readEnvelope(response, 201);
+  if (!isSaveResult(result)) throw new Error("Structured draft response did not contain a save result.");
+  return result;
+}
+
+export async function createE4ManuscriptFixture(
+  request: APIRequestContext,
+  prefix: string,
+) {
+  const structure = await createStructureFixture(request, prefix);
+  const character = await createCharacter(request, structure.projectId, "E4 Character");
+  const revisionOne = await saveStructuredDraft(request, structure.projectId, structure.episode.id, {
+    html: [
+      '<p id="narration-main" data-np-type="narration">これは構造化された本文です。</p>',
+      '<p id="dialogue-main" data-np-type="dialogue"><ruby>東京<rt>とうきょう</rt></ruby>へ急げ。</p>',
+      '<p id="emphasis-main" data-np-type="thought"><em data-emphasis="dot">急げ</em></p>',
+      '<h2 id="heading-main">第二章</h2>',
+      '<blockquote id="quote-main">引用された言葉。</blockquote>',
+      '<hr id="separator-main">',
+      '<p id="note-fixture-1" data-np-type="note">Production note</p>',
+    ].join(""),
+    source_agent: "e2e",
+    change_summary: "Initial structured fixture",
+  });
+  const dialogueId = revisionOne.id_map["dialogue-main"];
+  if (!dialogueId) throw new Error("Dialogue block ID was not returned by the API.");
+  const revisionTwo = await saveStructuredDraft(request, structure.projectId, structure.episode.id, {
+    expected_parent_draft_id: revisionOne.id,
+    metadata_updates: {
+      [dialogueId]: {
+        attrs: { scene_id: structure.scene.id, speaker_character_id: character.id },
+        annotations: {
+          emotions: ["焦り"],
+          mood: "tense",
+          "analysis-bundle": { nested: ["kept", { value: true }] },
+        },
+      },
+    },
+    source_agent: "e2e",
+    change_summary: "Add dialogue metadata",
+  });
+  return { ...structure, character, revisionOne, revisionTwo, dialogueId };
+}
+
 export async function createWorldFact(
   request: APIRequestContext,
   projectId: string,
@@ -133,4 +203,10 @@ async function readEnvelope(
 ): Promise<unknown> {
   const payload = await readJson<{ data: unknown }>(response, expected);
   return payload.data;
+}
+
+function isSaveResult(value: unknown): value is { id: number; revision: number; parent_draft_id: number | null; id_map: Record<string, string> } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const result = value as { id?: unknown; revision?: unknown; parent_draft_id?: unknown; id_map?: unknown };
+  return typeof result.id === "number" && typeof result.revision === "number" && (typeof result.parent_draft_id === "number" || result.parent_draft_id === null) && typeof result.id_map === "object" && result.id_map !== null && !Array.isArray(result.id_map);
 }

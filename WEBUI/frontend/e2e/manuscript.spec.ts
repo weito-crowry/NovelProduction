@@ -1,34 +1,56 @@
 import { expect, test } from "@playwright/test";
-import { createChapter, createEpisode, createProject } from "./helpers";
+import { createE4ManuscriptFixture } from "./helpers";
 
-test("appends plain manuscript revisions and preserves earlier history", async ({ page, request }) => {
-  const project = await createProject(request, "e2e-manuscript");
-  const chapter = await createChapter(request, project.project_id, "Manuscript chapter");
-  const episode = await createEpisode(request, project.project_id, chapter.id, "Manuscript episode");
-  await page.goto(`/projects/${project.project_id}/manuscript/${episode.id}`);
-  await expect(page.getByText("No draft revisions yet.")).toBeVisible();
+test("reads structured revisions, inspects metadata, restores, and downloads Narou export", async ({ page, request }) => {
+  const fixture = await createE4ManuscriptFixture(request, "e2e-manuscript");
+  await page.goto(`/projects/${fixture.projectId}/manuscript/${fixture.episode.id}`);
 
-  const body = page.getByLabel("Manuscript body");
-  await body.fill("Revision one body");
-  await expect(page.getByText("Unsaved changes")).toBeVisible();
-  await page.getByRole("button", { name: "Save new revision" }).click();
-  await expect(page.getByText("Saved revision 1")).toBeVisible();
-  await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Manuscript reader" })).toBeVisible();
+  await expect(page.getByText("Latest revision 2")).toBeVisible();
+  await expect(page.getByText("これは構造化された本文です。"))
+    .toBeVisible();
+  await expect(page.locator("textarea")).toHaveCount(0);
+  await expect(page.locator("ruby")).toContainText("東京");
+  await expect(page.locator("rt")).toHaveText("とうきょう");
+  await expect(page.locator('em[data-emphasis="dot"]')).toHaveText("急げ");
+  await expect(page.getByRole("heading", { name: "第二章", level: 2 })).toBeVisible();
+  await expect(page.locator("blockquote")).toContainText("引用された言葉");
+  await expect(page.locator("hr")).toHaveCount(1);
+  await expect(page.getByText("Production note", { exact: true })).toHaveCount(0);
 
-  await body.fill("Revision two body");
-  await page.getByRole("button", { name: "Save new revision" }).click();
-  await expect(page.getByText("Saved revision 2")).toBeVisible();
-  await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
-  await expect(page.getByText("Revision 2", { exact: true })).toBeVisible();
+  await page.getByLabel("Show production notes").check();
+  await expect(page.getByText("Production note", { exact: true })).toBeVisible();
+  await page.getByLabel("Block selector").selectOption(fixture.dialogueId);
+  const inspector = page.getByRole("heading", { name: "Block Inspector" }).locator("..");
+  await expect(inspector.getByText("scene_id", { exact: true }).locator("..")).toContainText(String(fixture.scene.id));
+  await expect(inspector.getByText("speaker_character_id", { exact: true }).locator("..")).toContainText(String(fixture.character.id));
+  await expect(page.getByText("焦り")).toBeVisible();
+  await expect(page.getByText("tense")).toBeVisible();
+  await expect(page.getByText("analysis-bundle")).toHaveCount(0);
+  await page.getByRole("button", { name: "Show Raw annotations JSON" }).click();
+  await expect(page.getByText(/analysis-bundle/)).toBeVisible();
+  await page.getByRole("button", { name: "Show Raw Document" }).click();
+  await expect(page.locator("pre.raw-document")).toContainText('"note"');
 
-  const revisionOne = await request.get(
-    `/api/v1/projects/${project.project_id}/episodes/${episode.id}/draft?revision=1`,
-  );
-  const revisionTwo = await request.get(
-    `/api/v1/projects/${project.project_id}/episodes/${episode.id}/draft?revision=2`,
-  );
-  expect((await revisionOne.json()).data.body).toBe("Revision one body");
-  expect((await revisionTwo.json()).data.body).toBe("Revision two body");
-  expect((await revisionTwo.json()).data.parent_draft_id).toBe((await revisionOne.json()).data.id);
-  expect((await revisionTwo.json()).data.source_agent).toBe("webui");
+  await expect(page.getByRole("button", { name: "View revision 1" })).toBeVisible();
+  await page.getByRole("button", { name: "View revision 1" }).click();
+  await expect(page.getByText("Historical revision 1")).toBeVisible();
+  await expect(page.getByText("これは構造化された本文です。", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "View latest" }).click();
+  await expect(page.getByText("Latest revision 2")).toBeVisible();
+
+  await page.getByRole("button", { name: "View revision 1" }).click();
+  await expect(page.getByRole("button", { name: "Restore revision 1" })).toBeVisible();
+  await page.getByRole("button", { name: "Restore revision 1" }).click();
+  await expect(page.getByRole("dialog")).toContainText("Restore revision 1 as a new revision?");
+  await page.getByRole("button", { name: "Confirm restore" }).click();
+  await expect(page.getByText("Restore succeeded as revision 3")).toBeVisible();
+  await expect(page.getByText("Latest revision 3")).toBeVisible();
+  await expect(page.getByText("これは構造化された本文です。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "View revision 3" })).toBeVisible();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download Narou export" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe(`episode-${fixture.episode.id}-r3.txt`);
 });

@@ -47,7 +47,7 @@ function recordSet(projectId: string) {
       timeline_events: [],
       reader_context: { known_before_episode: [], reveal_this_episode: [] },
       protected_information_guards: [],
-      recent_context: { previous_episode_summaries: [], previous_draft_tail: "" },
+      recent_context: { previous_episode_summaries: [], previous_draft_context_html: "" },
       foreshadowing_notes: [],
       context_meta: {},
     },

@@ -81,7 +81,7 @@ export function EpisodeDetail({
       {activeTab === "References" && <ReferencesSection projectId={projectId} view={view} />}
       {activeTab === "Outline" && <OutlineSection outline={view.outline} />}
       {activeTab === "Context" && <ContextSection context={view.context} />}
-      {activeTab === "Draft history" && <DraftHistorySection view={view} />}
+      {activeTab === "Draft history" && <DraftHistorySection projectId={projectId} view={view} />}
       {showCreateScene && (
         <CreateSceneForm
           projectId={projectId}
@@ -211,15 +211,15 @@ function ContextSection({ context }: { context: EpisodeContext }) {
   );
 }
 
-function DraftHistorySection({ view }: { view: EpisodeView }) {
+function DraftHistorySection({ projectId, view }: { projectId: string; view: EpisodeView }) {
   return (
     <Card>
       <h2>Draft history</h2>
       {view.latest_draft ? (
-        <section className="draft-latest"><h3>Latest draft — revision {view.latest_draft.revision}</h3><p>{view.latest_draft.created_at} · {view.latest_draft.source_agent ?? "unknown source"} · {view.latest_draft.content_hash}</p><p>{view.latest_draft.change_summary}</p><pre>{view.latest_draft.body}</pre></section>
+        <section className="draft-latest"><h3>Latest draft — revision {view.latest_draft.revision}</h3><p>{view.latest_draft.created_at} · {view.latest_draft.source_agent ?? "unknown source"}</p><p>{view.latest_draft.change_summary || "No change summary"}</p><Link to={`/projects/${encodeURIComponent(projectId)}/manuscript/${view.episode.id}`}>Open manuscript</Link></section>
       ) : <p>No draft is available.</p>}
       <h3>Recent revisions</h3>
-      {view.recent_draft_history.length === 0 ? <p>No draft history.</p> : <div className="record-list">{view.recent_draft_history.map((draft) => <div className="record-list-item" key={draft.id}><span>Revision {draft.revision} · {draft.created_at} · {draft.source_agent ?? "unknown source"} · {draft.body_chars} chars</span><small>{draft.change_summary}</small><small>{draft.content_hash}</small></div>)}</div>}
+      {view.recent_draft_history.length === 0 ? <p>No draft history.</p> : <div className="record-list">{view.recent_draft_history.map((draft) => <div className="record-list-item" key={draft.id}><span>Revision {draft.revision} · {draft.created_at} · {draft.source_agent ?? "unknown source"}</span><small>{draft.change_summary || "No change summary"}</small><small>{draft.parent_draft_id === null ? "No parent draft" : `Parent draft #${draft.parent_draft_id}`}</small></div>)}</div>}
       <p className="helper-text">Draft history is read-only in D2.</p>
     </Card>
   );
@@ -262,7 +262,7 @@ function ReaderContextDisplay({ context }: { context: EpisodeContext }) {
 }
 
 function RecentContextDisplay({ context }: { context: EpisodeContext }) {
-  return <div className="record-list"><RecordList records={context.recent_context.previous_episode_summaries} fields={["episode_id", "title", "summary"]} empty="No previous episode summaries." /><div className="record-list-item"><strong>Previous draft tail</strong><pre>{context.recent_context.previous_draft_tail}</pre></div></div>;
+  return <div className="record-list"><RecordList records={context.recent_context.previous_episode_summaries} fields={["episode_id", "title", "summary"]} empty="No previous episode summaries." /><div className="record-list-item"><strong>Previous draft context HTML</strong><pre>{context.recent_context.previous_draft_context_html}</pre></div></div>;
 }
 
 function JsonBlock({ value }: { value: unknown }) {

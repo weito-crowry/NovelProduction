@@ -81,12 +81,12 @@ export const projectQueryKeys = {
     ["project", projectId, "canon-decision-search", query, limit] as const,
   canonDecisionSearchFamily: (projectId: string) =>
     ["project", projectId, "canon-decision-search"] as const,
-  latestDraft: (projectId: string, episodeId: number) =>
-    ["project", projectId, "latest-draft", episodeId] as const,
+  draftDocument: (projectId: string, episodeId: number, revision: number | "latest") =>
+    ["project", projectId, "draft-document", episodeId, revision] as const,
+  draftWeb: (projectId: string, episodeId: number, revision: number, includeNotes: boolean) =>
+    ["project", projectId, "draft-web", episodeId, revision, includeNotes] as const,
   draftHistory: (projectId: string, episodeId: number, limit = 20) =>
     ["project", projectId, "draft-history", episodeId, limit] as const,
-  draftRevision: (projectId: string, episodeId: number, revision: number) =>
-    ["project", projectId, "draft-revision", episodeId, revision] as const,
   timelineEvents: (projectId: string, limit = 50, offset = 0) =>
     ["project", projectId, "timeline-events", limit, offset] as const,
   timelineEventsFamily: (projectId: string) =>

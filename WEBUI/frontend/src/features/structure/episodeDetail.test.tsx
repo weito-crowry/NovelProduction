@@ -38,10 +38,10 @@ function view(references: EpisodeView["episode_references"] = []): EpisodeView {
         effective_relationships: [{ relationship_id: 13, related_character_id: 10, relationship_type: "ally", description: "Trusts them", canon_status: "canon" }],
         known_information: [{ information_item_id: 21, knowledge_state: "known", source_episode_id: 1, statement: "The gate is open", truth_status: "true", canon_status: "canon" }],
       }],
-      world_facts: [], timeline_events: [], reader_context: { known_before_episode: [], reveal_this_episode: [] }, protected_information_guards: [], recent_context: { previous_episode_summaries: [], previous_draft_tail: "tail" }, foreshadowing_notes: [{ clue: true }], context_meta: { source: "test" },
+      world_facts: [], timeline_events: [], reader_context: { known_before_episode: [], reveal_this_episode: [] }, protected_information_guards: [], recent_context: { previous_episode_summaries: [], previous_draft_context_html: "<p>tail</p>" }, foreshadowing_notes: [{ clue: true }], context_meta: { source: "test" },
     },
-    latest_draft: { id: 10, work_id: 7, episode_id: 2, revision: 1, parent_draft_id: null, body: "Read-only draft", source_agent: "agent", change_summary: "Initial", content_hash: "sha256:abc", created_at: "2026-01-02" },
-    recent_draft_history: [{ id: 10, episode_id: 2, revision: 1, parent_draft_id: null, source_agent: "agent", change_summary: "Recent change summary", content_hash: "sha256:abc", body_chars: 16, created_at: "2026-01-02" }],
+    latest_draft: { id: 10, work_id: 7, episode_id: 2, revision: 1, parent_draft_id: null, document: { ignored: true }, source_agent: "agent", change_summary: "Initial", created_at: "2026-01-02" },
+    recent_draft_history: [{ id: 10, episode_id: 2, revision: 1, parent_draft_id: null, source_agent: "agent", change_summary: "Recent change summary", created_at: "2026-01-02" }],
   };
 }
 
@@ -71,7 +71,7 @@ describe("episode aggregated detail", () => {
       expect(await screen.findByRole("heading", { name: tab })).toBeInTheDocument();
     }
     await userEvent.setup().click(screen.getByRole("button", { name: /^Draft history$/ }));
-    expect(screen.getByText("Read-only draft")).toBeInTheDocument();
+    expect(screen.getByText("Initial")).toBeInTheDocument();
     expect(screen.getByText("Recent change summary")).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input, init]) => init?.method === "POST" && String(input).includes("/drafts"))).toBe(false);
   });

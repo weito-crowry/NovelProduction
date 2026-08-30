@@ -45,7 +45,7 @@ function episodeView(record = episodeOne, scenes: typeof sceneOne[] = []): Episo
     scenes,
     episode_references: [],
     outline: { episode: record, scenes, participants: [], references: { world_facts: [], timeline_events: [], information: [] }, protected_information_guards: [] },
-    context: { episode: record, scenes, participants: [], world_facts: [], timeline_events: [], reader_context: { known_before_episode: [], reveal_this_episode: [] }, protected_information_guards: [], recent_context: { previous_episode_summaries: [], previous_draft_tail: "" }, foreshadowing_notes: [], context_meta: {} },
+    context: { episode: record, scenes, participants: [], world_facts: [], timeline_events: [], reader_context: { known_before_episode: [], reveal_this_episode: [] }, protected_information_guards: [], recent_context: { previous_episode_summaries: [], previous_draft_context_html: "" }, foreshadowing_notes: [], context_meta: {} },
     latest_draft: null,
     recent_draft_history: [],
   };

@@ -243,7 +243,7 @@ export interface PreviousEpisodeSummary {
 
 export interface RecentContext {
   previous_episode_summaries: PreviousEpisodeSummary[];
-  previous_draft_tail: string;
+  previous_draft_context_html: string;
 }
 
 export interface EpisodeContext {
@@ -259,29 +259,83 @@ export interface EpisodeContext {
   context_meta: Record<string, unknown>;
 }
 
-export interface DraftRecord {
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export interface BlockAttrs {
+  scene_id?: number;
+  speaker_character_id?: number;
+  heading_level?: number;
+}
+
+export type NovelBlockType =
+  | "narration"
+  | "dialogue"
+  | "thought"
+  | "description"
+  | "quote"
+  | "heading"
+  | "separator"
+  | "note";
+
+export interface NovelBlock {
+  id: string;
+  type: NovelBlockType;
+  html: string;
+  attrs: BlockAttrs;
+  annotations: Record<string, JsonValue>;
+}
+
+export interface NovelDocument {
+  schema_version: 1;
+  type: "novel_document";
+  blocks: NovelBlock[];
+}
+
+export interface DraftRead<TContent> {
   id: number;
   work_id: number;
   episode_id: number;
   revision: number;
   parent_draft_id: number | null;
-  body: string;
+  format: string;
+  content: TContent;
   source_agent: string | null;
   change_summary: string;
-  content_hash: string;
   created_at: string;
 }
 
-export interface DraftMetadata {
+export type DraftDocumentRead = DraftRead<NovelDocument> & { format: "document" };
+export type DraftWebRead = DraftRead<string> & { format: "web" };
+
+export interface DraftHistoryItem {
   id: number;
   episode_id: number;
   revision: number;
   parent_draft_id: number | null;
   source_agent: string | null;
   change_summary: string;
-  content_hash: string;
-  body_chars: number;
   created_at: string;
+}
+
+export interface DraftSaveResult {
+  id: number;
+  revision: number;
+  parent_draft_id: number | null;
+  id_map: Record<string, string>;
+}
+
+export interface DraftExport {
+  format: string;
+  media_type: string;
+  content: string;
+  suggested_filename: string;
+  warnings: JsonValue[];
 }
 
 export interface OutlineEpisodeView {
@@ -304,8 +358,8 @@ export interface EpisodeView {
   episode_references: EpisodeReferenceRecord[];
   outline: EpisodeOutline;
   context: EpisodeContext;
-  latest_draft: DraftRecord | null;
-  recent_draft_history: DraftMetadata[];
+  latest_draft: EpisodeDraftSnapshot | null;
+  recent_draft_history: DraftHistoryItem[];
 }
 
 export interface ChapterCreate {
@@ -733,9 +787,21 @@ export interface CanonStatusSet {
   reason?: string;
 }
 
-export interface DraftSave {
-  body: string;
-  expected_parent_draft_id: number | null;
+export interface EpisodeDraftSnapshot {
+  id: number;
+  work_id: number;
+  episode_id: number;
+  revision: number;
+  parent_draft_id: number | null;
+  document: unknown;
+  source_agent: string | null;
+  change_summary: string;
+  created_at: string;
+}
+
+export interface RestoreDraftInput {
+  restore_revision: number;
+  expected_parent_draft_id: number;
   source_agent: "webui";
   change_summary: string;
 }
