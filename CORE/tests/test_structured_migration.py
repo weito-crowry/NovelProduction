@@ -46,7 +46,8 @@ def _create_legacy_database(tmp_path: Path) -> tuple[Path, Path]:
     )
     chapter_id = connection.execute("SELECT id FROM chapters").fetchone()[0]
     connection.execute(
-        "INSERT INTO episodes (work_id, chapter_id, position, title) VALUES (?, ?, ?, ?)",
+        "INSERT INTO episodes "
+        "(work_id, chapter_id, position, title) VALUES (?, ?, ?, ?)",
         (work_id, chapter_id, 1, "Episode"),
     )
     episode_id = connection.execute("SELECT id FROM episodes").fetchone()[0]
@@ -69,12 +70,15 @@ def _create_legacy_database(tmp_path: Path) -> tuple[Path, Path]:
 def test_fresh_database_applies_exactly_migrations_001_to_005(tmp_path: Path) -> None:
     connection = _open(tmp_path / "fresh.db", MIGRATION_DIR)
     try:
-        assert tuple(
-            row[0]
-            for row in connection.execute(
-                "SELECT version FROM schema_migrations ORDER BY version"
+        assert (
+            tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                )
             )
-        ) == ALL_MIGRATIONS
+            == ALL_MIGRATIONS
+        )
         assert_database_integrity(connection)
     finally:
         connection.close()
@@ -89,16 +93,17 @@ def test_populated_legacy_drafts_are_replaced_without_disabling_foreign_keys(
     try:
         assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
         assert connection.execute("SELECT COUNT(*) FROM drafts").fetchone() == (0,)
-        assert tuple(
-            row[0]
-            for row in connection.execute(
-                "SELECT version FROM schema_migrations ORDER BY version"
+        assert (
+            tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                )
             )
-        ) == ALL_MIGRATIONS
+            == ALL_MIGRATIONS
+        )
 
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(drafts)")
-        }
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(drafts)")}
         assert columns == {
             "id",
             "work_id",
@@ -113,8 +118,7 @@ def test_populated_legacy_drafts_are_replaced_without_disabling_foreign_keys(
 
         indexes = {
             row[1]: tuple(
-                item[2]
-                for item in connection.execute(f"PRAGMA index_info('{row[1]}')")
+                item[2] for item in connection.execute(f"PRAGMA index_info('{row[1]}')")
             )
             for row in connection.execute("PRAGMA index_list(drafts)")
             if row[2]
@@ -184,6 +188,9 @@ def test_structured_migration_has_required_order_and_foreign_key_guard() -> None
         "CREATE TRIGGER DRAFTS_APPEND_ONLY_UPDATE",
         "CREATE TRIGGER DRAFTS_APPEND_ONLY_DELETE",
     )
-    positions = [next(i for i, statement in enumerate(statements) if statement.startswith(item)) for item in required]
+    positions = [
+        next(i for i, statement in enumerate(statements) if statement.startswith(item))
+        for item in required
+    ]
     assert positions == sorted(positions)
     assert "PRAGMA FOREIGN_KEYS = OFF" not in source.upper()

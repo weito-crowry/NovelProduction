@@ -46,9 +46,7 @@ def test_repository_stores_only_canonical_document_json_and_raw_metadata(
         )
         repository.commit()
 
-        record = repository.get(
-            work_id=work_id, episode_id=episode_id, revision=1
-        )
+        record = repository.get(work_id=work_id, episode_id=episode_id, revision=1)
         assert record is not None
         assert record.id == first_id
         assert record.document_json == DOCUMENT_JSON
@@ -63,7 +61,10 @@ def test_repository_stores_only_canonical_document_json_and_raw_metadata(
             "change_summary",
             "created_at",
         )
-        source = Path(__file__).resolve().parents[1] / "src/novel_core/repositories/draft_repository.py"
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "src/novel_core/repositories/draft_repository.py"
+        )
         assert "parse_document_json" not in source.read_text(encoding="utf-8")
     finally:
         connection.close()

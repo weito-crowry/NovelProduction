@@ -10,7 +10,7 @@ from typing import cast
 from novel_core.errors import DocumentSchemaError, ValidationError
 
 from .authoring_html import AuthoringBlockInput, parse_authoring_html
-from .model import BlockAttrs, BlockType, JsonValue, NovelBlock, NovelDocument
+from .model import BlockAttrs, JsonValue, NovelBlock, NovelDocument
 from .schema import new_block_id, normalize_document
 
 _ATTR_NAMES = frozenset({"scene_id", "speaker_character_id", "heading_level"})
@@ -160,7 +160,7 @@ def _resolve_html_block(
         heading_level = None
     return NovelBlock(
         id=formal_id,
-        type=cast(BlockType, block_type),
+        type=block_type,
         html=item.html,
         attrs=BlockAttrs(
             scene_id=attrs.get(
@@ -301,9 +301,13 @@ def _apply_patch(block: NovelBlock, patch: _MetadataPatch) -> NovelBlock:
                 "non-heading blocks cannot have a heading_level", field="heading_level"
             )
         attrs = replace(attrs, heading_level=cast(int | None, heading_level))
-    for name in ("scene_id", "speaker_character_id"):
-        if name in patch.attrs:
-            attrs = replace(attrs, **{name: patch.attrs[name]})
+    if "scene_id" in patch.attrs:
+        attrs = replace(attrs, scene_id=cast(int | None, patch.attrs["scene_id"]))
+    if "speaker_character_id" in patch.attrs:
+        attrs = replace(
+            attrs,
+            speaker_character_id=cast(int | None, patch.attrs["speaker_character_id"]),
+        )
     annotations = dict(block.annotations)
     for key in patch.remove_annotations:
         annotations.pop(key, None)

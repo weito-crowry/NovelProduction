@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Query, Request, status
 from novel_core.document import (
@@ -24,6 +24,7 @@ from novel_api.service_container import (
 )
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["authoring"])
+ProjectionMode = Literal["none", "selected", "all"]
 
 
 @router.get(
@@ -206,7 +207,7 @@ def _draft_projection(
             raise ValidationError("selected projection requires annotation_keys")
         if annotation_projection == "all" and keys:
             raise ValidationError("all projection does not accept annotation_keys")
-        return AnnotationProjection(annotation_projection, keys)
+        return AnnotationProjection(cast(ProjectionMode, annotation_projection), keys)
     if annotation_projection != "none" or keys:
         raise ValidationError(
             "annotation projection is only available for html",
