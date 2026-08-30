@@ -327,6 +327,7 @@ Initial HTTP mapping:
 | 503 | `DATABASE_BUSY` | SQLite remains locked after the configured wait |
 | 503 | `BACKEND_UNAVAILABLE` | Used by MCP when the HTTP backend cannot be reached |
 | 500 | `INTERNAL_ERROR` | Unexpected server failure |
+| 500 | `DOCUMENT_STORAGE_ERROR` | Persisted Canonical Document is structurally invalid |
 
 For `VERSION_CONFLICT`, the API should include the latest resource snapshot when it can do so safely. WEBUI uses this to show a side-by-side comparison.
 

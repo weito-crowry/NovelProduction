@@ -802,3 +802,94 @@ Phase E is complete only when all of the following hold:
 - documentation matches the implementation;
 - the post-certification draft API v1 is recorded as the baseline; and
 - ChatGPT review is complete before Final Cutover.
+
+## 56. E2 Backend Cutover Clarifications
+
+The following clarifications are binding for the E2 backend implementation.
+They refine the approved Phase E contract without changing the unrelated
+design sections above.
+
+### 56.1 Heading structure and metadata presence
+
+`heading_level` is a structural field, not a generic inherited attribute. A
+heading block requires a level from 1 through 3; a non-heading block must not
+contain `heading_level`. Changing a retained heading to a non-heading clears
+the previous level automatically. A non-heading block with a non-null
+`heading_level` patch is invalid. Forced `h1`, `h2`, and `h3` HTML resolve to
+their corresponding levels; a metadata patch that supplies the same level is
+accepted, while a different level is a self-conflict.
+
+Metadata patches are presence-aware: omitted fields inherit or remain
+unchanged, while explicit JSON `null` clears nullable structural attributes.
+Empty strings are supplied values where the field contract permits them.
+An empty `metadata_updates` object is an invalid metadata-only command, and
+an individual empty block patch is also invalid.
+
+At the top level, `plain_text`, `html`, `metadata_updates`, and
+`restore_revision` use `null` to mean not supplied; an empty string remains a
+supplied value. `restore_revision` identifies a positive revision number
+within the target episode, never a draft row ID.
+
+### 56.2 Authoring and transaction boundaries
+
+HTML is a complete ordered snapshot. Parent-relative authoring retains formal
+IDs that are present in the current parent, converts supplied IDs absent from
+the parent into same-request correlation IDs with a returned `id_map`, and
+generates formal IDs for id-less new blocks. Historical IDs absent from the
+current parent are not known blocks for normal authoring; only restore may
+reintroduce them.
+
+HTML and `metadata_updates` are resolved together. Same-field values that are
+equal after normalization are accepted; unequal values, set/remove conflicts,
+and updates targeting a deleted or absent block are validation errors. An
+explicit valid HTML no-op may still append a revision after CAS succeeds.
+
+The inserted revision is reloaded and structurally parsed inside the same
+transaction before commit. Any inserted-row identity or document validation
+failure rolls back the transaction. Stored structural corruption is wrapped
+as `DocumentStorageError` and maps explicitly to `DOCUMENT_STORAGE_ERROR`;
+caller authoring/schema violations remain `DocumentSchemaError` and
+`DOCUMENT_SCHEMA_ERROR`.
+
+### 56.3 Migration and runtime isolation
+
+Migration 005 destructively replaces legacy drafts without data migration.
+Its drafts table has the exact `(work_id, id)`, `(episode_id, revision)`, and
+`(work_id, episode_id, id)` uniqueness constraints; the episode foreign key is
+`FOREIGN KEY (work_id, episode_id) REFERENCES episodes(work_id, id) ON DELETE
+CASCADE`; and the parent foreign key is
+`FOREIGN KEY (work_id, episode_id, parent_draft_id) REFERENCES
+ drafts(work_id, episode_id, id) ON DELETE RESTRICT`. The required destructive
+sequence drops the append-only triggers, nulls parent references, deletes
+legacy rows, drops the old table, creates the new table and revision index,
+then recreates both append-only triggers, without disabling foreign keys.
+
+E2 migration and runtime checks use only disposable data roots. In
+particular, a Phase E runtime must resolve an explicit worktree-local
+temporary `NOVEL_DATA_ROOT` and must not open or migrate stable
+`data/2126/story.db`. The E2 temporary Manuscript E2E boundary excludes the
+Phase E WEBUI Manuscript conversion, TipTap integration, Read-first UI, and
+Save/Cancel editor flow; an obsolete legacy-`body` failure in the existing
+Manuscript E2E is reported as an expected temporary incompatibility rather
+than repaired with a compatibility shim. All other E2E failures remain
+blockers.
+
+### 56.4 API and command error taxonomy
+
+Parent-relative authoring command errors use this fixed taxonomy:
+
+- `DOCUMENT_SCHEMA_ERROR` / HTTP 422 for Restricted HTML or Canonical
+  Document structural/schema violations;
+- `VALIDATION_ERROR` for command-state, target, metadata, live-reference,
+  restore-target, and same-request semantic violations;
+- `VERSION_CONFLICT` / HTTP 409 only for a numeric stale CAS parent, with the
+  latest resource projected as `current_resource` using HTML, selected
+  `emotions`, and normal authoring notes; and
+- `DOCUMENT_STORAGE_ERROR` / HTTP 500 only for structurally invalid stored
+  Canonical Documents.
+
+The E2 API exposes repeated `annotation_keys` query values, rejects
+irrelevant format arguments rather than silently ignoring them, returns
+metadata-only history, and adds the separate Narou export endpoint. The
+existing MCP draft tools are extended as stateless adapters, with no new
+tools and a total tool count of 59.
