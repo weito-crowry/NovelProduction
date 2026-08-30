@@ -10,26 +10,12 @@ import Paragraph from "@tiptap/extension-paragraph";
 import Text from "@tiptap/extension-text";
 
 const phaseEBlockAttributes = {
-  id: {
-    default: null,
-    parseHTML: (element: HTMLElement) => element.getAttribute("id"),
-  },
-  "data-np-type": {
-    default: null,
-    parseHTML: (element: HTMLElement) => element.getAttribute("data-np-type"),
-  },
-  "data-np-scene-id": {
-    default: null,
-    parseHTML: (element: HTMLElement) => element.getAttribute("data-np-scene-id"),
-  },
-  "data-np-speaker-id": {
-    default: null,
-    parseHTML: (element: HTMLElement) => element.getAttribute("data-np-speaker-id"),
-  },
-  "data-ann-emotions": {
-    default: null,
-    parseHTML: (element: HTMLElement) => element.getAttribute("data-ann-emotions"),
-  },
+  id: explicitHtmlAttribute("id"),
+  "data-np-type": explicitHtmlAttribute("data-np-type"),
+  "data-np-scene-id": explicitHtmlAttribute("data-np-scene-id"),
+  "data-np-speaker-id": explicitHtmlAttribute("data-np-speaker-id"),
+  "data-ann-emotions": explicitHtmlAttribute("data-ann-emotions"),
+  "data-np-remove-annotations": explicitHtmlAttribute("data-np-remove-annotations"),
 };
 
 export const PhaseEParagraph = Paragraph.extend({
@@ -147,4 +133,16 @@ function rubyBase(element: HTMLElement): string {
     )
     .map((child) => child.textContent ?? "")
     .join("");
+}
+
+function explicitHtmlAttribute(name: string) {
+  return {
+    default: null,
+    keepOnSplit: false,
+    parseHTML: (element: HTMLElement) => element.getAttribute(name),
+    renderHTML: (attributes: Record<string, unknown>) => {
+      const value = attributes[name];
+      return value === null || value === undefined ? {} : { [name]: String(value) };
+    },
+  };
 }

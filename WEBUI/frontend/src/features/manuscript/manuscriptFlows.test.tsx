@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRoutes } from "../../app/routes";
-import type { DraftDocumentRead, DraftExport, DraftHistoryItem, DraftWebRead, NovelDocument } from "../../api/types";
+import type { CharacterRecord, DraftDocumentRead, DraftExport, DraftHistoryItem, DraftHtmlRead, DraftWebRead, NovelDocument } from "../../api/types";
 
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -28,6 +28,10 @@ function webRead(document: DraftDocumentRead, content = `<p id="${blockId}">WEB 
   return { ...document, format: "web", content };
 }
 
+function authoringHtml(document: DraftDocumentRead, content = `<p id="${blockId}" data-np-type="dialogue">canonical</p>`): DraftHtmlRead {
+  return { ...document, format: "html", content };
+}
+
 function historyItem(revision: number): DraftHistoryItem {
   return { id: revision, episode_id: 2, revision, parent_draft_id: revision > 1 ? revision - 1 : null, source_agent: "agent", change_summary: `revision ${revision}`, created_at: `2026-01-0${revision}` };
 }
@@ -44,6 +48,8 @@ function routeFor(
   history: DraftHistoryItem[] = latest ? [historyItem(latest.revision)] : [],
   webByRevision: Record<number, DraftWebRead> = latest ? { [latest.revision]: webRead(latest) } : {},
   exportWarnings: DraftExport["warnings"] = [],
+  authoringHtmlByRevision: Record<number, DraftHtmlRead> = latest ? { [latest.revision]: authoringHtml(latest) } : {},
+  characters: CharacterRecord[] = [],
 ) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://test");
@@ -57,7 +63,12 @@ function routeFor(
         const revision = Number(url.searchParams.get("revision"));
         return response({ project_id: "A", data: webByRevision[revision] ?? webRead(documentRead(revision)) });
       }
+      if (url.searchParams.get("format") === "html") {
+        const revision = Number(url.searchParams.get("revision"));
+        return response({ project_id: "A", data: authoringHtmlByRevision[revision] ?? authoringHtml(documentRead(revision)) });
+      }
     }
+    if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: characters });
     if (url.pathname.endsWith("/drafts") && init?.method !== "POST") return response({ project_id: "A", data: history });
     if (url.pathname.endsWith("/draft/export")) return response({ project_id: "A", data: { format: "narou", media_type: "text/plain", content: "export", suggested_filename: "episode-2-r1.txt", warnings: exportWarnings } });
     return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
@@ -229,5 +240,126 @@ describe("Phase E manuscript read flows", () => {
     expect(screen.getByText("WEB revision 6")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("opens edit from a fresh Document and matching HTML, then confirms the committed revision", async () => {
+    let current = documentRead(1, 10);
+    const currentHtml = () => authoringHtml(current, '<p id="blk_0123456789abcdef0123456789abcdef" data-np-type="dialogue">canonical</p>');
+    const postBodies: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") return response({ project_id: "A", data: current });
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: currentHtml() });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(current) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        postBodies.push(body);
+        current = documentRead(3, 21);
+        return response({ project_id: "A", data: { id: 21, revision: 3, parent_draft_id: 20, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(current.revision)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    current = documentRead(2, 20);
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    expect(await screen.findByRole("textbox", { name: "Manuscript editor" })).toBeInTheDocument();
+    expect(screen.getByText("Revision 2 · Draft #20")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Block type"), "heading");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    expect(await screen.findByText("Latest revision 3")).toBeInTheDocument();
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).toEqual(expect.objectContaining({
+      expected_parent_draft_id: 20,
+      source_agent: "webui",
+      change_summary: "Edit manuscript",
+    }));
+    expect(postBodies[0]).not.toHaveProperty("plain_text");
+    expect(postBodies[0]).not.toHaveProperty("metadata_updates");
+    expect(String(postBodies[0].html)).toContain("<h1");
+  });
+
+  it("shows a VERSION_CONFLICT without retrying and keeps the local editor", async () => {
+    const current = documentRead(1, 10);
+    const latestHtml = authoringHtml(documentRead(2, 20), '<p id="blk_0123456789abcdef0123456789abcdef" data-np-type="dialogue">server latest</p>');
+    let postCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") return response({ project_id: "A", data: current });
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: authoringHtml(current) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(current) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        postCount += 1;
+        return response({ error: { code: "VERSION_CONFLICT", message: "stale", details: { current_resource: latestHtml } } }, 409);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(1)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.selectOptions(screen.getByLabelText("Block type"), "heading");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("VERSION_CONFLICT");
+    expect(screen.getByRole("dialog")).toHaveTextContent("server latest");
+    expect(postCount).toBe(1);
+    await user.click(screen.getByRole("button", { name: "Keep local edits" }));
+    expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toBeInTheDocument();
+    expect(postCount).toBe(1);
+  });
+
+  it("creates an initial manuscript only after the fresh no-draft check", async () => {
+    let current: DraftDocumentRead | null = null;
+    const postBodies: Record<string, unknown>[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") return response({ project_id: "A", data: current });
+        if (url.searchParams.get("format") === "web" && current !== null) return response({ project_id: "A", data: webRead(current) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        postBodies.push(body);
+        current = documentRead(1, 21);
+        return response({ project_id: "A", data: { id: 21, revision: 1, parent_draft_id: null, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("No manuscript draft yet.");
+    await user.click(screen.getByRole("button", { name: "Create manuscript" }));
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.type(editor, "新しい本文");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    expect(await screen.findByText("Latest revision 1")).toBeInTheDocument();
+    expect(postBodies).toHaveLength(1);
+    expect(postBodies[0]).toEqual(expect.objectContaining({ source_agent: "webui", change_summary: "Create manuscript" }));
+    expect(postBodies[0]).not.toHaveProperty("expected_parent_draft_id");
+    expect(postBodies[0]).not.toHaveProperty("plain_text");
   });
 });

@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { isApiError } from "../../api/errors";
 import { projectQueryKeys } from "../../api/queryKeys";
 import type {
+  CharacterRecord,
   DraftDocumentRead,
   DraftExport,
   DraftHistoryItem,
@@ -13,20 +14,29 @@ import type {
   JsonValue,
   NovelBlock,
   OutlineView,
+  SceneRecord,
 } from "../../api/types";
 import { AppShell } from "../../components/layout/AppShell";
+import { DirtyNavigationGuard } from "../../components/layout/DirtyNavigationGuard";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
+import { ConflictDialog } from "../conflicts/ConflictDialog";
 import {
+  fetchAllCharacters,
+  fetchDraftAuthoringHtml,
   fetchDraftDocument,
   fetchDraftHistory,
   fetchDraftWeb,
   fetchFreshLatestDocument,
   fetchNarouExport,
   restoreDraft,
+  saveDraftHtml,
 } from "./manuscriptApi";
+import { ManuscriptEditor } from "./ManuscriptEditor";
 import {
   assertDocumentIdentity,
+  assertHtmlIdentity,
+  asDraftHtmlPreview,
   assertWebIdentity,
   isFormalBlockId,
   projectableUnknownAnnotations,
@@ -64,7 +74,7 @@ export function ManuscriptPage() {
           {selectedId === null ? (
             <Card><p className="eyebrow">Manuscript</p><h2>Select an episode</h2><p>Choose an episode to read its structured manuscript.</p></Card>
           ) : (
-            <ManuscriptReader key={`${project}-${selectedId}`} projectId={project} episodeId={selectedId} />
+            <ManuscriptReader key={`${project}-${selectedId}`} projectId={project} episodeId={selectedId} scenes={outlineQuery.data?.chapters.flatMap((chapter) => chapter.episodes).find((entry) => entry.episode.id === selectedId)?.scenes ?? []} />
           )}
         </section>
       </div>
@@ -101,7 +111,7 @@ function EpisodeList({
   );
 }
 
-function ManuscriptReader({ projectId, episodeId }: { projectId: string; episodeId: number }) {
+function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string; episodeId: number; scenes: SceneRecord[] }) {
   const queryClient = useQueryClient();
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
   const [includeNotes, setIncludeNotes] = useState(false);
@@ -116,6 +126,17 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
   const [committedRestore, setCommittedRestore] = useState<CommittedRestore | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportWarnings, setExportWarnings] = useState<ExportWarning[]>([]);
+  const [editSession, setEditSession] = useState<EditSession | null>(null);
+  const [editPending, setEditPending] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editDirty, setEditDirty] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editConflict, setEditConflict] = useState<EditConflict | null>(null);
+  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
+  const [discardPending, setDiscardPending] = useState(false);
+  const [committedSave, setCommittedSave] = useState<CommittedSave | null>(null);
+  const [committedSaveError, setCommittedSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<DraftSaveResult | null>(null);
 
   const documentKey = projectQueryKeys.draftDocument(projectId, episodeId, selectedRevision ?? "latest");
   const documentQuery = useQuery({
@@ -141,6 +162,12 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
     queryFn: () => fetchDraftHistory(projectId, episodeId),
     retry: false,
   });
+  const charactersQuery = useQuery<CharacterRecord[]>({
+    queryKey: projectQueryKeys.characters(projectId, 100, 0),
+    queryFn: () => fetchAllCharacters(projectId),
+    enabled: editSession !== null || editPending,
+    retry: false,
+  });
   const webQuery = useQuery({
     queryKey: projectQueryKeys.draftWeb(projectId, episodeId, displayRevision ?? 0, includeNotes),
     queryFn: async () => {
@@ -153,6 +180,131 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
   });
   const visibleBlocks = documentRead?.content.blocks.filter((block) => includeNotes || block.type !== "note") ?? [];
   const selectedBlock = visibleBlocks.find((block) => block.id === selectedBlockId) ?? null;
+
+  async function beginEdit() {
+    if (editPending || committedRestore !== null || committedSave !== null) return;
+    setEditPending(true);
+    setEditError(null);
+    setEditConflict(null);
+    setSaveSuccess(null);
+    try {
+      const latest = await getFreshDocument(projectId, episodeId);
+      if (latest === null) {
+        setEditSession({ key: Date.now(), baselineDocument: null, baselineDraftId: null, initialHtml: "" });
+      } else {
+        const html = await getMatchingAuthoringHtml(projectId, episodeId, latest);
+        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
+        setSelectedRevision(null);
+        setEditSession({ key: Date.now(), baselineDocument: latest, baselineDraftId: latest.id, initialHtml: html.content });
+      }
+      setEditDirty(false);
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : "Unable to start manuscript editing.");
+    } finally {
+      setEditPending(false);
+    }
+  }
+
+  async function saveEditedHtml(html: string) {
+    const session = editSession;
+    if (session === null || editSaving) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      if (session.baselineDocument === null) {
+        const latest = await getFreshDocument(projectId, episodeId);
+        if (latest !== null) {
+          setEditConflict({ localHtml: html, latest, initial: true });
+          return;
+        }
+      }
+      const saved = await saveDraftHtml(projectId, episodeId, {
+        html,
+        ...(session.baselineDraftId === null ? {} : { expected_parent_draft_id: session.baselineDraftId }),
+        source_agent: "webui",
+        change_summary: session.baselineDraftId === null ? "Create manuscript" : "Edit manuscript",
+      });
+      assertSaveResult(saved);
+      const committed: CommittedSave = { createdRevision: saved.revision, createdDraftId: saved.id };
+      setSaveSuccess(saved);
+      setEditSession(null);
+      setEditDirty(false);
+      setCommittedSave(committed);
+      setCommittedSaveError(null);
+      await confirmCommittedSave(committed);
+    } catch (caught) {
+      if (isApiError(caught) && caught.status === 409 && caught.code === "VERSION_CONFLICT") {
+        setEditConflict({ localHtml: html, latest: asDraftHtmlPreview(caught.details.current_resource), initial: false });
+      } else {
+        setEditError(caught instanceof Error ? caught.message : "Unable to save the manuscript.");
+      }
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function loadLatestIntoEditor() {
+    try {
+      const latest = await getFreshDocument(projectId, episodeId);
+      if (latest === null) {
+        setEditSession({ key: Date.now(), baselineDocument: null, baselineDraftId: null, initialHtml: "" });
+      } else {
+        const html = await getMatchingAuthoringHtml(projectId, episodeId, latest);
+        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
+        setEditSession({ key: Date.now(), baselineDocument: latest, baselineDraftId: latest.id, initialHtml: html.content });
+      }
+      setEditDirty(false);
+      setEditConflict(null);
+      setEditError(null);
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : "The latest manuscript could not be loaded. Your local edits were kept.");
+    }
+  }
+
+  async function cancelEditing() {
+    setDiscardPending(true);
+    setEditError(null);
+    try {
+      const latest = await getFreshDocument(projectId, episodeId);
+      if (latest !== null) {
+        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), latest);
+      } else {
+        queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), null);
+      }
+      setEditSession(null);
+      setEditDirty(false);
+      setDiscardDialogOpen(false);
+      setEditConflict(null);
+      setSelectedRevision(null);
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : "The latest manuscript could not be loaded. Your local edits were kept.");
+    } finally {
+      setDiscardPending(false);
+    }
+  }
+
+  async function confirmCommittedSave(committed: CommittedSave) {
+    try {
+      const actualLatest = await getFreshDocument(projectId, episodeId);
+      if (actualLatest === null || restoreRefreshStatus(actualLatest, { revision: committed.createdRevision, id: committed.createdDraftId }) !== "confirmed") {
+        setCommittedSaveError(saveRefreshMessage(committed.createdRevision));
+        return;
+      }
+      queryClient.setQueryData(projectQueryKeys.draftDocument(projectId, episodeId, "latest"), actualLatest);
+      await invalidateAfterSave(queryClient, projectId, episodeId);
+      setSelectedRevision(null);
+      setSelectedBlockId(null);
+      setCommittedSave(null);
+      setCommittedSaveError(null);
+    } catch {
+      setCommittedSaveError(saveRefreshMessage(committed.createdRevision));
+    }
+  }
+
+  async function reloadCommittedSave() {
+    if (committedSave === null) return;
+    await confirmCommittedSave(committedSave);
+  }
 
   useEffect(() => {
     setSelectedBlockId(null);
@@ -177,6 +329,11 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
   }
 
   async function viewLatest() {
+    if (editSession !== null || editPending) return;
+    if (committedSave !== null) {
+      await reloadCommittedSave();
+      return;
+    }
     setRestoreError(null);
     setPostRefreshError(null);
     try {
@@ -294,26 +451,61 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
 
   const isHistorical = selectedRevision !== null;
   const restoreLocked = committedRestore !== null;
+  const snapshotLocked = editSession !== null || editPending || committedSave !== null || restoreLocked;
 
   return (
     <>
       <Link className="back-link" to={`/projects/${encodeURIComponent(projectId)}/manuscript`}>Back to manuscript</Link>
       <div className="detail-heading">
-        <div><p className="eyebrow">Episode #{episodeId}</p><h1>{documentRead ? "Manuscript reader" : "Manuscript"}</h1></div>
-        {displayRevision !== null && <span className="version-note">{isHistorical ? "Historical" : "Latest"} revision {displayRevision}</span>}
+        <div><p className="eyebrow">Episode #{episodeId}</p><h1>{editSession ? "Manuscript editor" : committedSave ? "Manuscript save" : documentRead ? "Manuscript reader" : "Manuscript"}</h1></div>
+        {committedSave === null && displayRevision !== null && <span className="version-note">{isHistorical ? "Historical" : "Latest"} revision {displayRevision}</span>}
       </div>
       {restoreSuccess && <p className="saved-indicator" role="status">Restore succeeded as revision {restoreSuccess.revision}.</p>}
+      {saveSuccess && <p className="saved-indicator" role="status">Save succeeded as revision {saveSuccess.revision}.</p>}
       {postRefreshError && <p role="alert">{postRefreshError}</p>}
       {restoreError && <p role="alert">{restoreError}</p>}
-      {documentQuery.isPending && <p role="status">Loading manuscript…</p>}
-      {documentQuery.isError && <p role="alert">{documentQuery.error instanceof Error ? documentQuery.error.message : "Unable to load the manuscript document."}</p>}
-      {!documentQuery.isPending && !documentQuery.isError && documentRead === null && <p role="status">No manuscript draft yet.</p>}
-      {documentRead !== null && (
+      {editPending && <p role="status">Preparing manuscript editor…</p>}
+      {editError && <p role="alert">{editError}</p>}
+      {editSession && (
+        <>
+          <DirtyNavigationGuard dirty={editDirty} />
+          <ManuscriptEditor
+            key={editSession.key}
+            initialHtml={editSession.initialHtml}
+            baselineDocument={editSession.baselineDocument}
+            scenes={scenes}
+            characters={charactersQuery.data ?? []}
+            charactersLoading={charactersQuery.isPending}
+            charactersError={charactersQuery.isError ? "Unable to load characters. Existing speaker references were kept." : null}
+            saving={editSaving}
+            onDirtyChange={setEditDirty}
+            onSave={(html) => void saveEditedHtml(html)}
+            onCancel={(dirty) => dirty ? setDiscardDialogOpen(true) : void cancelEditing()}
+          />
+        </>
+      )}
+      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={() => setEditConflict(null)} onDiscard={() => void loadLatestIntoEditor()} />}
+      {committedSave && (
+        <Card>
+          <p className="saved-indicator">Save succeeded as revision {committedSave.createdRevision}.</p>
+          <p role={committedSaveError ? "alert" : "status"}>{committedSaveError ?? "Confirming latest manuscript…"}</p>
+          <Button type="button" variant="secondary" onClick={() => void reloadCommittedSave()} disabled={editPending}>Reload latest</Button>
+        </Card>
+      )}
+      {!editSession && committedSave === null && (
+        <>
+          {documentQuery.isPending && <p role="status">Loading manuscript…</p>}
+          {documentQuery.isError && <p role="alert">{documentQuery.error instanceof Error ? documentQuery.error.message : "Unable to load the manuscript document."}</p>}
+          {!documentQuery.isPending && !documentQuery.isError && documentRead === null && <div className="empty-state-inline"><p>No manuscript draft yet.</p><Button type="button" onClick={() => void beginEdit()} disabled={snapshotLocked}>Create manuscript</Button></div>}
+        </>
+      )}
+      {!editSession && committedSave === null && documentRead !== null && (
         <>
           <Card>
             <div className="manuscript-toolbar">
               <div><strong>{isHistorical ? "Historical snapshot" : "Latest snapshot"}</strong><p className="read-only-meta">Revision {displayRevision} · {documentRead.created_at} · {documentRead.source_agent ?? "unknown source"}</p></div>
               <label className="toggle-control"><input type="checkbox" checked={includeNotes} onChange={(event) => setIncludeNotes(event.target.checked)} />Show production notes</label>
+              {!isHistorical && <Button type="button" onClick={() => void beginEdit()} disabled={snapshotLocked}>Edit manuscript</Button>}
             </div>
             {documentRead.content.blocks.length === 0 && <p className="empty-state-inline">This manuscript revision is empty.</p>}
             {webQuery.isPending && <p role="status">Loading manuscript projection…</p>}
@@ -325,20 +517,21 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
             <Card>
               <h2>Snapshot actions</h2>
               <div className="form-actions">
-                <Button type="button" variant="secondary" onClick={() => setRawDocumentOpen((open) => !open)}>{rawDocumentOpen ? "Hide Raw Document" : "Show Raw Document"}</Button>
-                <Button type="button" onClick={() => void downloadExport()}>Download Narou export</Button>
+                 <Button type="button" variant="secondary" onClick={() => setRawDocumentOpen((open) => !open)} disabled={snapshotLocked}>{rawDocumentOpen ? "Hide Raw Document" : "Show Raw Document"}</Button>
+                 <Button type="button" onClick={() => void downloadExport()} disabled={snapshotLocked}>Download Narou export</Button>
               </div>
               {exportError && <p role="alert">{exportError}</p>}
               {exportWarnings.length > 0 && <div className="export-warnings" role="status"><strong>Export warnings</strong><ul>{exportWarnings.map((warning, index) => <li key={`${warning.code}-${warning.block_id ?? "document"}-${index}`}><code>{warning.code}</code>: {warning.message}{warning.block_id && <small> (block {warning.block_id})</small>}</li>)}</ul></div>}
               {rawDocumentOpen && <pre className="json-block raw-document">{JSON.stringify(documentRead.content, null, 2)}</pre>}
-              {isHistorical && <div className="form-actions"><Button type="button" variant="secondary" onClick={() => void viewLatest()} disabled={restorePending}>View latest</Button><Button type="button" variant="danger" onClick={() => setRestoreRevision(selectedRevision)} disabled={restorePending || restoreLocked}>Restore revision {selectedRevision}</Button></div>}
+               {isHistorical && <div className="form-actions"><Button type="button" variant="secondary" onClick={() => void viewLatest()} disabled={restorePending || snapshotLocked}>View latest</Button><Button type="button" variant="danger" onClick={() => setRestoreRevision(selectedRevision)} disabled={restorePending || restoreLocked || snapshotLocked}>Restore revision {selectedRevision}</Button></div>}
               {restoreLocked && <p className="helper-text">Restore is locked until the post-write latest revision is confirmed.</p>}
             </Card>
           </div>
         </>
       )}
-      <History history={historyQuery.data ?? []} isLoading={historyQuery.isPending} isError={historyQuery.isError} selectedRevision={selectedRevision} onSelect={selectHistoricalRevision} />
+      <History history={historyQuery.data ?? []} isLoading={historyQuery.isPending} isError={historyQuery.isError} selectedRevision={selectedRevision} onSelect={selectHistoricalRevision} disabled={snapshotLocked} />
       {restoreRevision !== null && <RestoreDialog revision={restoreRevision} pending={restorePending} onCancel={() => setRestoreRevision(null)} onConfirm={() => void confirmRestore()} />}
+      {discardDialogOpen && <DiscardDialog pending={discardPending} onKeep={() => setDiscardDialogOpen(false)} onDiscard={() => void cancelEditing()} />}
     </>
   );
 }
@@ -405,12 +598,14 @@ function History({
   isError,
   selectedRevision,
   onSelect,
+  disabled,
 }: {
   history: DraftHistoryItem[];
   isLoading: boolean;
   isError: boolean;
   selectedRevision: number | null;
   onSelect: (revision: number) => void;
+  disabled: boolean;
 }) {
   return (
     <Card>
@@ -418,7 +613,7 @@ function History({
       {isError && <p role="alert">Unable to load draft history.</p>}
       {isLoading && <p role="status">Loading draft history…</p>}
       {!isLoading && !isError && history.length === 0 && <p>No draft history.</p>}
-      {history.length > 0 && <div className="record-list">{history.map((item) => <div className="record-list-item" key={item.id}><span><strong>Revision {item.revision}</strong><small>{item.created_at} · {item.source_agent ?? "unknown source"}</small><small>{item.change_summary || "No change summary"} · {parentText(item, history)}</small></span><Button type="button" variant="secondary" onClick={() => onSelect(item.revision)} disabled={selectedRevision === item.revision}>View revision {item.revision}</Button></div>)}</div>}
+       {history.length > 0 && <div className="record-list">{history.map((item) => <div className="record-list-item" key={item.id}><span><strong>Revision {item.revision}</strong><small>{item.created_at} · {item.source_agent ?? "unknown source"}</small><small>{item.change_summary || "No change summary"} · {parentText(item, history)}</small></span><Button type="button" variant="secondary" onClick={() => onSelect(item.revision)} disabled={disabled || selectedRevision === item.revision}>View revision {item.revision}</Button></div>)}</div>}
     </Card>
   );
 }
@@ -427,11 +622,30 @@ function RestoreDialog({ revision, pending, onCancel, onConfirm }: { revision: n
   return <div className="dialog-backdrop"><div className="dialog" role="dialog" aria-modal="true" aria-labelledby="restore-title"><h2 id="restore-title">Restore revision {revision} as a new revision?</h2><p>The selected Canonical Document will be appended as a new revision. No historical revision will be changed.</p><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onCancel} disabled={pending}>Cancel</Button><Button type="button" variant="danger" onClick={onConfirm} disabled={pending}>{pending ? "Restoring…" : "Confirm restore"}</Button></div></div></div>;
 }
 
+function DiscardDialog({ pending, onKeep, onDiscard }: { pending: boolean; onKeep: () => void; onDiscard: () => void }) {
+  return <div className="dialog-backdrop"><div className="dialog" role="dialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Discard unsaved manuscript edits?</h2><p>Your local manuscript changes will be discarded after the latest revision is loaded.</p><div className="dialog-actions"><Button type="button" variant="secondary" onClick={onKeep} disabled={pending}>Keep editing</Button><Button type="button" variant="danger" onClick={onDiscard} disabled={pending}>{pending ? "Loading latest…" : "Discard edits"}</Button></div></div></div>;
+}
+
 type CommittedRestore = { sourceRevision: number; createdRevision: number; createdDraftId: number };
+type CommittedSave = { createdRevision: number; createdDraftId: number };
+type EditSession = { key: number; baselineDocument: DraftDocumentRead | null; baselineDraftId: number | null; initialHtml: string };
+type EditConflict = { localHtml: string; latest: DraftDocumentRead | ReturnType<typeof asDraftHtmlPreview>; initial: boolean };
 
 async function getFreshDocument(projectId: string, episodeId: number): Promise<DraftDocumentRead | null> {
   const read = await fetchFreshLatestDocument(projectId, episodeId);
   return read === null ? null : assertDocumentIdentity(read, episodeId);
+}
+
+async function getMatchingAuthoringHtml(projectId: string, episodeId: number, document: DraftDocumentRead) {
+  const html = assertHtmlIdentity(
+    await fetchDraftAuthoringHtml(projectId, episodeId, document.revision),
+    episodeId,
+    document.revision,
+  );
+  if (html.id !== document.id || html.work_id !== document.work_id || html.episode_id !== document.episode_id || html.revision !== document.revision) {
+    throw new Error("The manuscript document and authoring HTML have inconsistent snapshot identity.");
+  }
+  return html;
 }
 
 async function refreshHistory(queryClient: ReturnType<typeof useQueryClient>, projectId: string, episodeId: number) {
@@ -439,6 +653,11 @@ async function refreshHistory(queryClient: ReturnType<typeof useQueryClient>, pr
 }
 
 async function invalidateAfterRestore(queryClient: ReturnType<typeof useQueryClient>, projectId: string, episodeId: number) {
+  await queryClient.invalidateQueries({ queryKey: projectQueryKeys.draftHistory(projectId, episodeId) });
+  await queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) });
+}
+
+async function invalidateAfterSave(queryClient: ReturnType<typeof useQueryClient>, projectId: string, episodeId: number) {
   await queryClient.invalidateQueries({ queryKey: projectQueryKeys.draftHistory(projectId, episodeId) });
   await queryClient.invalidateQueries({ queryKey: projectQueryKeys.episodeViews(projectId) });
 }
@@ -488,6 +707,10 @@ function downloadText(exported: DraftExport) {
 
 function refreshMessage(revision: number): string {
   return `Restore succeeded as revision ${revision}, but the latest manuscript could not be reloaded.`;
+}
+
+function saveRefreshMessage(revision: number): string {
+  return `Save succeeded as revision ${revision}, but the latest manuscript could not be reloaded.`;
 }
 
 function positiveId(value: string): number | null {

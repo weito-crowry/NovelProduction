@@ -1,5 +1,6 @@
 import type {
   DraftDocumentRead,
+  DraftHtmlRead,
   DraftWebRead,
   JsonValue,
   NovelDocument,
@@ -14,6 +15,35 @@ export type RestoreRefreshStatus =
   | "stale"
   | "inconsistent";
 
+export interface DraftHtmlPreview {
+  id: number;
+  work_id: number;
+  episode_id: number;
+  revision: number;
+  content: string;
+  format: "html";
+}
+
+export function asDraftHtmlPreview(value: unknown): DraftHtmlPreview | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return candidate.format === "html" &&
+    positiveInteger(candidate.id) &&
+    positiveInteger(candidate.work_id) &&
+    positiveInteger(candidate.episode_id) &&
+    positiveInteger(candidate.revision) &&
+    typeof candidate.content === "string"
+    ? {
+        id: candidate.id,
+        work_id: candidate.work_id,
+        episode_id: candidate.episode_id,
+        revision: candidate.revision,
+        content: candidate.content,
+        format: "html",
+      }
+    : null;
+}
+
 export function assertDocumentIdentity(
   value: DraftDocumentRead | null,
   episodeId: number,
@@ -22,13 +52,33 @@ export function assertDocumentIdentity(
   if (
     value === null ||
     value.format !== "document" ||
-    !positiveInteger(value.id) ||
+     !positiveInteger(value.id) ||
+     !positiveInteger(value.work_id) ||
     value.episode_id !== episodeId ||
     !positiveInteger(value.revision) ||
     (expectedRevision !== undefined && value.revision !== expectedRevision) ||
     !isNovelDocument(value.content)
   ) {
     throw new Error("The manuscript document has an invalid snapshot identity.");
+  }
+  return value;
+}
+
+export function assertHtmlIdentity(
+  value: DraftHtmlRead | null,
+  episodeId: number,
+  expectedRevision: number,
+): DraftHtmlRead {
+  if (
+    value === null ||
+    value.format !== "html" ||
+    !positiveInteger(value.id) ||
+    !positiveInteger(value.work_id) ||
+    value.episode_id !== episodeId ||
+    value.revision !== expectedRevision ||
+    typeof value.content !== "string"
+  ) {
+    throw new Error("The manuscript authoring HTML has an invalid snapshot identity.");
   }
   return value;
 }
@@ -83,6 +133,6 @@ function isNovelDocument(value: unknown): value is NovelDocument {
   return candidate.schema_version === 1 && candidate.type === "novel_document" && Array.isArray(candidate.blocks);
 }
 
-function positiveInteger(value: number): boolean {
-  return Number.isInteger(value) && value > 0;
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DraftDocumentRead, DraftWebRead, NovelBlock } from "../../api/types";
 import {
   assertDocumentIdentity,
+  assertHtmlIdentity,
   assertWebIdentity,
   projectableUnknownAnnotations,
   restoreRefreshStatus,
@@ -41,6 +42,18 @@ const webRead: DraftWebRead = {
 };
 
 describe("manuscript read safety", () => {
+  it("validates an explicit Authoring HTML snapshot against the requested episode and revision", () => {
+    const html = {
+      ...documentRead,
+      format: "html" as const,
+      content: '<p id="blk_known">本文</p>',
+    };
+    expect(assertHtmlIdentity(html, 2, 4)).toBe(html);
+    expect(() => assertHtmlIdentity({ ...html, work_id: 0 }, 2, 4)).toThrow("identity");
+    expect(() => assertHtmlIdentity({ ...html, episode_id: 3 }, 2, 4)).toThrow("identity");
+    expect(() => assertHtmlIdentity({ ...html, revision: 3 }, 2, 4)).toThrow("identity");
+  });
+
   it("accepts an empty canonical document and rejects mismatched snapshot identity", () => {
     expect(assertDocumentIdentity({ ...documentRead, content: { schema_version: 1, type: "novel_document", blocks: [] } }, 2)).toBeDefined();
     expect(() => assertDocumentIdentity({ ...documentRead, episode_id: 9 }, 2)).toThrow("identity");

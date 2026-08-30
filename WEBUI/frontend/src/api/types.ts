@@ -311,6 +311,7 @@ export interface DraftRead<TContent> {
 }
 
 export type DraftDocumentRead = DraftRead<NovelDocument> & { format: "document" };
+export type DraftHtmlRead = DraftRead<string> & { format: "html" };
 export type DraftWebRead = DraftRead<string> & { format: "web" };
 
 export interface DraftHistoryItem {
@@ -328,6 +329,13 @@ export interface DraftSaveResult {
   revision: number;
   parent_draft_id: number | null;
   id_map: Record<string, string>;
+}
+
+export interface DraftHtmlSaveInput {
+  html: string;
+  expected_parent_draft_id?: number;
+  source_agent: "webui";
+  change_summary: string;
 }
 
 export interface ExportWarning {

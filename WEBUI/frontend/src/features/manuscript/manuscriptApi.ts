@@ -1,6 +1,10 @@
 import { apiRequest } from "../../api/client";
+import { fetchCharacters } from "../characters/characterApi";
 import type {
+  CharacterRecord,
   DraftDocumentRead,
+  DraftHtmlRead,
+  DraftHtmlSaveInput,
   DraftExport,
   DraftHistoryItem,
   DraftSaveResult,
@@ -48,6 +52,22 @@ export function fetchFreshLatestDocument(
   );
 }
 
+export function fetchDraftAuthoringHtml(
+  projectId: string,
+  episodeId: number,
+  revision: number,
+): Promise<DraftHtmlRead | null> {
+  return apiRequest<DraftHtmlRead | null>(
+    queryPath(draftPath(projectId, episodeId), {
+      revision,
+      format: "html",
+      annotation_projection: "selected",
+      annotation_keys: "emotions",
+    }),
+    { projectId },
+  );
+}
+
 export function fetchDraftWeb(
   projectId: string,
   episodeId: number,
@@ -84,6 +104,34 @@ export function restoreDraft(
     manuscriptPath(projectId, `/episodes/${episodeId}/drafts`),
     { method: "POST", body: input, projectId },
   );
+}
+
+export function saveDraftHtml(
+  projectId: string,
+  episodeId: number,
+  input: DraftHtmlSaveInput,
+): Promise<DraftSaveResult> {
+  return apiRequest<DraftSaveResult>(
+    manuscriptPath(projectId, `/episodes/${episodeId}/drafts`),
+    { method: "POST", body: input, projectId },
+  );
+}
+
+export async function fetchAllCharacters(projectId: string): Promise<CharacterRecord[]> {
+  const characters: CharacterRecord[] = [];
+  const seenPages = new Set<string>();
+  let offset = 0;
+  while (true) {
+    const page = await fetchCharacters(projectId, 100, offset);
+    const pageKey = page.map((character) => character.id).join(",");
+    if (seenPages.has(pageKey)) return characters;
+    seenPages.add(pageKey);
+    characters.push(...page);
+    if (page.length < 100) return characters;
+    const nextOffset = offset + page.length;
+    if (nextOffset <= offset) return characters;
+    offset = nextOffset;
+  }
 }
 
 export function fetchNarouExport(
