@@ -324,7 +324,7 @@ describe("Phase E manuscript read flows", () => {
       return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
     });
     vi.stubGlobal("fetch", fetchMock);
-    renderRoute();
+    const { router } = renderRoute();
     const user = userEvent.setup();
 
     await screen.findByText("Latest revision 1");
@@ -336,6 +336,14 @@ describe("Phase E manuscript read flows", () => {
     fireEvent.click(save);
 
     await waitFor(() => expect(editor).toHaveAttribute("contenteditable", "false"));
+    await user.click(screen.getByRole("link", { name: "Back to manuscript" }));
+    expect(router.state.location.pathname).toBe("/projects/A/manuscript/2");
+    expect(screen.getByRole("heading", { name: "Save in progress" })).toBeInTheDocument();
+    expect(screen.getByText("Wait for the manuscript save to finish before leaving this page.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Discard and leave" })).not.toBeInTheDocument();
+    expect(postBodies).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     for (const name of ["Ruby", "Remove Ruby", "Emphasis dots", "Heading", "Insert separator", "Note"]) {
       expect(screen.getByRole("button", { name })).toBeDisabled();
     }
@@ -356,6 +364,9 @@ describe("Phase E manuscript read flows", () => {
 
     saveResponse.resolve(response({ project_id: "A", data: { id: 20, revision: 2, parent_draft_id: 10, id_map: {} } }, 201));
     expect(await screen.findByText("Latest revision 2")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Manuscript editor" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Back to manuscript" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/projects/A/manuscript"));
   });
 
   it("releases the editor lock after Save fails without retrying", async () => {
@@ -378,7 +389,7 @@ describe("Phase E manuscript read flows", () => {
       return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
     });
     vi.stubGlobal("fetch", fetchMock);
-    renderRoute();
+    const { router } = renderRoute();
     const user = userEvent.setup();
 
     await screen.findByText("Latest revision 1");
@@ -394,6 +405,13 @@ describe("Phase E manuscript read flows", () => {
     expect(screen.getByRole("button", { name: "Save manuscript" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Cancel editing" })).toBeEnabled();
     expect(postCount).toBe(1);
+
+    await user.click(screen.getByRole("link", { name: "Back to manuscript" }));
+    expect(await screen.findByRole("heading", { name: "Leave without saving?" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stay" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Discard and leave" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(router.state.location.pathname).toBe("/projects/A/manuscript/2");
   });
 
   it("freezes the editor and metadata controls during clean Cancel refresh", async () => {

@@ -3,30 +3,33 @@ import { useBeforeUnload, useBlocker } from "react-router-dom";
 import { Button } from "../ui/Button";
 import { useModalFocus } from "../ui/useModalFocus";
 
-export function DirtyNavigationGuard({ dirty }: { dirty: boolean }) {
-  const blocker = useBlocker(dirty);
+export function DirtyNavigationGuard({ dirty, pending = false }: { dirty: boolean; pending?: boolean }) {
+  const navigationBlocked = dirty || pending;
+  const blocker = useBlocker(navigationBlocked);
   useBeforeUnload(
     useCallback(
       (event: BeforeUnloadEvent) => {
-        if (dirty) {
+        if (navigationBlocked) {
           event.preventDefault();
           event.returnValue = "";
         }
       },
-      [dirty],
+      [navigationBlocked],
     ),
   );
 
   if (blocker.state !== "blocked") {
     return null;
   }
-  return <BlockedNavigationDialog reset={blocker.reset} proceed={blocker.proceed} />;
+  return <BlockedNavigationDialog pending={pending} reset={blocker.reset} proceed={blocker.proceed} />;
 }
 
 function BlockedNavigationDialog({
+  pending,
   reset,
   proceed,
 }: {
+  pending: boolean;
   reset: () => void;
   proceed: () => void;
 }) {
@@ -47,15 +50,13 @@ function BlockedNavigationDialog({
         aria-labelledby={headingId}
         onKeyDown={onKeyDown}
       >
-        <h2 id={headingId}>Leave without saving?</h2>
-        <p>Your local edits will be discarded if you leave this page.</p>
+        <h2 id={headingId}>{pending ? "Save in progress" : "Leave without saving?"}</h2>
+        <p>{pending ? "Wait for the manuscript save to finish before leaving this page." : "Your local edits will be discarded if you leave this page."}</p>
         <div className="dialog-actions">
           <Button ref={stayButtonRef} type="button" variant="secondary" onClick={reset}>
             Stay
           </Button>
-          <Button type="button" variant="danger" onClick={proceed}>
-            Discard and leave
-          </Button>
+          {!pending && <Button type="button" variant="danger" onClick={proceed}>Discard and leave</Button>}
         </div>
       </section>
     </div>

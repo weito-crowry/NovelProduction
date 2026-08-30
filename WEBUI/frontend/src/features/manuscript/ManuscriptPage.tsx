@@ -519,7 +519,7 @@ function ManuscriptReader({
       {editError && <p role="alert">{editError}</p>}
       {editSession && (
         <>
-          <DirtyNavigationGuard dirty={editDirty} />
+          <DirtyNavigationGuard dirty={editDirty} pending={editSaving} />
           <ManuscriptEditor
             key={editSession.key}
             initialHtml={editSession.initialHtml}
