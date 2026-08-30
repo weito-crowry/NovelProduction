@@ -19,7 +19,8 @@ docs/      design specifications and implementation plans
 Phase A through Phase D are complete. Phase D final stable WEBUI dogfood passed;
 the WEBUI covers the Phase 1–3 administration surface with explicit Save and
 conflict handling, production static serving, browser E2E, and stable
-certification. Phase E is COMPLETE and Final Cutover is PASS; stable main is
+certification. Phase E is COMPLETE and Final Cutover is PASS. The Final Cutover
+certified product/runtime baseline was
 `9120d7b80c5035498995e0a03fcb716976ee966e`. The stable runtime uses migrations
 001–005, and stable project `2126` was freshly recreated through the official
 project-creation path. The canonical structured manuscript architecture is now

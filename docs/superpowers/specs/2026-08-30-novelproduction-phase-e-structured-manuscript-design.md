@@ -10,8 +10,8 @@ earlier Phase E structured-draft details in
 > uses migrations 001–005; detailed evidence is recorded in
 > [`2026-08-31-phase-e-final-cutover.md`](../reports/2026-08-31-phase-e-final-cutover.md).
 
-Phase E is documented here only; this document does not authorize the Final
-Cutover, which remains gated by §53.
+Phase E is documented here only. The Final Cutover was governed by §53 and was
+executed only after its gates were satisfied.
 
 ## 1. Phase E purpose
 

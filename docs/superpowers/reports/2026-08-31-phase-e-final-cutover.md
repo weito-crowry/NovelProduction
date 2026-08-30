@@ -1,4 +1,4 @@
-# NovelProduction Phase E — Final Documentation Closeout
+# NovelProduction Phase E — Final Cutover Report
 
 Date: 2026-08-31
 
@@ -10,11 +10,11 @@ Date: 2026-08-31
 
 This report is the canonical tracked evidence for the Phase E Final Cutover.
 
-## Promoted main
+## Final Cutover promotion
 
-- Old main: `618ad6b231c06302f910cef3a35fa416f52d6699`
-- Final Phase E main: `9120d7b80c5035498995e0a03fcb716976ee966e`
-- Main CI: `33339860430`
+- Pre-cutover main: `618ad6b231c06302f910cef3a35fa416f52d6699`
+- Cutover-certified product/runtime SHA: `9120d7b80c5035498995e0a03fcb716976ee966e`
+- Main CI for cutover SHA: `33339860430`
 - Attempt: `1`
 
 | Job | Conclusion |
