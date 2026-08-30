@@ -1,7 +1,7 @@
 # NovelProduction Shared CORE/API and WEBUI Architecture Design
 
 Date: 2026-08-28
-Status: Accepted — implemented through Phase D; Phase E design approved for implementation planning; Phase E implementation not yet complete
+Status: Accepted — Phase A–D complete; Phase E E0–E5 implementation and ChatGPT review complete; Final Cutover pending
 Repository: `weito-crowry/NovelProduction`
 
 ## 1. Purpose
@@ -263,8 +263,10 @@ GET    /api/v1/projects/{project_id}/episodes/{episode_id}
 PATCH  /api/v1/projects/{project_id}/episodes/{episode_id}
 
 GET    /api/v1/projects/{project_id}/episodes/{episode_id}/context
-GET    /api/v1/projects/{project_id}/episodes/{episode_id}/drafts
+GET    /api/v1/projects/{project_id}/episodes/{episode_id}/draft
 POST   /api/v1/projects/{project_id}/episodes/{episode_id}/drafts
+GET    /api/v1/projects/{project_id}/episodes/{episode_id}/drafts
+GET    /api/v1/projects/{project_id}/episodes/{episode_id}/draft/export
 ```
 
 The final endpoint inventory must cover the existing Phase 1–3 capabilities.
