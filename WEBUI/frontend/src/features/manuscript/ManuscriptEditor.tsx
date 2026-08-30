@@ -330,7 +330,7 @@ export function ManuscriptEditor({
       {editorError && <p role="alert">{editorError}</p>}
       {!ready && <p role="status">Preparing manuscript editor…</p>}
       <div className="form-actions">
-        <Button type="button" onClick={save} disabled={!ready || !dirty || saving || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
+        <Button type="button" onClick={save} disabled={!ready || !dirty || saving || cancelPending || duplicateIds}>{saving ? "Saving…" : "Save manuscript"}</Button>
         <Button type="button" variant="secondary" onClick={() => onCancel(dirty)} disabled={saving || cancelPending}>Cancel editing</Button>
       </div>
       {rubyOpen && <RubyDialog base={rubyBase} reading={rubyReading} onConfirm={confirmRuby} onCancel={() => setRubyOpen(false)} />}
@@ -384,7 +384,7 @@ function RubyDialog({
         <h2 id={headingId}>Ruby</h2>
         <label className="field-group" htmlFor="ruby-base">Base text<input id="ruby-base" className="field-control" value={base} readOnly /></label>
         <label className="field-group" htmlFor="ruby-reading">Reading<input ref={readingRef} id="ruby-reading" className="field-control" value={value} onChange={(event) => setValue(event.target.value)} /></label>
-        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button><Button type="button" onClick={() => onConfirm(value)} disabled={!value.trim()}>Confirm Ruby</Button></div>
+        <div className="dialog-actions"><Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button><Button type="button" onClick={() => onConfirm(value)} disabled={!base.trim() || !value.trim()}>Confirm Ruby</Button></div>
       </section>
     </div>
   );

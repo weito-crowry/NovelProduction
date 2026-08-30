@@ -140,6 +140,8 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
   const [committedSaveRefreshPending, setCommittedSaveRefreshPending] = useState(false);
   const committedSaveRefreshInFlight = useRef(false);
   const cancelRefreshInFlight = useRef(false);
+  const [conflictReloadPending, setConflictReloadPending] = useState(false);
+  const conflictReloadInFlight = useRef(false);
 
   const documentKey = projectQueryKeys.draftDocument(projectId, episodeId, selectedRevision ?? "latest");
   const documentQuery = useQuery({
@@ -166,7 +168,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
     retry: false,
   });
   const charactersQuery = useQuery<CharacterRecord[]>({
-    queryKey: projectQueryKeys.characters(projectId, 100, 0),
+    queryKey: projectQueryKeys.charactersAll(projectId),
     queryFn: () => fetchAllCharacters(projectId),
     enabled: editSession !== null || editPending,
     retry: false,
@@ -209,6 +211,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
   }
 
   async function saveEditedHtml(html: string) {
+    if (cancelRefreshInFlight.current) return;
     const session = editSession;
     if (session === null || editSaving) return;
     setEditSaving(true);
@@ -247,6 +250,9 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
   }
 
   async function loadLatestIntoEditor() {
+    if (conflictReloadInFlight.current) return;
+    conflictReloadInFlight.current = true;
+    setConflictReloadPending(true);
     try {
       const latest = await getFreshDocument(projectId, episodeId);
       if (latest === null) {
@@ -261,6 +267,9 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
       setEditError(null);
     } catch (caught) {
       setEditError(caught instanceof Error ? caught.message : "The latest manuscript could not be loaded. Your local edits were kept.");
+    } finally {
+      conflictReloadInFlight.current = false;
+      setConflictReloadPending(false);
     }
   }
 
@@ -498,7 +507,7 @@ function ManuscriptReader({ projectId, episodeId, scenes }: { projectId: string;
           />
         </>
       )}
-      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={() => setEditConflict(null)} onDiscard={() => void loadLatestIntoEditor()} errorMessage={editError} />}
+      {editConflict && <ConflictDialog local={{ html: editConflict.localHtml }} latest={editConflict.latest} entityLabel="manuscript" onKeep={() => setEditConflict(null)} onDiscard={() => void loadLatestIntoEditor()} errorMessage={editError} discardPending={conflictReloadPending} />}
       {committedSave && (
         <Card>
           <p className="saved-indicator">Save succeeded as revision {committedSave.createdRevision}.</p>

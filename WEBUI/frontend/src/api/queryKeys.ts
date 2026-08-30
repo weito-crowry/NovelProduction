@@ -25,6 +25,8 @@ export const projectQueryKeys = {
     ["project", projectId, "characters", limit, offset] as const,
   charactersFamily: (projectId: string) =>
     ["project", projectId, "characters"] as const,
+  charactersAll: (projectId: string) =>
+    ["project", projectId, "characters", "all"] as const,
   character: (projectId: string, characterId: number) =>
     ["project", projectId, "character", characterId] as const,
   characterSearch: (projectId: string, query: string, limit = 50, offset = 0) =>

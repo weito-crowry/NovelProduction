@@ -58,6 +58,7 @@ describe("project query keys", () => {
       projectQueryKeys.worldFact("A", 1),
       projectQueryKeys.worldFactSearch("A", "火山", 50, 0),
       projectQueryKeys.characters("A", 50, 0),
+      projectQueryKeys.charactersAll("A"),
       projectQueryKeys.character("A", 1),
       projectQueryKeys.characterSearch("A", "主人公", 50, 0),
       projectQueryKeys.relationships("A", 1),
@@ -91,5 +92,13 @@ describe("project query keys", () => {
     expect(projectQueryKeys.worldFacts("A", 50, 0)).not.toEqual(
       projectQueryKeys.worldFacts("A", 50, 50),
     );
+  });
+
+  it("keeps the all-characters key distinct while under the characters family", () => {
+    const paginated = projectQueryKeys.characters("A", 100, 0);
+    const all = projectQueryKeys.charactersAll("A");
+
+    expect(all).not.toEqual(paginated);
+    expect(all.slice(0, 3)).toEqual(projectQueryKeys.charactersFamily("A"));
   });
 });

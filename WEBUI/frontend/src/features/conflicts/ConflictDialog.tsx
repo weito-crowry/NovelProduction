@@ -10,6 +10,7 @@ export interface ConflictDialogProps<TLocal, TLatest> {
   entityLabel?: string;
   keepActionLabel?: string;
   errorMessage?: string | null;
+  discardPending?: boolean;
 }
 
 export function ConflictDialog<TLocal, TLatest>({
@@ -20,6 +21,7 @@ export function ConflictDialog<TLocal, TLatest>({
   entityLabel = "work",
   keepActionLabel = "Keep local edits",
   errorMessage = null,
+  discardPending = false,
 }: ConflictDialogProps<TLocal, TLatest>) {
   const headingId = useId();
   const keepButtonRef = useRef<HTMLButtonElement>(null);
@@ -63,8 +65,8 @@ export function ConflictDialog<TLocal, TLatest>({
           >
             {keepActionLabel}
           </Button>
-          <Button type="button" onClick={onDiscard}>
-            Load latest and discard local edits
+          <Button type="button" onClick={onDiscard} disabled={discardPending}>
+            {discardPending ? "Loading latest…" : "Load latest and discard local edits"}
           </Button>
         </div>
         {errorMessage && <p role="alert">{errorMessage}</p>}

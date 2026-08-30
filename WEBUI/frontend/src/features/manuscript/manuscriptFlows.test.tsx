@@ -561,6 +561,58 @@ describe("Phase E manuscript read flows", () => {
     expect(screen.queryByRole("textbox", { name: "Manuscript editor" })).not.toBeInTheDocument();
   });
 
+  it("blocks Save while dirty Cancel is refreshing the latest manuscript", async () => {
+    const baseline = documentRead(2, 20);
+    const external = documentRead(3, 30);
+    let current = baseline;
+    let holdCancel = false;
+    let postCount = 0;
+    const cancelRefresh = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") {
+          if (init?.cache === "no-store" && holdCancel) {
+            holdCancel = false;
+            return cancelRefresh.promise;
+          }
+          return response({ project_id: "A", data: current });
+        }
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: authoringHtml(current) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(current) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        postCount += 1;
+        return response({ project_id: "A", data: { id: 31, revision: 3, parent_draft_id: 20, id_map: {} } }, 201);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: current === external ? [historyItem(3), historyItem(2)] : [historyItem(2)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 2");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    const editor = await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.type(editor, " local");
+    current = external;
+    holdCancel = true;
+    await user.click(screen.getByRole("button", { name: "Cancel editing" }));
+    await user.click(screen.getByRole("button", { name: "Discard edits" }));
+
+    const save = screen.getByRole("button", { name: "Save manuscript" });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(postCount).toBe(0);
+
+    cancelRefresh.resolve(response({ project_id: "A", data: external }));
+    expect(await screen.findByText("Latest revision 3")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Manuscript editor" })).not.toBeInTheDocument();
+  });
+
   it("keeps local conflict edits and shows latest reload failure inside the conflict dialog", async () => {
     const baseline = documentRead(1, 10);
     const latest = documentRead(2, 20);
@@ -615,5 +667,55 @@ describe("Phase E manuscript read flows", () => {
     await user.click(screen.getByRole("button", { name: "Load latest and discard local edits" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toHaveTextContent("server latest");
+  });
+
+  it("single-flights conflict reload and applies the first completed latest baseline", async () => {
+    const baseline = documentRead(1, 10);
+    const latest = documentRead(3, 30);
+    let conflictShown = false;
+    let freshReads = 0;
+    const latestRefresh = deferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://test");
+      if (url.pathname.endsWith("/views/outline")) return response({ project_id: "A", data: outline });
+      if (url.pathname.endsWith("/episodes/2/draft")) {
+        if (url.searchParams.get("format") === "document") {
+          if (conflictShown && init?.cache === "no-store") {
+            freshReads += 1;
+            return latestRefresh.promise;
+          }
+          return response({ project_id: "A", data: baseline });
+        }
+        if (url.searchParams.get("format") === "html") return response({ project_id: "A", data: conflictShown ? authoringHtml(latest, '<p id="blk_0123456789abcdef0123456789abcdef" data-np-type="narration">server latest</p>') : authoringHtml(baseline) });
+        if (url.searchParams.get("format") === "web") return response({ project_id: "A", data: webRead(baseline) });
+      }
+      if (url.pathname.endsWith("/drafts") && init?.method === "POST") {
+        conflictShown = true;
+        return response({ error: { code: "VERSION_CONFLICT", message: "stale", details: { current_resource: authoringHtml(latest) } } }, 409);
+      }
+      if (url.pathname.endsWith("/drafts")) return response({ project_id: "A", data: [historyItem(1)] });
+      if (url.pathname.endsWith("/characters")) return response({ project_id: "A", data: [] });
+      return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    await user.click(screen.getByRole("button", { name: "Edit manuscript" }));
+    await screen.findByRole("textbox", { name: "Manuscript editor" });
+    await user.selectOptions(screen.getByLabelText("Block type"), "heading");
+    await user.click(screen.getByRole("button", { name: "Save manuscript" }));
+
+    const load = await screen.findByRole("button", { name: "Load latest and discard local edits" });
+    await user.click(load);
+    await waitFor(() => expect(load).toBeDisabled());
+    expect(freshReads).toBe(1);
+    await user.click(load);
+    expect(freshReads).toBe(1);
+
+    latestRefresh.resolve(response({ project_id: "A", data: latest }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toHaveTextContent("server latest"));
+    expect(freshReads).toBe(1);
   });
 });

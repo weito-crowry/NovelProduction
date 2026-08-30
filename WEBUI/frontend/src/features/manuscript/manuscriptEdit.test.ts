@@ -147,6 +147,16 @@ describe("Phase E manuscript editor adapter", () => {
     whitespace.commands.setTextSelection({ from: 1, to: 4 });
     expect(canAddRubyToSelection(whitespace)).toBe(false);
     whitespace.destroy();
+
+    const whitespaceOnlySelection = new Editor({
+      extensions: phaseEExtensions,
+      content: "<p>A   B</p>",
+      parseOptions: { preserveWhitespace: "full" },
+    });
+    whitespaceOnlySelection.commands.setTextSelection({ from: 2, to: 5 });
+    expect(whitespaceOnlySelection.state.doc.textBetween(2, 5, "", "")).toBe("   ");
+    expect(canAddRubyToSelection(whitespaceOnlySelection)).toBe(false);
+    whitespaceOnlySelection.destroy();
   });
 
   it("allows only plain unmodified keyboard actions for custom split and join", () => {
@@ -182,6 +192,21 @@ describe("Phase E manuscript editor adapter", () => {
     instance.commands.setTextSelection(2);
     expect(transformSelectedBlock(instance, "separator")).toBe(false);
     expect(instance.getHTML()).toContain("本文");
+    instance.destroy();
+  });
+
+  it.each([
+    ["Ruby-only", '<p><ruby>本文<rt>ほんぶん</rt></ruby></p>', "<ruby>"],
+    ["HardBreak-only", "<p><br></p>", "<br"],
+    ["marked text", "<p><strong>本文</strong></p>", "<strong>"],
+  ])("rejects converting %s content to a separator without deleting it", (_label, html, preserved) => {
+    const instance = editor(html);
+    instance.commands.setTextSelection(1);
+    const before = instance.getHTML();
+
+    expect(transformSelectedBlock(instance, "separator")).toBe(false);
+    expect(instance.getHTML()).toBe(before);
+    expect(instance.getHTML()).toContain(preserved);
     instance.destroy();
   });
 

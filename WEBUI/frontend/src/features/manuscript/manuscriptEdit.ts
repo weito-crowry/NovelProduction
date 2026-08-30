@@ -60,19 +60,18 @@ export function canAddRubyToSelection(editor: Editor | null): boolean {
   const { selection, doc } = editor.state;
   if (!(selection instanceof TextSelection) || selection.empty || !selection.$from.sameParent(selection.$to)) return false;
   if (!selection.$from.parent.isTextblock) return false;
+  if (!doc.textBetween(selection.from, selection.to, "", "").trim()) return false;
 
   let valid = true;
-  let hasSubstantiveText = false;
   doc.nodesBetween(selection.from, selection.to, (node) => {
     if (!valid) return false;
     if (node.isText) {
-      hasSubstantiveText ||= (node.text ?? "").trim().length > 0;
       if (node.marks.length > 0) valid = false;
       return;
     }
     if (node.isInline) valid = false;
   });
-  return valid && hasSubstantiveText;
+  return valid;
 }
 
 export function getSelectedTopLevelBlock(editor: Editor): PMNode | null {
@@ -107,7 +106,7 @@ export function semanticBlockType(block: PMNode | null): EditableBlockType | nul
 export function transformSelectedBlock(editor: Editor, target: EditableBlockType): boolean {
   const block = getSelectedTopLevelBlock(editor);
   if (block === null) return false;
-  if (target === "separator" && block.textContent.length > 0) return false;
+  if (target === "separator" && block.content.size > 0) return false;
 
   const nodeTypeName = target === "quote"
     ? "blockquote"
