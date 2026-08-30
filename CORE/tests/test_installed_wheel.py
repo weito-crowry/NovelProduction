@@ -87,10 +87,13 @@ import sys
 from pathlib import Path
 
 import novel_core
+from novel_core.document import is_formal_block_id, new_block_id
 from novel_core.database import default_migration_dir
 from novel_core.initialization import initialize_work
 
 db_path = Path(sys.argv[1])
+generated_block_id = new_block_id()
+assert is_formal_block_id(generated_block_id)
 migration_dir = default_migration_dir()
 assert migration_dir.is_dir()
 assert migration_dir == Path(novel_core.__file__).resolve().parent / 'migrations'

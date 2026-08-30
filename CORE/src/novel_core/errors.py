@@ -5,6 +5,16 @@ class NovelMcpError(RuntimeError):
     """Base error for MCP lifecycle failures."""
 
 
+class DocumentSchemaError(ValueError, NovelMcpError):
+    """Raised when a Canonical Document violates Schema v1."""
+
+    code = "DOCUMENT_SCHEMA_ERROR"
+
+    def __init__(self, message: str = "invalid Canonical Document") -> None:
+        self.message = message
+        super().__init__(f"{self.code}: {message}")
+
+
 class MigrationError(NovelMcpError):
     """Raised when migrations cannot be applied safely."""
 
