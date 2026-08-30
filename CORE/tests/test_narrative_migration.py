@@ -187,6 +187,7 @@ def test_phase2_migration_creates_required_tables_and_columns(
         "002_search.sql",
         "003_narrative.sql",
         "004_drafts.sql",
+        "005_structured_drafts.sql",
     )
 
     tables = {
@@ -202,10 +203,9 @@ def test_phase2_migration_creates_required_tables_and_columns(
         "episode_id",
         "revision",
         "parent_draft_id",
-        "body",
+        "document_json",
         "source_agent",
         "change_summary",
-        "content_hash",
         "created_at",
     } == {row[1] for row in database.execute("PRAGMA table_info(drafts)")}
 

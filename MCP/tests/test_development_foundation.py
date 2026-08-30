@@ -20,8 +20,8 @@ def test_development_foundation_files_and_constraints_exist() -> None:
         "002_search.sql",
         "003_narrative.sql",
         "004_drafts.sql",
+        "005_structured_drafts.sql",
     ]
-    assert not list((core_root / "migrations").glob("005_*.sql"))
     assert not (mcp_root / "migrations").exists()
 
     pyproject_text = (mcp_root / "pyproject.toml").read_text(encoding="utf-8")

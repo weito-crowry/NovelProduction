@@ -17,6 +17,7 @@ MIGRATION_NAMES = (
     "002_search.sql",
     "003_narrative.sql",
     "004_drafts.sql",
+    "005_structured_drafts.sql",
 )
 
 
@@ -116,6 +117,7 @@ def test_open_database_applies_connection_defaults_and_migrations(
             "002_search.sql",
             "003_narrative.sql",
             "004_drafts.sql",
+            "005_structured_drafts.sql",
         )
     finally:
         connection.close()
@@ -162,6 +164,10 @@ def test_open_database_is_idempotent_for_existing_migrations(tmp_path: Path) -> 
         assert second_connection.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
             ("004_drafts.sql",),
+        ).fetchone() == (1,)
+        assert second_connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?",
+            ("005_structured_drafts.sql",),
         ).fetchone() == (1,)
     finally:
         second_connection.close()
@@ -391,6 +397,7 @@ def test_open_database_accepts_mixed_legacy_checksums_without_rewriting_ledger(
             "002_search.sql": b"\r\n",
             "003_narrative.sql": b"\r\n",
             "004_drafts.sql": b"\n",
+            "005_structured_drafts.sql": b"\n",
         },
     )
 

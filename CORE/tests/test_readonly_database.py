@@ -17,6 +17,7 @@ MIGRATION_NAMES = (
     "002_search.sql",
     "003_narrative.sql",
     "004_drafts.sql",
+    "005_structured_drafts.sql",
 )
 
 
