@@ -73,6 +73,7 @@ describe("episode aggregated detail", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: /^Draft history$/ }));
     expect(screen.getByText("Initial")).toBeInTheDocument();
     expect(screen.getByText("Recent change summary")).toBeInTheDocument();
+    expect(screen.getByText("Draft history is read-only here. Open Manuscript to inspect revision content.")).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input, init]) => init?.method === "POST" && String(input).includes("/drafts"))).toBe(false);
   });
 

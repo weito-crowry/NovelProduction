@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRoutes } from "../../app/routes";
-import type { DraftDocumentRead, DraftHistoryItem, DraftWebRead, NovelDocument } from "../../api/types";
+import type { DraftDocumentRead, DraftExport, DraftHistoryItem, DraftWebRead, NovelDocument } from "../../api/types";
 
 function response(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -43,6 +43,7 @@ function routeFor(
   latest: DraftDocumentRead | null,
   history: DraftHistoryItem[] = latest ? [historyItem(latest.revision)] : [],
   webByRevision: Record<number, DraftWebRead> = latest ? { [latest.revision]: webRead(latest) } : {},
+  exportWarnings: DraftExport["warnings"] = [],
 ) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://test");
@@ -58,13 +59,16 @@ function routeFor(
       }
     }
     if (url.pathname.endsWith("/drafts") && init?.method !== "POST") return response({ project_id: "A", data: history });
-    if (url.pathname.endsWith("/draft/export")) return response({ project_id: "A", data: { format: "narou", media_type: "text/plain", content: "export", suggested_filename: "episode-2-r1.txt", warnings: [] } });
+    if (url.pathname.endsWith("/draft/export")) return response({ project_id: "A", data: { format: "narou", media_type: "text/plain", content: "export", suggested_filename: "episode-2-r1.txt", warnings: exportWarnings } });
     return response({ error: { code: "NOT_FOUND", message: "Not found" } }, 404);
   });
 }
 
 describe("Phase E manuscript read flows", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it("uses the latest Document as the anchor, pins WEB to it, and exposes read-only inspection", async () => {
     const latest = documentRead(2);
@@ -93,6 +97,55 @@ describe("Phase E manuscript read flows", () => {
     expect(screen.getByText(/nested/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show Raw Document" }));
     expect(screen.getByText(/"novel_document"/)).toBeInTheDocument();
+  });
+
+  it("clears a selected note when production notes are turned off and does not restore it", async () => {
+    const latest = documentRead(2);
+    const noteBlock = { ...latest.content.blocks[0], id: "blk_fedcba9876543210fedcba9876543210", type: "note" as const, html: "<p>Production note</p>" };
+    const latestWithNote = { ...latest, content: { ...latest.content, blocks: [...latest.content.blocks, noteBlock] } };
+    vi.stubGlobal("fetch", routeFor(latestWithNote, [historyItem(2)], { 2: webRead(latestWithNote, `<p id="${noteBlock.id}">Production note</p>`) }));
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 2");
+    await user.click(screen.getByLabelText("Show production notes"));
+    await user.selectOptions(screen.getByLabelText("Block selector"), noteBlock.id);
+    expect(screen.getByText("Block ID")).toBeInTheDocument();
+    expect(screen.getByText(noteBlock.id)).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Show production notes"));
+    expect(screen.getByLabelText("Block selector")).toHaveValue("");
+    expect(screen.getByText("Select a block to inspect its canonical metadata.")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Show production notes"));
+    expect(screen.getByLabelText("Block selector")).toHaveValue("");
+    expect(screen.getByText("Select a block to inspect its canonical metadata.")).toBeInTheDocument();
+  });
+
+  it("downloads Narou export while displaying non-fatal warnings and cleaning up its object URL", async () => {
+    const latest = documentRead(1, 1);
+    const warning = { code: "NAROU_RUBY_DEGRADED", message: "ruby was degraded for Narou", block_id: blockId };
+    const fetchMock = routeFor(latest, [historyItem(1)], { 1: webRead(latest) }, [warning]);
+    vi.stubGlobal("fetch", fetchMock);
+    const NativeURL = URL;
+    const createObjectURL = vi.fn(() => "blob:narou");
+    const revokeObjectURL = vi.fn();
+    class TestURL extends NativeURL {}
+    Object.assign(TestURL, { createObjectURL, revokeObjectURL });
+    vi.stubGlobal("URL", TestURL);
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderRoute();
+    const user = userEvent.setup();
+
+    await screen.findByText("Latest revision 1");
+    await user.click(screen.getByRole("button", { name: "Download Narou export" }));
+
+    expect(screen.getByRole("listitem")).toHaveTextContent(warning.message);
+    expect(screen.getByText(warning.code)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/draft/export?revision=1&format=narou"))).toBe(true);
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(anchorClick).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:narou");
   });
 
   it("distinguishes no draft from an existing empty canonical revision", async () => {

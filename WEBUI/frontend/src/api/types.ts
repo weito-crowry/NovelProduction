@@ -330,12 +330,18 @@ export interface DraftSaveResult {
   id_map: Record<string, string>;
 }
 
+export interface ExportWarning {
+  code: string;
+  message: string;
+  block_id: string | null;
+}
+
 export interface DraftExport {
   format: string;
   media_type: string;
   content: string;
   suggested_filename: string;
-  warnings: JsonValue[];
+  warnings: ExportWarning[];
 }
 
 export interface OutlineEpisodeView {

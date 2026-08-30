@@ -9,6 +9,7 @@ import type {
   DraftHistoryItem,
   DraftSaveResult,
   DraftWebRead,
+  ExportWarning,
   JsonValue,
   NovelBlock,
   OutlineView,
@@ -114,6 +115,7 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
   const [postRefreshError, setPostRefreshError] = useState<string | null>(null);
   const [committedRestore, setCommittedRestore] = useState<CommittedRestore | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportWarnings, setExportWarnings] = useState<ExportWarning[]>([]);
 
   const documentKey = projectQueryKeys.draftDocument(projectId, episodeId, selectedRevision ?? "latest");
   const documentQuery = useQuery({
@@ -155,11 +157,18 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
   useEffect(() => {
     setSelectedBlockId(null);
     setRawAnnotationsOpen(false);
+    setExportWarnings([]);
   }, [episodeId, displayRevision]);
 
   useEffect(() => {
-    if (!includeNotes && selectedBlock?.type === "note") setSelectedBlockId(null);
-  }, [includeNotes, selectedBlock]);
+    if (
+      !includeNotes &&
+      selectedBlockId !== null &&
+      documentRead?.content.blocks.some((block) => block.id === selectedBlockId && block.type === "note")
+    ) {
+      setSelectedBlockId(null);
+    }
+  }, [documentRead, includeNotes, selectedBlockId]);
 
   function selectHistoricalRevision(revision: number) {
     setRestoreError(null);
@@ -260,10 +269,12 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
   async function downloadExport() {
     if (displayRevision === null) return;
     setExportError(null);
+    setExportWarnings([]);
     try {
       const exported = await fetchNarouExport(projectId, episodeId, displayRevision);
       if (exported === null) throw new Error("The manuscript export did not match the displayed revision.");
       assertExport(exported);
+      setExportWarnings(exported.warnings);
       downloadText(exported);
     } catch (caught) {
       setExportError(caught instanceof Error ? caught.message : "Unable to export the manuscript.");
@@ -318,6 +329,7 @@ function ManuscriptReader({ projectId, episodeId }: { projectId: string; episode
                 <Button type="button" onClick={() => void downloadExport()}>Download Narou export</Button>
               </div>
               {exportError && <p role="alert">{exportError}</p>}
+              {exportWarnings.length > 0 && <div className="export-warnings" role="status"><strong>Export warnings</strong><ul>{exportWarnings.map((warning, index) => <li key={`${warning.code}-${warning.block_id ?? "document"}-${index}`}><code>{warning.code}</code>: {warning.message}{warning.block_id && <small> (block {warning.block_id})</small>}</li>)}</ul></div>}
               {rawDocumentOpen && <pre className="json-block raw-document">{JSON.stringify(documentRead.content, null, 2)}</pre>}
               {isHistorical && <div className="form-actions"><Button type="button" variant="secondary" onClick={() => void viewLatest()} disabled={restorePending}>View latest</Button><Button type="button" variant="danger" onClick={() => setRestoreRevision(selectedRevision)} disabled={restorePending || restoreLocked}>Restore revision {selectedRevision}</Button></div>}
               {restoreLocked && <p className="helper-text">Restore is locked until the post-write latest revision is confirmed.</p>}
@@ -450,7 +462,13 @@ function assertSaveResult(value: DraftSaveResult): asserts value is DraftSaveRes
 }
 
 function assertExport(value: DraftExport): asserts value is DraftExport {
-  if (value.format !== "narou" || typeof value.media_type !== "string" || typeof value.content !== "string" || typeof value.suggested_filename !== "string") throw new Error("The manuscript export response is inconsistent.");
+  if (value.format !== "narou" || typeof value.media_type !== "string" || typeof value.content !== "string" || typeof value.suggested_filename !== "string" || !Array.isArray(value.warnings) || !value.warnings.every(isExportWarning)) throw new Error("The manuscript export response is inconsistent.");
+}
+
+function isExportWarning(value: unknown): value is ExportWarning {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const warning = value as { code?: unknown; message?: unknown; block_id?: unknown };
+  return typeof warning.code === "string" && typeof warning.message === "string" && (typeof warning.block_id === "string" || warning.block_id === null);
 }
 
 function downloadText(exported: DraftExport) {

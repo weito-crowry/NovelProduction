@@ -220,7 +220,7 @@ function DraftHistorySection({ projectId, view }: { projectId: string; view: Epi
       ) : <p>No draft is available.</p>}
       <h3>Recent revisions</h3>
       {view.recent_draft_history.length === 0 ? <p>No draft history.</p> : <div className="record-list">{view.recent_draft_history.map((draft) => <div className="record-list-item" key={draft.id}><span>Revision {draft.revision} · {draft.created_at} · {draft.source_agent ?? "unknown source"}</span><small>{draft.change_summary || "No change summary"}</small><small>{draft.parent_draft_id === null ? "No parent draft" : `Parent draft #${draft.parent_draft_id}`}</small></div>)}</div>}
-      <p className="helper-text">Draft history is read-only in D2.</p>
+      <p className="helper-text">Draft history is read-only here. Open Manuscript to inspect revision content.</p>
     </Card>
   );
 }
