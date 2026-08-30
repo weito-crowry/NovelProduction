@@ -134,6 +134,28 @@ def test_draft_get_rejects_irrelevant_query_combinations(
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+def test_draft_save_rejects_html_set_and_metadata_remove_conflict(
+    client: TestClient,
+) -> None:
+    base, episode = _create_episode(client)
+
+    response = client.post(
+        f"{base}/episodes/{episode['id']}/drafts",
+        json={
+            "html": '<p id="block" data-ann-foo="html">本文</p>',
+            "metadata_updates": {
+                "block": {"remove_annotations": ["foo"]},
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    latest = client.get(f"{base}/episodes/{episode['id']}/draft")
+    assert latest.status_code == 200
+    assert latest.json()["data"] is None
+
+
 def test_draft_save_accepts_empty_sources_and_preserves_metadata_presence(
     client: TestClient,
 ) -> None:

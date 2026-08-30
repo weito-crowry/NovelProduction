@@ -226,6 +226,35 @@ def test_empty_metadata_commands_and_set_remove_conflicts_are_rejected() -> None
         )
 
 
+def test_html_annotation_set_remove_conflicts_are_rejected_and_same_remove_is_ok() -> (
+    None
+):
+    block_id = "blk_11111111111111111111111111111111"
+    parent = _document(_block(block_id, "A", annotations={"foo": "old"}))
+
+    with pytest.raises(ValidationError, match="conflict"):
+        resolve_authoring(
+            parent,
+            f'<p id="{block_id}" data-ann-foo="html">A</p>',
+            {block_id: {"remove_annotations": ["foo"]}},
+        )
+
+    with pytest.raises(ValidationError, match="conflict"):
+        resolve_authoring(
+            parent,
+            f'<p id="{block_id}" data-ann-foo="html" '
+            "data-np-remove-annotations='[\"foo\"]'>A</p>",
+            None,
+        )
+
+    same_remove = resolve_authoring(
+        parent,
+        f'<p id="{block_id}" data-np-remove-annotations=\'["foo"]\'>A</p>',
+        {block_id: {"remove_annotations": ["foo"]}},
+    )
+    assert same_remove.document.blocks[0].annotations == {}
+
+
 def test_authoring_returns_document_schema_errors_for_invalid_result() -> None:
     with pytest.raises(DocumentSchemaError):
         resolve_authoring(

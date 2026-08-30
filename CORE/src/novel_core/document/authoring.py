@@ -179,6 +179,8 @@ def _resolve_html_block(
 def _resolve_annotations(
     item: AuthoringBlockInput, parent: NovelBlock | None
 ) -> dict[str, JsonValue]:
+    if set(item.annotations) & set(item.remove_annotations):
+        raise ValidationError("annotation set/remove conflict")
     annotations = {} if parent is None else dict(parent.annotations)
     for key in item.remove_annotations:
         annotations.pop(key, None)
@@ -288,6 +290,8 @@ def _check_html_patch_conflicts(
             raise ValidationError("HTML and metadata annotation conflict", field=key)
         if key in item.remove_annotations:
             raise ValidationError("annotation set/remove conflict", field=key)
+    if set(item.annotations) & set(patch.remove_annotations):
+        raise ValidationError("annotation set/remove conflict")
     if set(item.remove_annotations) & set(patch.annotations):
         raise ValidationError("annotation set/remove conflict")
 
