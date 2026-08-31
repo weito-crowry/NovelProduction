@@ -2,9 +2,9 @@
 
 ## 1. 目的
 
-04〜06で使用するSemantic AnalyzerのModel Client、Prompt ID/Version、入力Payload、出力JSON、Resolver候補選択、Validation、Retry/Repairを固定する。
+04〜06で使用するSemantic AnalyzerのModel Client、Prompt ID/Version、入力Payload、出力JSON、Resolver候補選択、本文Context Window、Validation、Retry/Repairを固定する。
 
-本書はSemantic Model呼出契約の正本であり、CodexはPrompt形式、JSON形状、Provider通信方式を独自設計しない。
+本書はSemantic Model呼出契約の正本であり、CodexはPrompt形式、JSON形状、Provider通信方式、本文Context範囲を独自設計しない。
 
 上位仕様は `../basic-design.md`。Runtime/Current Run/Fingerprintは09を正本とする。
 
@@ -119,13 +119,7 @@ User contentは09 `canonical_json_bytes(user_payload).decode("utf-8")`を使う�
 
 Provider固有`response_format/tools/functions`はv1で使わない。最小Chat Completions互換だけを要求する。
 
-Responseは:
-
-```text
-choices[0].message.content
-```
-
-がstringであることを必須とし、`json.loads()`後Top-level ObjectでなければResponse Invalid。
+Responseは`choices[0].message.content`がstringであることを必須とし、`json.loads()`後Top-level ObjectでなければResponse Invalid。
 
 Streamingは使わない。
 
@@ -156,7 +150,7 @@ Backoff:`1.0 sec`。
 - Top-level Objectでない。
 - Analyzer Contract Validation failure。
 
-の場合、同Modelへ**最大1回だけ**Repair Callする。
+の場合、同Modelへ最大1回だけRepair Callする。
 
 Repair System Prompt:
 
@@ -192,7 +186,7 @@ confidenceは0.0以上1.0以下の有限数にしてください。
 出力は各Prompt Contractで指定されたJSONオブジェクトだけにし、Markdownや説明文を付けないでください。
 ```
 
-Analyzer固有InstructionはSection 10〜19をこの共通Promptへ追記する。
+Analyzer固有InstructionはSection 11〜20をこの共通Promptへ追記する。
 
 ## 8. Prompt Registry
 
@@ -232,7 +226,57 @@ AnalysisRun `prompt_id/prompt_version`はこのRegistry値を保存する。
 
 Persist前にItemを設計書指定Keyで安定Sortする。
 
-## 10. Scene Boundary Contract
+## 10. 共通Context Window Builder
+
+Resolver/Speaker向け本文ContextはCOREの共通Utilityで構築し、Analyzerごとに独自実装しない。
+
+Block列は指定StructureRevision内のDocument Orderを使う。Contextは必ず対象と同じScene内に限定し、Separatorなど`scene_id=NULL`のBlockは含めない。
+
+### Entity Resolver
+
+対象Mentionの所属Blockを中心に:
+
+```text
+previous_blocks = 直前最大2 Block
+subject_block   = Mention所属Block 1件
+next_blocks     = 直後最大2 Block
+```
+
+合計最大5 Block。対象BlockはExactly 1回含める。Scene端では存在する側だけを使う。
+
+### Term Resolver
+
+対象Term Candidate所属Blockを中心にEntity Resolverと同じ:
+
+```text
+previous最大2 + subject 1 + next最大2
+```
+
+合計最大5 Block。
+
+### Speaker Attribution
+
+対象Dialogue Blockを中心に:
+
+```text
+previous_blocks = 直前最大4 Block
+subject_block   = 対象Dialogue 1件
+next_blocks     = 直後最大4 Block
+```
+
+合計最大9 Block。対象Dialogue本文を必ず`subject_block`として渡す。
+
+同Scene Current Effective Mentionから得たEnabled Person集合を`entity_id`昇順で`people`へ渡す。
+
+Context Block Objectは共通で:
+
+```json
+{"block_id":53,"block_type":"narration","text":"..."}
+```
+
+とする。
+
+## 11. Scene Boundary Contract
 
 Prompt Instruction:
 
@@ -274,7 +318,7 @@ Reason:`time_shift|location_shift|pov_shift|context_reset`。Reason 1件以上�
 
 03のExisting Boundary/Scene末尾ValidationはModel後に行う。
 
-## 11. Entity Mention Contract
+## 12. Entity Mention Contract
 
 Prompt Instruction:
 
@@ -293,6 +337,8 @@ Request:
   "blocks":[{"block_id":40,"block_type":"narration","text":"..."}]
 }
 ```
+
+`previous_context_blocks`は04どおり前Scene末尾最大3 Block。Current Sceneの本文Blockは`blocks`へDocument Orderで渡す。
 
 Response:
 
@@ -317,7 +363,7 @@ Enumsは04を正本とする。
 
 Dedup Key:`(block_id,start_in_block,end_in_block,mention_type)`。Duplicateはconfidence最大を採用する。
 
-## 12. Entity Resolver Candidate Shortlist / Contract
+## 13. Entity Resolver Candidate Shortlist / Contract
 
 Deterministic Exact Canonical/Confirmed Alias解決は04を先に実行する。Model Resolverは未解決Mentionだけ対象。
 
@@ -350,7 +396,9 @@ Request:
     "entity_type_candidate":"person",
     "canonical_name_candidate":"田中"
   },
-  "context_blocks":[{"block_id":40,"text":"..."}],
+  "previous_blocks":[{"block_id":39,"block_type":"narration","text":"..."}],
+  "subject_block":{"block_id":40,"block_type":"narration","text":"...田中..."},
+  "next_blocks":[{"block_id":41,"block_type":"dialogue","text":"..."}],
   "candidates":[
     {
       "entity_id":5,
@@ -362,6 +410,8 @@ Request:
   ]
 }
 ```
+
+`previous_blocks/subject_block/next_blocks`はSection 10をそのまま使う。
 
 Response:
 
@@ -385,12 +435,13 @@ Validation:
 - existing/newを採用するにはconfidence >= 09 `entity_resolution_auto_merge`。
 - Threshold未満はunresolved扱い。
 
-## 13. Speaker Attribution Contract
+## 14. Speaker Attribution Contract
 
 Prompt Instruction:
 
 ```text
-対象Dialogueの話者を入力peopleから選んでください。
+subject_blockのDialogue話者をpeopleから選んでください。
+previous_blocks/next_blocksは補助根拠です。
 根拠が弱い場合はspeaker_entity_id=nullにしてください。
 単なる交互発話だけを根拠に断定しないでください。
 ```
@@ -399,11 +450,18 @@ Request:
 
 ```json
 {
-  "target_block_id":55,
-  "context_blocks":[{"block_id":53,"block_type":"narration","text":"..."}],
+  "previous_blocks":[
+    {"block_id":53,"block_type":"narration","text":"田中が振り返った。"}
+  ],
+  "subject_block":{"block_id":55,"block_type":"dialogue","text":"「行こう」"},
+  "next_blocks":[
+    {"block_id":56,"block_type":"narration","text":"彼は歩き出した。"}
+  ],
   "people":[{"entity_id":5,"canonical_name":"田中修司"}]
 }
 ```
+
+WindowはSection 10どおり前4/対象1/後4、同Sceneのみ。
 
 Response:
 
@@ -411,14 +469,14 @@ Response:
 {
   "speaker_entity_id":5,
   "confidence":0.87,
-  "evidence_block_ids":[53],
+  "evidence_block_ids":[53,55],
   "reason_code":"explicit_speech_tag"
 }
 ```
 
-`speaker_entity_id`はpeople IDまたはNULL。Evidence IDsはcontext/targetのBlock IDだけ。Reasonは04 Enum。
+`speaker_entity_id`はpeople IDまたはNULL。Evidence IDsは`previous_blocks + subject_block + next_blocks`のBlock IDだけ。Reasonは04 Enum。
 
-## 14. Term Candidate Contract
+## 15. Term Candidate Contract
 
 Prompt Instruction:
 
@@ -458,11 +516,11 @@ Response:
 
 Enumは05を正本とする。Dedup Key:`(block_id,start_in_block,end_in_block)`、Duplicateはconfidence最大。
 
-## 15. Term Resolver Candidate Shortlist / Contract
+## 16. Term Resolver Candidate Shortlist / Contract
 
 Exact Canonical/Confirmed Alias解決を05どおり先行する。
 
-Comparison Key/SequenceMatcherはSection 12と同じ。
+Comparison Key/SequenceMatcherはSection 13と同じ。
 
 Candidate Pool:
 
@@ -481,7 +539,9 @@ Request:
     "canonical_label_candidate":"統合国家知性機構",
     "term_type_candidate":"institution"
   },
-  "context_blocks":[{"block_id":60,"text":"..."}],
+  "previous_blocks":[{"block_id":59,"block_type":"narration","text":"..."}],
+  "subject_block":{"block_id":60,"block_type":"narration","text":"...国家知性機構..."},
+  "next_blocks":[{"block_id":61,"block_type":"narration","text":"..."}],
   "candidates":[
     {
       "term_id":9,
@@ -493,6 +553,8 @@ Request:
   ]
 }
 ```
+
+ContextはSection 10どおり前2/対象1/後2、同Sceneのみ。
 
 Response:
 
@@ -514,7 +576,7 @@ Decision:`existing|new|unresolved`。
 - existing/new採用にはconfidence >= `term_resolution_auto_merge`。
 - Threshold未満はunresolved扱い。
 
-## 16. Term Explanation Contract
+## 17. Term Explanation Contract
 
 Prompt Instruction:
 
@@ -537,6 +599,8 @@ Request:
 }
 ```
 
+`blocks`の範囲は05を正本とする。Mention前2、後6、必要なら同Scene末尾まで。別Sceneへ拡張しない。
+
 Response:
 
 ```json
@@ -556,7 +620,7 @@ Response:
 
 0件可。複数Candidateは05のReductionで1件だけPersistenceする。
 
-## 17. Scene Semantic Contract
+## 18. Scene Semantic Contract
 
 Prompt Instruction:
 
@@ -590,7 +654,7 @@ Response:
 
 Enumは06 Taxonomy。
 
-Scene >30,000 Code Pointsは06どおりBlock境界15,000 Code Point以下Chunkへ分割する。
+Scene >30,000 Code PointsはBlock境界15,000 Code Points以下Chunkへ分割する。
 
 Function/ToneはChunk結果をLabelごとmax confidenceでDeterministic Reduceする。
 
@@ -616,7 +680,7 @@ Reduce Responseは`pace/information_load/interaction`だけを同Shapeで返す�
 
 同AnalysisRun内の全Callは同`style.scene_semantics` Prompt Versionを使用する。
 
-## 18. Block Primary Semantic Contract
+## 19. Block Primary Semantic Contract
 
 Prompt Instruction:
 
@@ -646,7 +710,7 @@ Response:
 
 Enumは06 Primary Semantic。
 
-## 19. POV Contract
+## 20. POV Contract
 
 Prompt Instruction:
 
@@ -695,17 +759,18 @@ Reduce Request:
 
 Responseは通常POV Responseと同Shape。
 
-## 20. Model Call Chunking補足
+## 21. Model Call Chunking補足
 
-- Scene Semantic/POVはSections 17/19を正本とする。
-- Speakerは対象Dialogue前後最大4Blockなので追加Chunkingなし。
+- Scene Semantic/POVはSections 18/20を正本とする。
+- SpeakerはSection 10固定Windowなので追加Chunkingなし。
+- Entity/Term ResolverもSection 10固定Window + Candidate最大20なので追加Chunkingなし。
 - Term Explanationは05 Window内だけなので追加Chunkingなし。
-- Entity/Term Resolverは1 Subject + Candidate最大20なので追加Chunkingなし。
 - Entity Mention/Term Candidate/Scene Boundaryで1 Scene Textが30,000 Code Pointsを超える場合、Block境界で最大15,000 Code Points Chunk + 前後2Block overlapを使う。
+- Entity Mentionの前Scene末尾最大3Block Contextは最初のChunkだけへ付与する。
 - Overlap由来Duplicateは各ContractのDedup Keyで統合する。
 - Chunkingは永続Structureを変更しない。
 
-## 21. Error / Warning
+## 22. Error / Warning
 
 Model Client Error Code:
 
@@ -728,7 +793,7 @@ MODEL_ITEM_DUPLICATE_REDUCED
 
 Subject単位でValid Itemが残ればAnalyzer全体を即Failさせない。Run Statusは09/各Analyzer設計のPartial規則を使う。
 
-## 22. Test
+## 23. Test
 
 - ModelRequest/ModelClient Protocolが09と一致。
 - ApiSettings default disabled/openai validation。
@@ -741,7 +806,11 @@ Subject単位でValid Itemが残ればAnalyzer全体を即Failさせない。Run
 - Contract Repair最大1。
 - Markdown/非JSON Response Repair。
 - Unknown Key/Invalid Enum/Foreign ID拒否。
-- Prompt Registry ID/Version固定。
+- Prompt Registry ID/Version固定10件。
+- Entity Resolver Contextは同Scene previous<=2/subject/next<=2。
+- Term Resolver Contextは同Scene previous<=2/subject/next<=2。
+- Speaker Contextは同Scene previous<=4/subject Dialogue/next<=4、subject本文必須。
+- Context Builderは対象BlockをExactly 1回含め、Scene境界を跨がない。
 - Entity/Term Candidate Shortlist score/order/max20。
 - Pronoun/Role Title new禁止。
 - Resolver threshold未満unresolved。
@@ -753,7 +822,7 @@ Subject単位でValid Itemが残ればAnalyzer全体を即Failさせない。Run
 
 CIではFake Model Client/`httpx.MockTransport`を使い、実Providerへ接続しない。
 
-## 23. Codex禁止事項
+## 24. Codex禁止事項
 
 - OpenAI SDK追加。
 - COREへhttpx/Pydantic依存追加。
@@ -761,6 +830,7 @@ CIではFake Model Client/`httpx.MockTransport`を使い、実Providerへ接続�
 - Prompt ID/Versionを独自命名。
 - JSON ShapeをPromptごとに独自変更。
 - Modelが入力外IDを返した時にそのままDB保存。
+- Resolver/Speaker Context Windowを独自変更。
 - Resolver候補20件上限/Sort規則を独自変更。
 - Resolver Threshold未満Decisionを採用。
 - Repairを1回超えて繰り返す。
