@@ -37,6 +37,82 @@
 
 SA-A〜Hは既存NovelProduction Phase系列とは別系列。
 
+## v1 ID / Version Registry
+
+Lunaは識別子を独自命名しない。v1では次を固定する。
+
+### Source Adapter
+
+| source_type | adapter_id | adapter_version |
+|---|---|---:|
+| `text` | `style-source-text` | 1 |
+| `html_file` | `style-source-html-file` | 1 |
+| `epub` | `style-source-epub` | 1 |
+
+`style_sources.adapter_id/adapter_version`へこの値を保存する。Parse結果互換性が変わる場合だけ対象Adapter Versionを上げる。
+
+### Normalizer / Segmenter
+
+```text
+normalizer_id      = canonical-japanese-fiction
+normalizer_version = 1
+segmenter_id       = canonical-fiction-structure
+segmenter_version  = 1
+```
+
+03 Automatic/Semantic/Manual StructureRevisionは同じ`segmenter_id/version`を保持し、構造生成規則の結果互換性変更時にSegmenter Versionを上げる。
+
+### Analyzer
+
+09 Initial Analyzer Registryの12 Analyzerはすべて:
+
+```text
+analyzer_version = 1
+```
+
+から開始する。Analyzer入出力・依存・Reduction・計算手順の結果互換性変更時だけ該当Analyzer Versionを上げる。
+
+### Semantic Taxonomy
+
+v1 Taxonomy Version:
+
+```text
+scene_taxonomy_version = 1
+block_semantic_taxonomy_version = 1
+pov_taxonomy_version = 1
+```
+
+対象AnalyzerのDefault `config_json`へRelevant Taxonomy Versionだけを保存し、09 Execution/Current Fingerprintへ含める。
+
+```text
+scene-semantic-classifier -> scene_taxonomy_version
+block-semantic-classifier -> block_semantic_taxonomy_version
+pov-classifier            -> pov_taxonomy_version
+```
+
+Boundary Reason、Entity/Mention Enum、Term Enumは対応Analyzer/Prompt ContractのVersionで管理し、別Taxonomy Versionを増やさない。
+
+### Metric Registry Version Input
+
+07はMetricごとの`metric_version`を正本とする。Global Metric Registry Versionは追加しない。
+
+`style-metrics-basic` / `style-metrics-semantic` のDefault `config_json`へ、そのGroupで生成するMetricを:
+
+```json
+{
+  "metric_versions": {
+    "dialogue.char_ratio":1,
+    "sentence.len.p50":1
+  }
+}
+```
+
+のようにMetric Name昇順Objectとして全件保存し、09 Canonical Fingerprintへ含める。
+
+Current ResolverはCurrent 07 Registryから同Mapを再構築してDefault Config一致を判定する。これにより1 MetricのVersion変更でも該当Metric Group RunはStaleになる。
+
+Measurement Rowには従来どおり各`metric_name/metric_version`を保存する。
+
 ## 実装上の確定事項
 
 ### Storage / Revision
