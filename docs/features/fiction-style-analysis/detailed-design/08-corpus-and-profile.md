@@ -2,205 +2,333 @@
 
 ## 1. 目的
 
-Reference Work/EpisodeのMeasurementをCorpusとして集約し、比較可能な統計とStyleProfileへ変換する。Membership、Current入力選択、集約単位、Countの意味を一意に定義する。
+Reference Work/EpisodeのCurrent MeasurementをCorpusとして集約し、比較可能な統計とVersion付きStyleProfileへ変換する。Membership、観測単位、Scene Filter State、Aggregate Staleness、Profile Rule Provenanceを一意に定義する。
 
 上位仕様は `../basic-design.md`。
 
-## 2. 実装先
+## 2. Corpus Membership
 
 ```text
-CORE/src/novel_core/style_analysis/
-  corpus_models.py
-  corpus_repository.py
-  aggregate_service.py
-  profile_models.py
-  profile_repository.py
-  profile_service.py
+style_corpora
+style_corpus_work_memberships
+style_corpus_episode_memberships
 ```
 
-## 3. Corpus / Membership
-
-```text
-style_corpora:
-  id, name, description, created_at, updated_at
-
-style_corpus_work_memberships:
-  corpus_id, reference_work_id, include_all_episodes, created_at
-
-style_corpus_episode_memberships:
-  corpus_id, reference_episode_id, membership_mode = include | exclude
-```
-
-Effective Episode集合は `CorpusRepository.list_effective_episode_ids(corpus_id)` だけで解決する。
+Effective Episode集合は`CorpusRepository.list_effective_episode_ids(corpus_id)`だけで解決する。
 
 ### include_all_episodes=true
 
 - WorkのCurrent Catalog EpisodeをDefault Included。
 - `exclude` Overrideを除外。
-- `include` Overrideは結果上冗長。UIは通常作らない。
 
 ### include_all_episodes=false
 
 - Default Excluded。
 - `include` OverrideだけIncluded。
-- `exclude` Overrideは結果上冗長。UIは通常作らない。
 
 Validation:
 
-- Episode Overrideには同CorpusのWork Membershipが必要。
-- 別Work EpisodeはReject。
-- Work Membership削除時、そのWork配下Overrideも同Transactionで削除。
-- RefreshでEpisode削除時はFK Cascade。
+- Episode Overrideには同Corpus Work Membership必須。
+- 別Work Episode拒否。
+- Work Membership削除時、そのWork配下Overrideも同Transaction削除。
+- ReferenceEpisode削除時FK Cascade。
 
-Aggregate/API/UIはこのResolverを共用する。
+Aggregate/API/UIはこのResolverを共用し、Membership規則を複製しない。
 
-## 4. Aggregate
+## 3. AggregatePolicy
+
+AnalysisPolicy/ProfileGenerationPolicyとは別の決定論的集約Version。
+
+```python
+@dataclass(frozen=True)
+class AggregatePolicy:
+    version: int = 1
+```
+
+v1でPolicyが固定するもの:
+
+- Measurement Row等重み。
+- `sample_count`をWeightに使わない。
+- Percentile interpolationは07共通式。
+- stddevはpopulation standard deviation。
+- Scene unknown FilterのSkipped規則。
+- Standard Statistic Set。
+
+結果互換性が変わる場合`version`を上げる。
+
+## 4. Aggregate Spec
+
+```text
+container_type = reference_work | corpus
+container_id
+measurement_target_type = document | scene
+filter_json
+metric_name
+metric_version
+```
+
+Document Aggregateは`filter_json={}`固定。
+
+Scene AggregateのみScene Axis Filterを許可する。
+
+Scene Filter JSONはAggregate API/DBでは次を正本とする。
+
+```json
+{
+  "scene": {
+    "function":["daily"],
+    "tone":["calm"]
+  }
+}
+```
+
+## 5. Source Episode集合
+
+`reference_work`: Current ReferenceEpisode Catalog order順。
+
+`corpus`: Section 2 Effective Episode集合。
+
+Source Episode ID集合をAggregate Input Fingerprintへ含める。新Episode追加やMembership変更でMeasurementがまだ無くてもHistorical AggregateをStale判定できるようにする。
+
+## 6. Current Measurement選択
+
+各Source Episodeについて:
+
+1. StyleDocument存在。
+2. `current_text_revision_id`存在。
+3. `current_structure_revision_id`存在しCurrent Text所属。
+4. 09 Current Metric Run Resolverを`subject_partial_allowed`で使い対象Metric Group Runを解決。
+5. Metric Name/Version一致Measurementを取得。
+
+Latest StructureやStale RunへFallbackしない。
+
+### document target
+
+1 Episode Document Measurementを1候補Targetとする。条件不足/Measurementなしなら`skipped_target_count += 1`。
+
+### scene target
+
+Current Structureが存在するEpisodeだけSceneを列挙する。
+
+Current Structure自体がないEpisodeはScene数を推測しない。Warning:
+
+```text
+SOURCE_DOCUMENT_UNAVAILABLE:{episode_id}
+```
+
+を追加するが架空Scene数をSkippedへ加算しない。
+
+## 7. Aggregate Schema論理契約
 
 ```text
 id
-scope_type
-scope_id
+container_type
+container_id
+measurement_target_type
 filter_json
 metric_name
 metric_version
 statistic
+aggregate_policy_version
 value_real
 source_measurement_count
 sample_count
 work_count
 skipped_target_count
-fingerprint
+filter_state_fingerprint nullable
+input_fingerprint
+warning_json
 created_at
 ```
 
 Statistic:
 
 ```text
-mean | median | p10 | p25 | p75 | p90 | stddev | min | max
+mean
+median
+p10
+p25
+p75
+p90
+stddev
+min
+max
 ```
 
-## 5. 観測単位
+これをv1 Standard Statistic Setとする。Aggregate RowはImmutable Historical Snapshot。
+
+## 8. Scene Filter
+
+許可Axis:
+
+```text
+function
+tone
+pace
+information_load
+interaction
+```
+
+複数Axis AND、同Axis配列OR。
+
+### Available + Match
+
+対象Scene候補。Metricなしなら`skipped_target_count += 1`。
+
+### Available + Non-match
+
+Aggregate対象外。Skippedへ数えない。
+
+### Required Axis source=unknown
+
+Filter判定不能。
+
+- Measurementへ入れない。
+- `skipped_target_count += 1`。
+- `SCENE_SELECTOR_UNAVAILABLE:{axis}` WarningをDedupe。
+- Filter State Fingerprintへ`source=unknown`を含める。
+
+Effective Taxonomy値`unclear`は通常値としてMatch/Non-match判定する。
+
+## 9. Filter State Fingerprint
+
+Scene Filterで実際に参照するAxisだけ:
+
+```text
+(scene_id, axis, source, effective_value)
+```
+
+をSortしてCanonical SHA-256化する。
+
+Filter未参照Axis変更ではAggregateをStaleにしない。Document AggregateではNULL。
+
+## 10. 観測重み / Count
 
 v1はMeasurement Rowを1観測として等重みでPoolする。
 
-- Episode: 1 Episode Measurement = 1観測
-- Scene: 1 Scene Measurement = 1観測
-- Character: 1 Character Measurement = 1観測
+- Document: 1 Episode Document Measurement = 1観測。
+- Scene: 1 Scene Measurement = 1観測。
 
-これはWork等重みではない。Episode/Scene数が多いWorkは多くの観測を提供する。v1ではWork Weight/User Weightを導入しない。UIは `work_count` と `source_measurement_count` を表示する。
+Work等重みではない。Measurement`sample_count`をWeightに使わない。
 
-## 6. Count定義
+Count:
 
-### source_measurement_count
+- `source_measurement_count`: Statisticへ使ったMeasurement Row数。
+- `sample_count`: 入力Measurement`sample_count`合計。診断値。
+- `work_count`: 入力Measurement由来Distinct Reference Work数。
+- `skipped_target_count`: 列挙できた候補TargetのうちFilter判定不能またはMetric不足だった件数。
 
-Statisticへ実際に使ったMeasurement Row数。
+Scene Structure自体が無いEpisodeはWarningで別表示する。
 
-### sample_count
-
-入力Measurementの `sample_count` 合計。Underlying Sentence/Utterance/Term等の量を示す診断値で、Aggregate Weightには使わない。
-
-### work_count
-
-入力Measurement由来のDistinct Reference Work数。
-
-### skipped_target_count
-
-Effective Membership内だがCurrent Text/Structure/Measurement不足で当該Metricへ寄与しなかったTarget数。
-
-## 7. Current入力選択
-
-Reference Episodeを使う条件:
-
-1. Effective Membershipに含まれる。
-2. Episodeに属するStyleDocumentがある。
-3. `document.current_text_revision_id` がある。
-4. `document.current_structure_revision_id` があり、そのCurrent TextRevision所属。
-5. 09 Current AnalysisRun Resolverで対象Metric GroupのCurrent Runが解決できる。
-6. Metric Name/Version一致Measurementがある。
-
-不足TargetはSkipする。Latest Structureや古いSucceeded RunへFallbackしない。
-
-Scene/Character AggregateもCurrent Document/Text/Structure/Run配下だけを使う。
-
-## 8. Aggregate Scope / Filter
-
-```text
-reference_work
-corpus
-scene_label
-character
-```
-
-Scene LabelはParent Work/Corpusを `scope_id`、Taxonomy条件を `filter_json` に保存する。任意SQLは保存しない。
-
-## 9. 統計式
-
-- Mean/Pstdev: Python `statistics` 相当
-- Percentile: 07共通Utility
-- 1観測のPstdev = 0
-- 0観測ならAggregate Rowなし
-
-Measurement `value_*` を等重みで計算し、Measurement `sample_count` でWeighted計算しない。
-
-## 10. Fingerprint
+## 11. Aggregate Input Fingerprint
 
 Canonical SHA-256入力:
 
 ```text
 aggregate_policy_version
-scope_type / scope_id
+container_type/container_id
+measurement_target_type
 canonical filter_json
-metric_name / metric_version
-sorted effective membership episode IDs for corpus scope
+metric_name/metric_version
+statistic
+sorted source_episode_ids
+sorted candidate target identities with filter result(match|unknown)
 sorted input measurement IDs
+filter_state_fingerprint nullable
 ```
 
-Measurement RowはImmutableなのでID集合をProvenanceとして使う。同Fingerprint RowはReuse可能。
+12 `style_aggregate_measurements`でAggregate→Measurement Linkも保持する。
 
-## 11. Profile生成Sample Policy
+## 12. Aggregate Staleness
 
-09 AnalysisPolicyが正本。
+Historical Aggregateと同じSpec/Statisticについて、Current AggregatePolicy VersionでSection 11 Input Fingerprintを再計算する。
 
 ```text
-profile_min_episode_measurements = 5
-profile_min_scene_measurements = 10
-profile_min_character_utterances = 10
-profile_min_term_samples = 5
+stale = stored input_fingerprint != current input_fingerprint
+        OR stored aggregate_policy_version != current AggregatePolicy.version
 ```
 
-不足時はCorpus由来Ruleを自動生成しない。Manual Ruleは作成可能。
+Current入力0件でもFingerprintを計算する。Stale Aggregateを自動削除しない。
 
-## 12. Profile Identity / Version
+## 13. 統計式
+
+- Mean: arithmetic mean。
+- Stddev: population standard deviation (`statistics.pstdev`相当)。
+- Percentile: 07共通Utility。
+- 1観測Stddev=0。
+- 0観測なら新Aggregate Rowなし。
+
+## 14. ProfileGenerationPolicy
+
+AnalysisPolicyとは分離する。
+
+```python
+@dataclass(frozen=True)
+class ProfileGenerationPolicy:
+    version: int = 1
+    min_document_measurements: int = 5
+    min_scene_measurements: int = 10
+    min_term_sample_count: int = 5
+```
+
+Corpus由来Rule自動生成時だけ使用する。AnalysisRunをStaleにしない。
+
+## 15. StyleProfile / Version / Rule
 
 ```text
-StyleProfile:
-  id
-  name
-  description
-  source_corpus_id nullable
-  status = draft | active | archived
-  active_version_id nullable
-  created_at
-  updated_at
+StyleProfile
+  id/name/description/source_corpus_id/status/active_version_id
 
-StyleProfileVersion:
-  id
-  profile_id
-  version_no
-  parent_version_id nullable
-  created_at
+StyleProfileVersion
+  id/profile_id/version_no/parent_version_id/profile_generation_policy_version
 
-StyleRule:
-  profile_version_id
+StyleRule
+  id/profile_version_id
+  target_scope
   scope_selector_json
-  metric_name / metric_version
-  preferred_value / min_value / max_value
-  weight / enabled / severity_policy / source_kind
+  metric_name/metric_version
+  preferred_value nullable
+  min_value nullable
+  max_value nullable
+  weight/enabled/severity_policy/source_kind
 ```
 
-Version/RuleはImmutable。`status=active` なら同Profile所属 `active_version_id` 必須。New VersionだけでActive Versionを変更しない。
+`target_scope=document|scene|character`。
 
-## 13. Corpus Default Rule
+`source_kind=corpus|manual`。
+
+ProfileVersion/RuleはImmutable。
+
+## 16. Rule Selector
+
+### document
+
+```text
+target_scope=document
+scope_selector_json={}
+```
+
+### scene
+
+StyleRuleでは`scene` wrapperを持たずAxis Objectを直接保存する。
+
+```json
+{"function":["daily"],"tone":["calm"]}
+```
+
+Corpus Scene AggregateからRuleを生成する場合、Aggregate `filter_json.scene` の中身だけをRule SelectorへCopyする。
+
+### character
+
+```json
+{"project_character_id":123}
+```
+
+CharacterとScene Selectorを組み合わせない。
+
+## 17. Corpus由来Profile生成
+
+Default:
 
 ```text
 preferred = median
@@ -208,27 +336,114 @@ min = p25
 max = p75
 ```
 
-Ratioは0〜1 Clamp。P25=P75でもRangeを勝手に広げない。
-
-## 14. Scope Selector
-
-許可:
+Profile生成APIはAggregateを暗黙Latest選択しない。RuleごとにExact Aggregate IDsを3件指定する。
 
 ```text
-global
-scene.function
-scene.tone
-scene.pace
-scene.information_load
-scene.interaction
-character_id
+preferred_aggregate_id -> statistic=median
+min_aggregate_id       -> statistic=p25
+max_aggregate_id       -> statistic=p75
 ```
 
-複数条件AND、配列内OR。Cross-work Characterを名前一致で自動対応しない。
+3 Aggregateについて次が完全一致することをValidationする。
 
-## 15. Corpus Compare
+```text
+container_type = corpus
+container_id = requested corpus_id
+measurement_target_type
+canonical filter_json
+metric_name
+metric_version
+aggregate_policy_version
+```
 
-2〜5 Corpus。Metricごとに:
+Stale Aggregateも明示IDなら利用可能。UIで警告するだけでblockingしない。
+
+Mapping:
+
+- Document Aggregate ->`target_scope=document`, selector`{}`。
+- Scene Aggregate ->`target_scope=scene`, `filter_json.scene`をSelectorへCopy。
+- Character RuleはCorpusから自動生成しない。
+
+Sample Policy:
+
+- Document Rule: median Aggregate`source_measurement_count >= min_document_measurements`。
+- Scene Rule: median Aggregate`source_measurement_count >= min_scene_measurements`。
+- Term Metric Rule: 上記に加えmedian Aggregate`sample_count >= min_term_sample_count`。
+
+不足Ruleは生成しない。Profile/他Rule生成を全体Failさせない。
+
+Corpus生成Ruleは`source_kind=corpus`とし、12 `style_rule_aggregate_sources`へExact3 Linkを保存する。
+
+## 18. Manual Profile / New Version
+
+### Manual Profile
+
+`POST /profiles/manual`はProfile Identity + Version1 + Full Rule Snapshotを同期Transactionで作る。Ruleはすべて`source_kind=manual`、Aggregate Source Link 0件。
+
+### New Version
+
+`POST /profiles/{id}/versions`:
+
+```text
+parent_version_no required
+rules = full snapshot required
+```
+
+- Parentが同Profile所属か検証。
+- `version_no = current max + 1`。
+- 全Rule Validation後1TransactionでVersion/Rule Insert。
+- New VersionだけではActive Versionを変更しない。
+- UI編集保存したRule Snapshotはすべて`source_kind=manual`として扱い、旧Corpus Aggregate Source Linkを自動継承しない。
+
+Corpus由来Provenanceを維持した新Versionが必要なら、v1では再度`from-corpus`を明示実行する。
+
+## 19. Rule Aggregate Provenance
+
+```text
+style_rule_aggregate_sources:
+  rule_id
+  aggregate_id
+  role = preferred | min | max
+```
+
+Corpus Ruleは3 Link。Manual Ruleは0 Link。
+
+## 20. Profile Validation
+
+- Metric Name/Version存在。
+- Metricがtarget_scopeをsupport。
+- Enabled Ruleは`min_value`と`max_value`を両方必須。
+- Enabled Ruleは`min <= max`。
+- preferredはoptionalだが指定時`min <= preferred <= max`。
+- Disabled RuleはRangeなしを許可する。
+- Value TypeはMetricDefinitionと一致。
+- weight 0..5。
+- severity_policy=`standard`。
+- source_kind Known Enum。
+- target_scope別Selector Schema。
+- 完全同一`target_scope + canonical selector + metric + version` Enabled Rule重複禁止。
+- Character Ruleはproject_character_id必須。
+- `min == max`の場合、そのMetricDefinitionに`zero_width_tolerance`必須。
+
+片側Rangeはv1で実装しない。
+
+## 21. Activation
+
+`status=draft|active|archived`。
+
+`status=active`なら同Profile所属`active_version_id`必須。
+
+New VersionだけではActive Versionを変更しない。Activate/LintはVersion明示。
+
+Profile Import/Exportはv1 scope外。
+
+ArchiveはProfile Identityのstatusだけ`archived`へ変更する。Version/Ruleは保持する。
+
+## 22. Corpus Compare
+
+2〜5 Corpus。同Metric/Version/Measurement Target Typeだけ比較する。
+
+返却:
 
 ```text
 median
@@ -238,53 +453,53 @@ source_measurement_count
 sample_count
 work_count
 skipped_target_count
+stale
+warnings
 ```
 
-を返す。異Unitを同一Axisへ混ぜない。
+異Unitを同一Axisへ混ぜない。
 
-## 16. Profile作成 / 編集 / Activation
+## 23. Test
 
-Corpusから:
+- Membership include/exclude。
+- AggregatePolicy version persist/fingerprint/stale。
+- Source Episode IDsをFingerprintへ含める。
+- Current Metric Run partial allowed。
+- Document missing -> skipped target。
+- Scene Current Structureなし -> Warning、架空Scene Countなし。
+- Scene Filter Match/Non-match/Unknown。
+- Effective unclear通常Filter値。
+- Measurement Row等重み / Work等重みでない。
+- Count4種。
+- Filter参照AxisだけState Hash。
+- Aggregate Measurement Link。
+- Current Input/Policy変更でStale。
+- ProfileGenerationPolicy独立。
+- Exact median/p25/p75 Aggregate Validation + policy version一致。
+- Stale Aggregate明示利用許可。
+- Corpus Rule Source3 Link。
+- Scene Aggregate wrapper除去してRule Selector生成。
+- Manual Profile Rule Source manual/link0。
+- New Version Full Snapshot/parent required/source manual。
+- Enabled Rule min/max両方必須/preferred範囲。
+- Character Rule Auto生成なし。
+- New VersionでActive不変。
 
-1. Profile Identity
-2. Version 1
-3. Current AggregateからRule Snapshot
-4. Status Draft
-5. Active Version NULL
+## 24. Codex禁止事項
 
-編集はCurrent VersionをCopyしてNew Version。Activateは `profile_id + version_no` を明示し同Profile所属を検証する。
-
-## 17. Export / Import
-
-ExportはVersion明示。Raw Text/Entity/Mentionを含めない。Unknown Metric RuleはDisabledでImport可能。Import後はDraft。
-
-## 18. Test
-
-- include_all=true + exclude
-- include_all=false + include
-- MembershipなしEpisode Override拒否
-- Work Membership削除でOverride削除
-- Refresh Episode削除Cascade
-- Measurement Row等重み
-- Work等重みではないこと
-- source_measurement_count / sample_count / work_count分離
-- skipped_target_count
-- Document Current Text/Structure/Runだけ使用
-- Current StructureなしSkip
-- 古いRunへFallbackなし
-- Fingerprint Membership/Input Measurement IDs
-- Sample不足Auto Ruleなし / Manual Rule可
-- Profile Version / Active Version
-- New VersionでActive不変
-
-## 19. Codex禁止事項
-
-- Measurementを直接StyleRuleとして保存
-- `sample_count` をAggregate Weightとして使用
-- Measurement Row等重みをWork等重みとして実装
-- Membership規則をAPI/UIで重複実装
-- Current StructureなしでLatest StructureへFallback
-- Current TextをReferenceEpisode側Pointerから読む
-- Source Measurement CountとSample Countを同義にする
-- Cross-work Character名前一致統合
-- Active VersionをLatestへ暗黙切替
+- AggregatePolicyをAnalysisPolicyへ混ぜる。
+- aggregate_policy_versionをRowへ保存しない。
+- Character MeasurementをCorpusでPool。
+- `sample_count`をWeightに使用。
+- Measurement Row等重みをWork等重みとして実装。
+- Membership規則をAPI/UIへ複製。
+- Current StructureなしでLatest fallback。
+- Missing StructureからScene数を推測。
+- Aggregateを自動上書き/削除。
+- Profile生成でAggregateを暗黙Latest選択。
+- Stale Aggregateを安全上の理由だけで利用禁止。
+- Aggregateの`scene` wrapperをRule Selectorへそのまま保存。
+- Enabled片側Rangeを独自Severity式で追加。
+- New Version編集後も旧Aggregate Provenanceを自動継承。
+- Character RuleをReference人物名から自動生成。
+- target_scopeをSelectorから推測。

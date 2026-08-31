@@ -2,250 +2,265 @@
 
 ## 1. 目的
 
-外部小説・手持ちTextを再現可能なSourceSnapshotとして取り込み、Reference Work/EpisodeとStyleDocumentのCurrent TextRevisionを更新する。取得処理は解析処理から分離する。
+ユーザーが手元に用意した小説本文ファイルを再現可能なSourceSnapshotとして取り込み、Reference Work/EpisodeとStyleDocument Current TextRevisionを更新する。取得元サイト固有の自動ダウンロードはv1対象外とし、Import/Parse、Normalization、解析を分離する。
 
 上位仕様は `../basic-design.md`。
 
-## 2. 実装境界
+## 2. v1対象
 
 ```text
-CORE/src/novel_core/style_analysis/
-  source_models.py
-  source_repository.py
-
-API/src/novel_api/style_analysis/
-  ingestion_service.py
-  source_fetcher.py
-  adapters/
-    base.py
-    narou.py
-    kakuyomu.py
-    text.py
-    html_file.py
-    epub.py
-```
-
-NetworkはAPI層。COREはDB/Domainのみ。
-
-## 3. Source Type
-
-```text
-narou
-kakuyomu
 text
 html_file
 epub
 ```
 
-汎用Remote HTML/Crawlerはv1対象外。
+すべてLocal File Importのみ。Narou/Kakuyomu等の直接Network Adapter、Generic Crawler、Remote HTML Fetch、Refreshはv1で実装しない。
 
-## 4. 取得方針
+将来Site Adapterを追加する場合は、その時点の公式利用条件と取得手段を別Phaseで再設計する。
 
-ユーザーが明示指定した作品/Fileだけ取り込む。
+## 3. 実装境界
 
-実装しない:
+```text
+CORE/src/novel_core/style_analysis/
+  source_models.py
+  source_repository.py
+  text_service.py
 
-- Site全体Crawl
-- Login/CAPTCHA/Access Control/有料表示の回避
-- 許可Host外への汎用Fetch
+API/src/novel_api/style_analysis/
+  ingestion_service.py
+  adapters/
+    base.py
+    text.py
+    html_file.py
+    epub.py
+```
 
-rights_basis、毎回の同意Checkbox/Recordは必須にしない。
+- TXT/HTML/EPUB Parse: API Adapter。
+- Raw→Canonical Normalization/TextRevision: CORE 02。
+- AdapterはDBへ書かない。
+- ImportはHTTP Request内で同期実行し、Jobを作らない。
 
-## 5. SourceAdapter
+## 4. Source Identity
 
-09の単一同期Workerに合わせ同期API。
+v1は **1 Source = 1 Reference Work**。
+
+```text
+external_work_id = upload bytes SHA-256
+```
+
+UNIQUE `(source_type, external_work_id)`。
+
+同じBytesを再Uploadした場合はExisting Source/Reference Workを返し、Parse/Persistを再実行しない。
+
+## 5. SourceAdapter契約
 
 ```python
 @dataclass(frozen=True)
 class SourceRequest:
-    source_type: str
-    locator: str
-
-@dataclass(frozen=True)
-class FetchedResource:
-    resource_kind: str
-    external_key: str
-    canonical_url: str | None
-    media_type: str
+    source_type: Literal["text", "html_file", "epub"]
+    filename: str
     payload: bytes
-    status_code: int | None
-    etag: str | None
-    last_modified: str | None
 
 @dataclass(frozen=True)
-class ImportedEpisode:
-    external_episode_id: str
-    title: str
-    order_index: int
-    source_url: str | None
-    resource_external_key: str
-    raw_text: str
-    metadata: dict[str, object]
-
-@dataclass(frozen=True)
-class ImportedWork:
+class SourceIdentity:
     external_work_id: str
-    title: str
-    author_name: str | None
-    source_url: str | None
-    metadata: dict[str, object]
-    episodes: tuple[ImportedEpisode, ...]
-
-@dataclass(frozen=True)
-class ImportBundle:
-    resources: tuple[FetchedResource, ...]
-    work: ImportedWork
 
 class SourceAdapter(Protocol):
-    def validate_locator(self, locator: str) -> None: ...
-    def import_work(self, request: SourceRequest) -> ImportBundle: ...
+    def identify(self, request: SourceRequest) -> SourceIdentity: ...
+    def import_work(self, request: SourceRequest) -> ImportedWork: ...
 ```
 
-AdapterはDBへ書かない。
+`identify()` はUpload BytesだけからIdentityを決める。
 
-## 6. Snapshot / Catalog / Current Text
-
-- `FetchedResource.payload` は元Bytes。HashもBytes基準。
-- SourceSnapshotはImmutable。
-- ReferenceWork/ReferenceEpisodeはCurrent Catalog ProjectionでMetadata/Order/Latest Snapshot Pointer更新可。
-- Current解析本文の正本は **StyleDocument.current_text_revision_id**。
-- ReferenceEpisode Rowへ別のCurrent Text Pointerを持たない。
-- Work一括解析はEpisode→StyleDocument→Current TextRevisionを読む。
-
-Import/Refreshで新しいTextRevisionがCurrentになった時:
-
-1. `style_documents.current_text_revision_id` を新Revisionへ更新。
-2. 同Documentの `current_structure_revision_id` をNULLへClear。
-3. 過去Text/Structure/Runは削除しない。
-
-同じCanonical/Raw入力が既存Current Revisionと同一で新Revision作成不要ならPointerもStructureも変更しない。
-
-## 7. HTTP共通仕様
-
-`httpx.Client`。
+`ImportedEpisode`:
 
 ```text
-connect timeout: 10 sec
-read timeout: 30 sec
-max redirects: 5
-max response bytes/page: 5 MiB
-retry: 429,502,503,504 最大2回
-backoff: 1 sec, 3 sec
-same-host interval: 1.0 sec
-concurrency/import: 1
+external_episode_id
+title
+order_index
+raw_text
+metadata
 ```
 
-User-Agent: `NovelProduction-StyleAnalysis/1.0 (local analysis)`。
-
-Redirect後もAdapter Host Allowlistを検証する。
-
-## 8. Narou / Kakuyomu
-
-Narou許可Host: `ncode.syosetu.com`, `api.syosetu.com`。
-
-- Nコード正規化
-- Metadataは利用可能な公式APIを優先
-- Public Episodeを順次取得
-- 前書き/本文/後書き分離、解析Raw Textは本文のみ
-
-Kakuyomu許可Host: `kakuyomu.jp`。
-
-- Work ID/Episode一覧/本文を取得
-- Restricted/Login-required本文を迂回しない
-
-本文一意特定不能は `SOURCE_PARSE_ERROR`。
-
-## 9. Local Adapter
-
-- text: UTF-8/UTF-8 BOM、1 File=1 Episode
-- html_file: Networkなし、主要本文抽出
-- epub: DRMなし、Spine順、元EPUB BytesをSnapshot保存
-
-## 10. Initial Import Job
-
-Initial Importは `source_import` Job。
-
-`style_imports` は受付記録だけ:
+`ImportedEpisode.metadata`で02が使用するv1項目:
 
 ```text
-id
-source_type
-locator
-job_id
-created_at
+scene_break_offsets_raw: list[int]
 ```
 
-状態・Error・Progressは `style_jobs` を正本とし二重管理しない。
+AdapterはCanonical化しない。
 
-Flow:
-
-1. Job + Import受付Rowを短Transactionで作成/Commit
-2. Worker Claim
-3. Network Fetch/Parse（DB Transaction外）
-4. Persistence Transaction
-5. Source/Snapshot/Catalog/Document/TextRevision Insert/Reuse
-6. Current Text Pointer更新、必要ならCurrent Structure Clear
-7. Job Succeeded + Commit
-
-Fetch/Parse失敗時はCatalogを部分更新しない。
-
-## 11. Refresh Job
-
-Refreshは `source_refresh` Job。Import Rowは作らない。
-
-Episode ReorderはUnique衝突を避けるため同TransactionでTemporary Offset→Final Order。
-
-Sourceから消えたEpisode:
-
-- ReferenceEpisode DELETE
-- Document/Text/AnalysisはCascade
-- SourceSnapshotはWork全体Purgeまで保持
-
-既存Episode本文が変わった場合だけ新TextRevisionを作成してCurrent Pointer更新/Structure Clear。
-
-## 12. Purge
-
-Reference Work DELETEは12 Service Transaction。
-
-- Work/Episode/Document/Entity/Term/Membership削除
-- 他Workが参照しない専用SourceならSource/Snapshot削除
-
-通常の削除確認1回でよい。
-
-## 13. Error Code
+`ImportedWork`:
 
 ```text
-SOURCE_LOCATOR_INVALID
-SOURCE_HOST_NOT_ALLOWED
-SOURCE_HTTP_ERROR
-SOURCE_RATE_LIMITED
+title
+author_name nullable
+metadata
+episodes
+```
+
+## 6. Import Flow
+
+```text
+POST /imports/file
+```
+
+1. Upload Size Validation。
+2. Source Type Validation。
+3. SHA-256でIdentity計算。
+4. Existing Source判定。
+5. NewならAdapter ParseをDB Transaction外で実行。
+6. 各EpisodeをCORE TextServiceへ渡し02 Normalization Input Fingerprint/Canonical Textを生成。
+7. 1 TransactionでSource/Snapshot/ReferenceWork/Episode/Document/TextRevisionを保存。
+8. Current Text Pointerを設定。
+9. Commit後Reference Work Summaryを返す。
+
+HTTP:
+
+- New: `201 Created`。
+- Duplicate: `200 OK` + `reused_existing=true`。
+- Upload超過: `413`。
+- Parse/Encoding/Normalization失敗:同期Error。
+
+All-or-Nothing。1 EpisodeでもParse/Normalize/Persistに失敗した場合、新Reference Workを部分保存しない。
+
+## 7. Resource上限
+
+```text
+File upload: 100 MiB
+1 Episode canonical text: 2,000,000 code points
+```
+
+超過は `SOURCE_TOO_LARGE`。
+
+Upload Staging Table、Temporary Spool、Streaming Importはv1で導入しない。
+
+## 8. SourceSnapshot / Current Text
+
+- Upload元Bytesを`style_source_snapshots.raw_payload`へBLOB保存。
+- HashはBytes基準。
+- SourceSnapshot immutable。
+- ReferenceWork/ReferenceEpisodeはCurrent Catalog Projection。
+- Current解析本文の正本は`StyleDocument.current_text_revision_id`。
+- ReferenceEpisodeへCurrent Text Pointerを重複保持しない。
+
+02 `normalization_input_fingerprint` と既存Revisionが一致すればRevisionをReuseする。
+
+本文文字列が同じでもScene Break Hint等の構造入力が変われば別TextRevisionとする。
+
+Current Textが別Revisionへ変わった時だけ:
+
+```text
+current_text_revision_id = new revision
+current_structure_revision_id = NULL
+```
+
+過去Revision/Runは保持する。
+
+## 9. text Adapter
+
+- UTF-8 / UTF-8 BOM。
+- 1 File = 1 Episode。
+- `external_episode_id = "1"`。
+- Work/Episode Title = filename stem。
+- Decode不能は `SOURCE_ENCODING_ERROR`。
+
+## 10. html_file Adapter
+
+追加Network Accessなし。
+
+- HTMLをUpload BytesからParse。
+- `script/style/noscript`等の非本文要素を除外。
+- 主要本文Containerを決定できる場合はその本文、決定不能なら`body`の可読Textを使う。
+- Block-level要素間を02契約のParagraph形式へSerialization。
+- `<br>`は単一LF。
+- `<ruby>`はSurface本文のみ。
+- `<hr>`等の文字を持たない明示区切りは架空文字を挿入せず`scene_break_offsets_raw`へ記録。
+- `external_episode_id = "1"`。
+- Title = HTML title → filename stem fallback。
+
+本文を一意に抽出できず空になる場合は `SOURCE_PARSE_ERROR`。
+
+## 11. epub Adapter
+
+- DRMなしEPUBのみ。
+- ZIP/OPF/SpineをParse。
+- Spine順に1 Spine Document = 1 Episode。
+- Navigation/CoverだけのItemは除外。
+- `external_episode_id = "spine:{1-based-order}"`。
+- Episode Title = Navigation/Heading → `Episode {n}` fallback。
+- Work Title/Author = EPUB Metadata → filename fallback。
+- HTML本文Serializationはhtml_fileと同じ規則。
+- 同じUpload SourceSnapshotを複数Episodeが参照してよい。
+
+## 12. Duplicate / Re-import
+
+同一 `(source_type, external_work_id)` はExisting Workを返す。
+
+変更ファイルはBytes Hashが変わるため新Source/New Reference WorkとしてImportする。v1では既存Reference WorkへRefresh/Replaceしない。
+
+Duplicate RaceはDB Unique Constraint競合後にExisting Source/Workを再取得して同じ200 Responseへ収束させる。
+
+## 13. Purge
+
+Reference Work削除は対応するSource RowをDELETEする。
+
+1 Source = 1 WorkなのでCascadeで:
+
+```text
+SourceSnapshot
+ReferenceWork/Episode
+StyleDocument
+Text/Structure
+AnalysisRun/Measurement
+Entity/Term
+Corpus Membership
+```
+
+を削除する。
+
+Aggregate/ProfileのHistorical Snapshot扱いは08/12を正本とする。
+
+通常の削除確認は1回だけ。追加の権利確認Dialog/Checkboxは設けない。
+
+## 14. Error
+
+```text
+SOURCE_TYPE_UNSUPPORTED
 SOURCE_TOO_LARGE
 SOURCE_PARSE_ERROR
 SOURCE_ENCODING_ERROR
-SOURCE_ACCESS_RESTRICTED
-SOURCE_IMPORT_INCOMPLETE
+SOURCE_EMPTY
 ```
 
-## 14. Test
+Network Error系はv1に存在しない。
 
-- Narou/Kakuyomu Success/Parse Failure
-- Redirect Host/429/Size
-- EPUB Binary Hash
-- Sync Adapter
-- Initial Import: style_importsはJob参照のみ
-- Fetch FailureでCatalog未更新
-- New Text RevisionでDocument Current Text更新 + Structure Clear
-- Same Text ReuseでPointer/Structure不変
-- Refresh Reorder
-- Removed Episode Cascade + Snapshot保持
-- Purge専用Source/Snapshot削除
+## 15. Test
 
-## 15. Codex禁止事項
+- TXT/HTML/EPUB Identity = Upload SHA-256。
+- New -> 201同期、Jobなし。
+- Duplicate -> 200、Parse/Persistなし。
+- Duplicate Race -> Existing Reuse。
+- Upload Limit/Encoding/Parse Error。
+- EPUB Spine Order/Metadata。
+- Adapter ParseとNormalization責務分離。
+- HTML/EPUB `<hr>` Raw Scene Hint。
+- Same Normalization Input -> TextRevision Reuse。
+- Same Raw TextでもHint変更 -> New TextRevision。
+- New Current Text -> Current Structure Clear。
+- All-or-Nothing Persistence。
+- Purge Cascade。
 
-- Async Event Loop追加
-- Network中の長Transaction
-- Current TextをReferenceEpisodeとStyleDocumentで二重管理
-- Import Status/ErrorをJobと二重管理
-- 空本文Success
-- Generic Crawler/Access Restriction回避
-- MCP Tool追加
+## 16. Codex禁止事項
+
+- Narou/Kakuyomu/Generic Network Downloader追加。
+- Remote URL Import追加。
+- Refresh機能追加。
+- Local File ImportをJob化。
+- Upload Staging Table追加。
+- Adapter内へCanonical Normalizationを実装。
+- Duplicate用No-op Job追加。
+- Source/Work Many-to-many化。
+- Raw Text一致だけでTextRevision Reuse。
+- Current Text二重管理。
+- MCP Tool追加。

@@ -2,13 +2,13 @@
 
 ## 1. 目的
 
-Style AnalysisのSQLite Schema、Migration分割、主要Constraint/Indexを確定する。既存Authoring Schemaを変更せず `style_` prefixで追加する。
+Style AnalysisのSQLite Schema、Migration分割、主要Column、FK、Constraint、Indexを確定する。既存Authoring Schemaを変更せず`style_` prefixのbounded contextとして追加する。
 
 上位仕様は `../basic-design.md`。
 
 ## 2. Migration
 
-既存001〜005は変更しない。
+既存`001`〜`005`は変更しない。
 
 ```text
 006_style_analysis_foundation.sql
@@ -16,24 +16,32 @@ Style AnalysisのSQLite Schema、Migration分割、主要Constraint/Indexを確�
 008_style_analysis_analytics.sql
 ```
 
-Merge済みMigrationはByte変更しない。
+既存参照先:
 
-## 3. 共通
+```text
+works(id)
+episodes(id), episodes(work_id,id)
+drafts(id)
+characters(id), characters(work_id,id)
+```
 
-- Project-local `story.db`。style tableへproject_idを追加しない。
-- PK: `INTEGER PRIMARY KEY`
-- Timestamp: `TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP`
-- Boolean/Enum/JSONはCHECKを付ける。
-- SHA-256は64文字Lowercase Hex。
-- Text Spanは `[start_cp,end_cp)`。
-- Immutable RowだけUPDATE禁止Trigger。
-- Purgeを阻害するDELETE禁止Triggerは作らない。
+## 3. 共通ルール
 
-## 4. 006 Foundation作成順
+- Project-local `story.db`。Style Tableへ`project_id`を重複保存しない。
+- PK: `INTEGER PRIMARY KEY`。
+- Timestamp: `TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP`。
+- Boolean: `INTEGER CHECK(value IN (0,1))`。
+- JSON: `TEXT` + `json_valid` CHECK。
+- SHA-256: lowercase hex 64文字。
+- Text Span: Unicode Code Point半開`[start_cp,end_cp)`。
+- Immutable/Historical RowはRepositoryからUpdateしない。
+- Purge Cascadeを妨げるDELETE禁止Triggerは作らない。
+- Generic Subject FK/Current Pointer/Cross-scope整合はServiceでValidationする。
+
+## 4. 006 Foundation 作成順
 
 ```text
 style_jobs
-style_imports
 style_sources
 style_source_snapshots
 style_reference_works
@@ -50,39 +58,34 @@ style_analysis_run_dependencies
 style_structure_analysis_sources
 ```
 
-後続Tableを指すCurrent PointerはLogical FKとしてService Validationする。
+## 5. Jobs
 
-## 5. style_jobs / style_imports
-
-### style_jobs
+### `style_jobs`
 
 ```text
 id
 job_type TEXT NOT NULL
-payload_json TEXT NOT NULL CHECK(json_valid(payload_json))
+payload_json TEXT NOT NULL DEFAULT '{}'
 status TEXT NOT NULL
-cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK(cancel_requested IN (0,1))
-progress_current INTEGER CHECK(progress_current IS NULL OR progress_current >= 0)
-progress_total INTEGER CHECK(progress_total IS NULL OR progress_total >= 0)
-result_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(result_json))
-warning_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(warning_json))
+cancel_requested INTEGER NOT NULL DEFAULT 0
+progress_current INTEGER nullable
+progress_total INTEGER nullable
+result_json TEXT NOT NULL DEFAULT '{}'
+warning_json TEXT NOT NULL DEFAULT '[]'
 created_at
-started_at
-finished_at
-error_code
-error_message
+started_at nullable
+finished_at nullable
+error_code nullable
+error_message nullable
 version INTEGER NOT NULL DEFAULT 1
 ```
 
-Type:
+Job Type:
 
 ```text
-source_import
-source_refresh
 analyze_document
 analyze_reference_work
 recompute_aggregate
-build_profile
 run_lint
 ```
 
@@ -97,389 +100,868 @@ failed
 cancelled
 ```
 
-INDEX `(status,created_at,id)`。
+CHECK: JSON valid、progress>=0、total>=0、両方非NULLならcurrent<=total、version>=1。
 
-### style_imports
+Index:`(status,id)`。
 
-Import受付記録だけを持つ。
+`style_imports`、`build_profile` Job、Source Import/Refresh Jobは作らない。
 
-```text
-id
-source_type TEXT NOT NULL
-locator TEXT NOT NULL
-job_id INTEGER NOT NULL UNIQUE REFERENCES style_jobs(id) ON DELETE CASCADE
-created_at
-```
+## 6. Source / Reference
 
-Status/Error/Progressを重複保持しない。GET ImportはJobをJoinする。
-
-## 6. Source / Reference Catalog
-
-### style_sources
+### `style_sources`
 
 ```text
 id
-source_type
-external_work_id nullable
-canonical_url nullable
-adapter_id
-adapter_version
+source_type TEXT NOT NULL CHECK(source_type IN ('text','html_file','epub'))
+external_work_id TEXT NOT NULL
+original_filename TEXT NOT NULL
+adapter_id TEXT NOT NULL
+adapter_version INTEGER NOT NULL
 created_at
 ```
 
-External ID非NULLならPartial Unique `(source_type,external_work_id)`。
+UNIQUE `(source_type,external_work_id)`。
 
-### style_source_snapshots
+### `style_source_snapshots`
 
 ```text
 id
 source_id INTEGER NOT NULL REFERENCES style_sources(id) ON DELETE CASCADE
-resource_kind
-external_key
-canonical_url nullable
-fetched_at
-status_code nullable
-etag nullable
-last_modified nullable
-media_type
-payload_sha256
-raw_payload BLOB
-adapter_id
-adapter_version
-metadata_json
+filename TEXT NOT NULL
+media_type TEXT NOT NULL
+payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256)=64)
+raw_payload BLOB NOT NULL
+metadata_json TEXT NOT NULL DEFAULT '{}'
+created_at
 ```
 
-UNIQUE `(source_id,external_key,payload_sha256)`。UPDATE禁止。
+UNIQUE `(source_id,payload_sha256)`。
 
-### style_reference_works
+Standalone Snapshot Delete API/Repository Operationは作らない。Snapshot削除はSource Purgeだけ。
+
+### `style_reference_works`
 
 ```text
 id
-source_id nullable REFERENCES style_sources(id) ON DELETE SET NULL
-external_work_id nullable
-source_url nullable
-title
-author_name nullable
-metadata_json
-import_state
+source_id INTEGER NOT NULL UNIQUE REFERENCES style_sources(id) ON DELETE CASCADE
+title TEXT NOT NULL
+author_name TEXT nullable
+metadata_json TEXT NOT NULL DEFAULT '{}'
 created_at
 updated_at
 ```
 
-### style_reference_episodes
+1 Source = 1 Reference Work。
+
+### `style_reference_episodes`
 
 ```text
 id
 reference_work_id INTEGER NOT NULL REFERENCES style_reference_works(id) ON DELETE CASCADE
-external_episode_id
-title
-order_index INTEGER NOT NULL CHECK(order_index >= 1)
-source_url nullable
-latest_snapshot_id nullable REFERENCES style_source_snapshots(id) ON DELETE SET NULL
+external_episode_id TEXT NOT NULL
+title TEXT NOT NULL
+order_index INTEGER NOT NULL CHECK(order_index>=1)
+latest_snapshot_id INTEGER NOT NULL REFERENCES style_source_snapshots(id) ON DELETE CASCADE
+metadata_json TEXT NOT NULL DEFAULT '{}'
 created_at
 updated_at
 ```
 
-UNIQUE `(reference_work_id,external_episode_id)`、`(reference_work_id,order_index)`。
+UNIQUE `(reference_work_id,external_episode_id)`。
+UNIQUE `(reference_work_id,order_index)`。
 
-**Current Text PointerはReferenceEpisodeへ持たない。StyleDocumentに統一する。**
+ServiceはSnapshotが同Reference Work Source所属であることをValidationする。
 
-## 7. style_documents
+## 7. Document / Text
+
+### `style_documents`
 
 ```text
 id
 kind TEXT NOT NULL
-reference_episode_id INTEGER REFERENCES style_reference_episodes(id) ON DELETE CASCADE
-project_work_id INTEGER
-project_episode_id INTEGER
-current_text_revision_id INTEGER
-current_structure_revision_id INTEGER
+reference_episode_id INTEGER nullable REFERENCES style_reference_episodes(id) ON DELETE CASCADE
+project_work_id INTEGER nullable
+project_episode_id INTEGER nullable
+current_text_revision_id INTEGER nullable
+current_structure_revision_id INTEGER nullable
 created_at
 ```
 
-Kind:
+Kind:`reference_episode|project_episode_draft`。
+
+CHECK:
+
+- Reference: reference_episode_id NOT NULL、Project Fields NULL。
+- Project: reference_episode_id NULL、Project Fields NOT NULL。
+
+Project FK:
 
 ```text
-reference_episode
-project_episode_draft
+FOREIGN KEY(project_work_id,project_episode_id)
+REFERENCES episodes(work_id,id)
+ON DELETE CASCADE
 ```
 
-Scope CHECK:
+UNIQUE `reference_episode_id`。
+UNIQUE `(project_work_id,project_episode_id)`。
 
-- Reference: reference_episode_idのみ。
-- Project: project_work_id/project_episode_idのみ。
+Current Pointerは循環FKを作らずService Validation:
 
-Project Pairは既存episodesへFK。
+- Current Textは同Document TextRevision。
+- Current Structureは同Document StructureRevision。
+- Current Structure TextRevision = Current Text。
+- Current Text変更時Current Structure=NULL。
 
-Current PointerはLogical FK。Serviceで:
-
-### current_text_revision_id
-
-- NULLまたは同DocumentのTextRevision。
-
-### current_structure_revision_id
-
-- NULLまたは同DocumentのStructureRevision。
-- さらにそのStructureのTextRevision = `current_text_revision_id`。
-
-新Current Textへ切替時はCurrent StructureをNULLへClearする。
-
-## 8. Text / Structure
-
-### style_text_revisions
+### `style_text_revisions`
 
 ```text
 id
 document_id INTEGER NOT NULL REFERENCES style_documents(id) ON DELETE CASCADE
-revision_no
-source_snapshot_id nullable
-project_draft_id nullable
-raw_text
-canonical_text
-raw_sha256
-canonical_sha256
-normalizer_id
-normalizer_version
-metadata_json
+revision_no INTEGER NOT NULL CHECK(revision_no>=1)
+source_snapshot_id INTEGER nullable REFERENCES style_source_snapshots(id) ON DELETE CASCADE
+project_draft_id INTEGER nullable
+raw_text TEXT NOT NULL
+canonical_text TEXT NOT NULL
+raw_sha256 TEXT NOT NULL
+canonical_sha256 TEXT NOT NULL
+normalization_input_fingerprint TEXT NOT NULL
+normalizer_id TEXT NOT NULL
+normalizer_version INTEGER NOT NULL
+metadata_json TEXT NOT NULL DEFAULT '{}'
 created_at
 ```
 
-UNIQUE `(document_id,revision_no)`。UPDATE禁止。
+CHECK exactly one of`source_snapshot_id/project_draft_id` non-null。
 
-### style_text_mappings
+`project_draft_id`は`drafts(id)`へのLogical Reference。Serviceで存在・Document Work/Episode一致をValidationする。既存Draft append-only/delete semanticsへ干渉しないため新FKは追加しない。
 
-TextRevision、Order、Raw/Canonical Start/End、Operation。片側0長可、両側0長不可。
+UNIQUE `(document_id,revision_no)`。
+UNIQUE `(document_id,normalization_input_fingerprint)`。
+Index `(document_id,canonical_sha256)`。
 
-### style_structure_revisions
+Reference Snapshot削除はSource Purge時だけであり、TextRevisionもCASCADE DeleteされるためExactly-one CHECKと競合しない。
+
+### `style_text_mappings`
 
 ```text
 id
 text_revision_id INTEGER NOT NULL REFERENCES style_text_revisions(id) ON DELETE CASCADE
-revision_no
-segmenter_id
-segmenter_version
-source_kind
-parent_structure_revision_id nullable
-fingerprint
-created_at
+segment_order INTEGER NOT NULL
+raw_start INTEGER NOT NULL
+raw_end INTEGER NOT NULL
+canonical_start INTEGER NOT NULL
+canonical_end INTEGER NOT NULL
+operation TEXT NOT NULL
 ```
 
-Source Kind `automatic|semantic|manual`。UNIQUE Revision No/Fingerprint。
+Operation:`identity|replace|delete|collapse`。
 
-### style_scenes / style_blocks / style_sentences
+UNIQUE `(text_revision_id,segment_order)`。
 
-- Scene OrderはRevision内。
-- Block OrderはRevision全体Global。
-- Sentence OrderはBlock内。
-- SpanはCanonical Text内。
-- Separator Blockはscene_id NULL可。
+CHECK: order>=1、each end>=start、raw/canonical双方0長は不可。
 
-## 9. AnalysisRun
+## 8. Structure
+
+### `style_structure_revisions`
 
 ```text
 id
-document_id
-analyzer_id/analyzer_version
-text_revision_id
-structure_revision_id
-status
-fingerprint
-config_json
-policy_version
-state_fingerprint nullable
-registry_input_fingerprint nullable
-model_provider/model_id nullable
-prompt_id/prompt_version nullable
-started_at/finished_at
-error_code/error_message
-warning_json
+text_revision_id INTEGER NOT NULL REFERENCES style_text_revisions(id) ON DELETE CASCADE
+revision_no INTEGER NOT NULL
+segmenter_id TEXT NOT NULL
+segmenter_version INTEGER NOT NULL
+source_kind TEXT NOT NULL
+parent_structure_revision_id INTEGER nullable REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+fingerprint TEXT NOT NULL
 created_at
 ```
 
-State/Registry FingerprintはNULLまたは64文字。
+`source_kind IN ('automatic','semantic','manual')`。
 
-### style_analysis_run_dependencies
+Automatic Parent NULL、Semantic/Manual Parent NOT NULLをService Validation。
+
+UNIQUE `(text_revision_id,revision_no)`。
+UNIQUE `(text_revision_id,fingerprint)`。
+
+### `style_scenes`
 
 ```text
-run_id
-dependency_run_id
+id
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+order_index INTEGER NOT NULL
+start_cp INTEGER NOT NULL
+end_cp INTEGER NOT NULL
+```
+
+UNIQUE `(structure_revision_id,order_index)`。
+
+### `style_blocks`
+
+```text
+id
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+scene_id INTEGER nullable REFERENCES style_scenes(id) ON DELETE CASCADE
+order_index INTEGER NOT NULL
+paragraph_index INTEGER NOT NULL
+block_type TEXT NOT NULL
+start_cp INTEGER NOT NULL
+end_cp INTEGER NOT NULL
+```
+
+Block Type:`dialogue|narration|heading|separator|unknown`。
+
+UNIQUE `(structure_revision_id,order_index)`。
+Index `(structure_revision_id,scene_id,order_index)`。
+
+### `style_sentences`
+
+```text
+id
+block_id INTEGER NOT NULL REFERENCES style_blocks(id) ON DELETE CASCADE
+order_index INTEGER NOT NULL
+start_cp INTEGER NOT NULL
+end_cp INTEGER NOT NULL
+```
+
+UNIQUE `(block_id,order_index)`。
+
+ServiceはDialogue/Narration BlockだけにSentenceを許可する。
+
+## 9. AnalysisRun
+
+### `style_analysis_runs`
+
+```text
+id
+document_id INTEGER NOT NULL REFERENCES style_documents(id) ON DELETE CASCADE
+analyzer_id TEXT NOT NULL
+analyzer_version INTEGER NOT NULL
+text_revision_id INTEGER NOT NULL REFERENCES style_text_revisions(id) ON DELETE CASCADE
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+status TEXT NOT NULL
+fingerprint TEXT NOT NULL
+config_json TEXT NOT NULL DEFAULT '{}'
+analysis_policy_version INTEGER nullable
+policy_input_fingerprint TEXT nullable
+state_fingerprint TEXT nullable
+registry_input_fingerprint TEXT nullable
+model_provider TEXT nullable
+model_id TEXT nullable
+prompt_id TEXT nullable
+prompt_version INTEGER nullable
+started_at TEXT NOT NULL
+finished_at TEXT nullable
+error_code TEXT nullable
+error_message TEXT nullable
+warning_json TEXT NOT NULL DEFAULT '[]'
+created_at
+```
+
+Status:`running|succeeded|partial|failed|cancelled`。
+
+Fingerprint列はNULLまたは64文字CHECK。
+
+Index:
+
+```text
+(document_id,analyzer_id,text_revision_id,structure_revision_id,created_at)
+(fingerprint,status)
+```
+
+### `style_analysis_run_dependencies`
+
+```text
+run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+dependency_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
 PRIMARY KEY(run_id,dependency_run_id)
 CHECK(run_id != dependency_run_id)
 ```
 
-双方ON DELETE CASCADE。
+### `style_structure_analysis_sources`
 
-### style_structure_analysis_sources
+```text
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+boundary_analysis_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+PRIMARY KEY(structure_revision_id,boundary_analysis_run_id)
+```
 
-Semantic Structure Revision IDをPK、Boundary AnalysisRun IDをUNIQUE FK。ServiceでParent/Analyzer整合を検証。
+Boundary Run IDはUNIQUEにしない。
 
-## 10. 007 Semantics
+Service Validation:
 
-### style_entities
+- Structure Kind=semantic。
+- Parent Kind=automatic。
+- Run Analyzer=`scene-boundary-detector`。
+- Run input Structure=Parent Automatic。
+
+## 10. 007 Semantics 作成順
+
+```text
+style_entities
+style_mentions
+style_entity_aliases
+style_entity_character_links
+style_terms
+style_term_aliases
+style_term_mentions
+style_annotations
+style_review_items
+style_inference_reviews
+style_manual_overrides
+```
+
+## 11. Entity
+
+### `style_entities`
 
 ```text
 id
-reference_work_id nullable
-document_id nullable
-entity_type
-canonical_name
-origin = inferred | manual
-created_by_run_id nullable
+reference_work_id INTEGER nullable REFERENCES style_reference_works(id) ON DELETE CASCADE
+document_id INTEGER nullable REFERENCES style_documents(id) ON DELETE CASCADE
+entity_type TEXT NOT NULL
+canonical_name TEXT NOT NULL
+origin TEXT NOT NULL CHECK(origin IN ('inferred','manual'))
+created_by_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE SET NULL
 created_at
+```
+
+CHECK exactly one Scope。
+
+### `style_mentions`
+
+```text
+id
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+scene_id INTEGER NOT NULL REFERENCES style_scenes(id) ON DELETE CASCADE
+block_id INTEGER NOT NULL REFERENCES style_blocks(id) ON DELETE CASCADE
+start_cp INTEGER NOT NULL
+end_cp INTEGER NOT NULL
+surface TEXT NOT NULL
+mention_type TEXT NOT NULL
+entity_type_candidate TEXT NOT NULL
+canonical_name_candidate TEXT NOT NULL
+confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1)
+analysis_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+```
+
+Entity ID列なし。
+
+### `style_entity_aliases`
+
+```text
+id
+entity_id INTEGER NOT NULL REFERENCES style_entities(id) ON DELETE CASCADE
+alias TEXT NOT NULL
+alias_kind TEXT NOT NULL
+origin TEXT NOT NULL CHECK(origin IN ('inferred','manual'))
+analysis_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+source_mention_id INTEGER nullable REFERENCES style_mentions(id) ON DELETE SET NULL
+created_at
+```
+
+Manual AliasはRun NULL、Inferred AliasはRun必須をService Validation。
+
+Index `(entity_id,alias)`。
+
+### `style_entity_character_links`
+
+```text
+id
+document_id INTEGER NOT NULL REFERENCES style_documents(id) ON DELETE CASCADE
+style_entity_id INTEGER NOT NULL UNIQUE REFERENCES style_entities(id) ON DELETE CASCADE
+project_character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE
+created_at
+```
+
+UNIQUE `(document_id,project_character_id)`。
+
+ServiceでEntity Document Scope一致、person、Enabled、Character Work一致をValidation。
+
+Relation Tableは作らない。
+
+## 12. Term
+
+### `style_terms`
+
+```text
+id
+reference_work_id INTEGER nullable REFERENCES style_reference_works(id) ON DELETE CASCADE
+document_id INTEGER nullable REFERENCES style_documents(id) ON DELETE CASCADE
+canonical_label TEXT NOT NULL
+term_type TEXT NOT NULL
+origin TEXT NOT NULL CHECK(origin IN ('inferred','manual'))
+created_by_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE SET NULL
+created_at
+```
+
+CHECK exactly one Scope。
+
+### `style_term_aliases`
+
+```text
+id
+term_id INTEGER NOT NULL REFERENCES style_terms(id) ON DELETE CASCADE
+alias TEXT NOT NULL
+origin TEXT NOT NULL CHECK(origin IN ('inferred','manual'))
+analysis_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+created_at
+```
+
+Index `(term_id,alias)`。
+
+### `style_term_mentions`
+
+```text
+id
+term_id INTEGER NOT NULL REFERENCES style_terms(id) ON DELETE CASCADE
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+scene_id INTEGER NOT NULL REFERENCES style_scenes(id) ON DELETE CASCADE
+block_id INTEGER NOT NULL REFERENCES style_blocks(id) ON DELETE CASCADE
+start_cp INTEGER NOT NULL
+end_cp INTEGER NOT NULL
+surface TEXT NOT NULL
+analysis_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+```
+
+Occurrence Indexなし。Term↔Entity Linkなし。
+
+## 13. `style_annotations`
+
+```text
+id
+annotation_type TEXT NOT NULL
+subject_type TEXT NOT NULL
+subject_id INTEGER NOT NULL
+value_json TEXT NOT NULL
+confidence REAL nullable
+analysis_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+start_cp INTEGER nullable
+end_cp INTEGER nullable
+created_at
+```
+
+用途:
+
+```text
+mention.entity_resolution
+speaker
+scene.function
+scene.tone
+scene.pace
+scene.information_load
+scene.interaction
+scene.pov
+block.semantic_primary
+scene_boundary_candidate
+term_candidate
+term.novelty
+term_explanation
+```
+
+Generic SubjectはService Validation。Spanは両方NULLまたは両方non-null。
+
+Partial Unique Index:
+
+- `term.novelty`。
+- `mention.entity_resolution`。
+- `speaker`。
+- Scene各Axis。
+- `scene.pov`。
+- `block.semantic_primary`。
+
+について `(analysis_run_id,subject_type,subject_id,annotation_type)` を1件にする。
+
+`term_candidate`/`term_explanation`は複数可。
+
+## 14. Review / Override Scope
+
+Generic Review/Override RowにはPurge/Isolation用Scope Pairを持たせる。
+
+```text
+document_id nullable REFERENCES style_documents(id) ON DELETE CASCADE
+reference_work_id nullable REFERENCES style_reference_works(id) ON DELETE CASCADE
 ```
 
 Exactly One Scope。
 
-### style_mentions
+- Structure/Mention/Block/Scene/Project Entity/Project Term -> document。
+- Reference Entity/Term -> reference_work。
+
+### `style_review_items`
+
+10契約 + Scope Pair。`analysis_run_id`はON DELETE SET NULL。
+
+### `style_inference_reviews`
 
 ```text
 id
-structure_revision_id
-scene_id
-block_id
-start_cp/end_cp
-surface
-mention_type
-entity_type_candidate
-canonical_name_candidate
-confidence
-analysis_run_id
-```
-
-Mention RowにEntity IDを持たない。Candidate Typeは04 enum、Candidate Name 1〜200をService Validation。
-
-### Entity Alias/Link/Relation
-
-04契約どおり。Manual AliasはRun NULL可。RelationはRun必須。
-
-### style_terms
-
-Stable Identity。Scope Exactly One。Novelty/ExactMatch Columnなし。
-
-### Term Alias/Mention/Entity Link
-
-05契約どおり。Occurrence Indexなし。
-
-### style_annotations
-
-Generic Run Output。JSON + optional Confidence/Span + AnalysisRun FK。
-
-Term Resolver Attributeについて:
-
-```text
-UNIQUE logical rule:
-analysis_run_id + subject_type=term + subject_id + annotation_type
-for annotation_type in term.novelty, term.exact_match_safe
-```
-
-SQLite Partial Unique Indexを使えるなら次を作る。
-
-```sql
-CREATE UNIQUE INDEX ...
-ON style_annotations(analysis_run_id, subject_type, subject_id, annotation_type)
-WHERE subject_type='term'
-  AND annotation_type IN ('term.novelty','term.exact_match_safe');
-```
-
-### Review / Override
-
-ReviewItem、InferenceReview、ManualOverrideは10契約。Override Operation `set|clear|revert`。
-
-## 11. 008 Analytics
-
-### style_measurements
-
-Run/Structure/Target/Metric/Value/Sample Count。Value Real/Intは片方だけ。
-
-### Corpus Membership
-
-Work Membership:
-
-```text
-corpus_id
-reference_work_id
-include_all_episodes
+scope pair
+subject_type
+subject_id
+field_path
+analysis_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+review_status TEXT NOT NULL CHECK(review_status IN ('confirmed','rejected'))
+note TEXT nullable
 created_at
-PRIMARY KEY(corpus_id,reference_work_id)
 ```
 
-Episode Override:
-
-```text
-corpus_id
-reference_episode_id
-membership_mode = include | exclude
-PRIMARY KEY(corpus_id,reference_episode_id)
-```
-
-Episode Overrideは同Corpus Work Membership存在をService Validation。Work Membership削除時、配下Overrideを同Transaction削除。
-
-### style_aggregates
+### `style_manual_overrides`
 
 ```text
 id
-scope_type/scope_id
-filter_json
-metric_name/metric_version
-statistic
-value_real
-source_measurement_count
-sample_count
-work_count
-skipped_target_count
-fingerprint
+scope pair
+subject_type
+subject_id
+field_path
+operation TEXT NOT NULL
+value_json TEXT nullable
+base_analysis_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE SET NULL
+structure_revision_id INTEGER nullable REFERENCES style_structure_revisions(id) ON DELETE SET NULL
+note TEXT nullable
 created_at
 ```
 
-Count意味は08正本。
+Operation:`set|clear|revert`。
 
-### Profile / Lint
+- Set: value_json必須 + valid JSON。
+- Clear/Revert: value_json NULL。
+- Active Unique/Supersede Pointerなし。
+- Effective Event=`created_at DESC,id DESC`。
 
-ProfileはIdentity + Immutable Version/Rule。`active_version_id` はLogical FK。同Profile所属をService Validation。
+Append-onlyはRepository APIで守る。
 
-LintRun/Finding/FindingReviewは11契約。
+## 15. 008 Analytics 作成順
 
-## 12. Purge
+```text
+style_measurements
+style_corpora
+style_corpus_work_memberships
+style_corpus_episode_memberships
+style_aggregates
+style_aggregate_measurements
+style_profiles
+style_profile_versions
+style_rules
+style_rule_aggregate_sources
+style_lint_runs
+style_findings
+style_finding_reviews
+```
 
-Reference Work Purge:
+## 16. Measurement
 
-1. WorkのSource ID取得
-2. Work DELETE
-3. Episode/Document/Entity/Term/Membership Cascade
-4. 同Source参照Workが0ならSource DELETE
-5. Snapshot Cascade
+### `style_measurements`
 
-過去Aggregate/Profile/Ruleは本文を含まない履歴値として保持可。
+```text
+id
+analysis_run_id INTEGER NOT NULL REFERENCES style_analysis_runs(id) ON DELETE CASCADE
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+target_type TEXT NOT NULL CHECK(target_type IN ('document','scene','character'))
+target_id INTEGER NOT NULL
+metric_name TEXT NOT NULL
+metric_version INTEGER NOT NULL
+value_real REAL nullable
+value_int INTEGER nullable
+sample_count INTEGER NOT NULL CHECK(sample_count>=0)
+created_at
+```
 
-## 13. Migration / Integration Test
+CHECK exactly one Value列 non-null。
 
-- Fresh001〜008 / Existing005→008
-- Job Table→Import Table作成順 + Import FK
-- Import Status重複Columnなし
-- Current Text Pointer同Document Validation
-- Current Structure Pointer同Current Text Validation
-- Current Text切替でStructure Clear
-- Block Global Order
-- Mention Candidate Fields + Entity IDなし
-- Term Attribute Partial Unique
-- Entity/Term Exactly-one Scope
-- AnalysisRun State/Registry/Dependency
-- Override Set/Clear/Revert
-- Corpus Membership Validation
-- Aggregate Count Columns
-- Profile Active Version Validation
-- Purge/Cascade
-- Immutable Row Update拒否
+UNIQUE `(analysis_run_id,target_type,target_id,metric_name,metric_version)`。
 
-## 14. Codex禁止事項
+## 17. Corpus Membership
 
-- Current TextをReferenceEpisodeとDocumentで二重管理
-- Import Status/ErrorをJobと二重管理
-- Current PointerをLatest Queryで代替
-- Mention Candidate Fields省略
-- Mention RowへEntity ID追加
-- Term Attribute重複保存
-- Aggregate Count統合
-- Profile Identity/Version統合
-- 001〜005変更
-- ORM追加
+### `style_corpora`
+
+```text
+id
+name TEXT NOT NULL
+description TEXT NOT NULL DEFAULT ''
+created_at
+updated_at
+```
+
+### `style_corpus_work_memberships`
+
+```text
+id
+corpus_id INTEGER NOT NULL REFERENCES style_corpora(id) ON DELETE CASCADE
+reference_work_id INTEGER NOT NULL REFERENCES style_reference_works(id) ON DELETE CASCADE
+include_all_episodes INTEGER NOT NULL
+created_at
+```
+
+UNIQUE `(corpus_id,reference_work_id)`。
+
+### `style_corpus_episode_memberships`
+
+```text
+id
+work_membership_id INTEGER NOT NULL REFERENCES style_corpus_work_memberships(id) ON DELETE CASCADE
+reference_episode_id INTEGER NOT NULL REFERENCES style_reference_episodes(id) ON DELETE CASCADE
+mode TEXT NOT NULL CHECK(mode IN ('include','exclude'))
+created_at
+```
+
+UNIQUE `(work_membership_id,reference_episode_id)`。
+
+ServiceでEpisodeのWork一致をValidation。
+
+## 18. Aggregate
+
+### `style_aggregates`
+
+```text
+id
+container_type TEXT NOT NULL
+container_id INTEGER NOT NULL
+measurement_target_type TEXT NOT NULL
+filter_json TEXT NOT NULL DEFAULT '{}'
+metric_name TEXT NOT NULL
+metric_version INTEGER NOT NULL
+statistic TEXT NOT NULL
+aggregate_policy_version INTEGER NOT NULL
+value_real REAL NOT NULL
+source_measurement_count INTEGER NOT NULL
+sample_count INTEGER NOT NULL
+work_count INTEGER NOT NULL
+skipped_target_count INTEGER NOT NULL
+filter_state_fingerprint TEXT nullable
+input_fingerprint TEXT NOT NULL
+warning_json TEXT NOT NULL DEFAULT '[]'
+created_at
+```
+
+Enum:
+
+```text
+container_type=reference_work|corpus
+measurement_target_type=document|scene
+statistic=mean|median|p10|p25|p75|p90|stddev|min|max
+```
+
+Countは0以上。Aggregate RowはImmutable Historical Snapshot。
+
+`container_id`はHistorical保持のためLogical ReferenceとしFKを張らない。
+
+### `style_aggregate_measurements`
+
+```text
+aggregate_id INTEGER NOT NULL REFERENCES style_aggregates(id) ON DELETE CASCADE
+measurement_id INTEGER NOT NULL REFERENCES style_measurements(id) ON DELETE CASCADE
+PRIMARY KEY(aggregate_id,measurement_id)
+```
+
+Measurement PurgeでLinkが消えてもAggregate Rowは残る。
+
+## 19. Profile
+
+### `style_profiles`
+
+```text
+id
+name TEXT NOT NULL
+description TEXT NOT NULL DEFAULT ''
+source_corpus_id INTEGER nullable REFERENCES style_corpora(id) ON DELETE SET NULL
+status TEXT NOT NULL CHECK(status IN ('draft','active','archived'))
+active_version_id INTEGER nullable
+created_at
+updated_at
+```
+
+`active_version_id`は循環FKを作らずServiceで同Profile VersionをValidation。
+
+### `style_profile_versions`
+
+```text
+id
+profile_id INTEGER NOT NULL REFERENCES style_profiles(id) ON DELETE CASCADE
+version_no INTEGER NOT NULL
+parent_version_id INTEGER nullable REFERENCES style_profile_versions(id) ON DELETE SET NULL
+profile_generation_policy_version INTEGER nullable
+created_at
+```
+
+UNIQUE `(profile_id,version_no)`。
+
+### `style_rules`
+
+```text
+id
+profile_version_id INTEGER NOT NULL REFERENCES style_profile_versions(id) ON DELETE CASCADE
+target_scope TEXT NOT NULL
+scope_selector_json TEXT NOT NULL
+metric_name TEXT NOT NULL
+metric_version INTEGER NOT NULL
+preferred_value REAL nullable
+min_value REAL nullable
+max_value REAL nullable
+weight REAL NOT NULL DEFAULT 1.0
+enabled INTEGER NOT NULL DEFAULT 1
+severity_policy TEXT NOT NULL DEFAULT 'standard'
+source_kind TEXT NOT NULL
+created_at
+```
+
+`target_scope IN ('document','scene','character')`。
+`source_kind IN ('corpus','manual')`。
+weight 0..5。
+
+CHECK:
+
+```text
+enabled = 0
+OR (
+  min_value IS NOT NULL
+  AND max_value IS NOT NULL
+  AND min_value <= max_value
+  AND (preferred_value IS NULL OR (min_value <= preferred_value AND preferred_value <= max_value))
+)
+```
+
+Exact Enabled DuplicateはServiceでCanonical Selector比較して拒否する。
+
+### `style_rule_aggregate_sources`
+
+```text
+rule_id INTEGER NOT NULL REFERENCES style_rules(id) ON DELETE CASCADE
+aggregate_id INTEGER NOT NULL REFERENCES style_aggregates(id) ON DELETE RESTRICT
+role TEXT NOT NULL CHECK(role IN ('preferred','min','max'))
+PRIMARY KEY(rule_id,role)
+```
+
+Corpus Ruleは3 Link。Manual Ruleは0 Link。
+
+## 20. Lint
+
+### `style_lint_runs`
+
+```text
+id
+document_id INTEGER NOT NULL REFERENCES style_documents(id) ON DELETE CASCADE
+text_revision_id INTEGER NOT NULL REFERENCES style_text_revisions(id) ON DELETE CASCADE
+structure_revision_id INTEGER NOT NULL REFERENCES style_structure_revisions(id) ON DELETE CASCADE
+profile_id INTEGER NOT NULL REFERENCES style_profiles(id) ON DELETE RESTRICT
+profile_version_id INTEGER NOT NULL REFERENCES style_profile_versions(id) ON DELETE RESTRICT
+scene_id INTEGER nullable REFERENCES style_scenes(id) ON DELETE CASCADE
+basic_metric_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE SET NULL
+semantic_metric_run_id INTEGER nullable REFERENCES style_analysis_runs(id) ON DELETE SET NULL
+input_fingerprint TEXT NOT NULL
+status TEXT NOT NULL
+warning_json TEXT NOT NULL DEFAULT '[]'
+enabled_rule_count INTEGER NOT NULL
+applicable_rule_count INTEGER NOT NULL
+missing_rule_count INTEGER NOT NULL
+created_at
+finished_at nullable
+```
+
+Status:`running|succeeded|failed|cancelled`。
+
+### `style_findings`
+
+```text
+id
+lint_run_id INTEGER NOT NULL REFERENCES style_lint_runs(id) ON DELETE CASCADE
+rule_id INTEGER NOT NULL REFERENCES style_rules(id) ON DELETE RESTRICT
+target_type TEXT NOT NULL
+target_id INTEGER NOT NULL
+metric_name TEXT NOT NULL
+observed_value REAL NOT NULL
+expected_min REAL NOT NULL
+expected_max REAL NOT NULL
+preferred_value REAL nullable
+deviation REAL NOT NULL
+severity TEXT NOT NULL
+sort_score REAL NOT NULL
+explanation_code TEXT NOT NULL
+evidence_json TEXT NOT NULL
+created_at
+```
+
+Severity:`info|warning|strong_warning`。
+
+### `style_finding_reviews`
+
+```text
+id
+finding_id INTEGER NOT NULL REFERENCES style_findings(id) ON DELETE CASCADE
+status TEXT NOT NULL CHECK(status IN ('acknowledged','ignored'))
+note TEXT nullable
+created_at
+```
+
+Append-only。
+
+## 21. Purge
+
+Reference Work PurgeはSource RowをDELETEする。
+
+Cascadeで:
+
+```text
+Snapshot
+Reference Work/Episode
+Document/Text/Structure
+AnalysisRun/Semantic Output
+Entity/Term
+Review/Override
+Measurement
+Corpus Membership
+```
+
+を削除する。
+
+Aggregate Measurement LinkはMeasurement削除でCascadeするがAggregate RowはHistorical Snapshotとして残す。
+
+Profileは通常物理削除せずArchiveを使用する。
+
+## 22. Migration / Integration Test
+
+- Fresh001→008 / Existing005→008。
+- Existing001〜005 Checksum不変。
+- `PRAGMA foreign_key_check` / `integrity_check`。
+- Job Type4種のみ。
+- `style_imports`/Upload Staging Tableなし。
+- Source Identity / 1 Source=1 Work。
+- Snapshot Delete/PurgeでTextRevision Exactly-one CHECK違反なし。
+- Project Document Composite Episode FK。
+- Current Pointer Logical FK。
+- TextRevision normalization_input_fingerprint Unique。
+- Structure fingerprint Unique/Reuse。
+- Semantic Structure Source LinkはBoundary Run非Unique。
+- SentenceはDialogue/Narrationだけ。
+- Run Output Cascade vs Stable Identity `created_by_run_id SET NULL`。
+- Mention Entity IDなし / Relation/Term-Linkなし。
+- Term Explanation subject=TermMention。
+- ManualOverride Scope Cascade/Append-only Repository。
+- Project Character Link Document uniqueness。
+- Measurement Unique。
+- Aggregate Policy Version/Input Fingerprint/Measurement Link。
+- Rule enabled時min/max必須、preferred範囲、target_scope/source_kind/Aggregate Source。
+- Lint scene_id/Input Fingerprint。
+- `analysis_stale`等永続bool不存在。
+
+## 23. Codex禁止事項
+
+- 001〜005変更。
+- ORM追加。
+- `style_imports`/Network Source用Column追加。
+- `build_profile`/Source Import Job追加。
+- Local Upload Staging Table追加。
+- Current PointerをLatest Queryで代替。
+- TextRevision Reuseをraw hashだけで判定。
+- SourceSnapshot FKをSET NULLへ戻してExactly-one制約と競合させる。
+- Standalone Snapshot Delete API追加。
+- Draft Tableへ新FK/Column追加。
+- Run削除でStable Entity/TermをCascade Delete。
+- Mention RowへEntity ID追加。
+- Relation/Term Entity Link追加。
+- ManualOverride Supersede Pointer再導入。
+- Aggregate Policy Versionを保存しない。
+- Boundary Analysis RunをStructure SourceでUNIQUEにする。
+- Character Aggregate追加。
+- AggregateをReference Work Purgeで物理削除。
+- Profile Identity/Version統合。
+- `analysis_stale`等bool Column追加。

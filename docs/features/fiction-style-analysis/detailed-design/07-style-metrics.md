@@ -2,68 +2,24 @@
 
 ## 1. 目的
 
-文体特徴を再現可能な数値として計測し、作品・Episode・Scene・Character・Corpus比較に利用する。Metric定義はversioned registryを正本とし、UIへ式を複製しない。
+文体特徴を再現可能なMetricとして計測する。Metric計算はCOREの決定論的処理とし、式・対象Scope・Version・`sample_count`の意味を明示する。
 
 上位仕様は `../basic-design.md`。
 
-## 2. 実装先
-
-```text
-CORE/src/novel_core/style_analysis/
-  metric_models.py
-  metric_registry.py
-  metric_service.py
-  metrics/
-    __init__.py
-    length_metrics.py
-    dialogue_metrics.py
-    semantic_metrics.py
-    term_metrics.py
-```
-
-Metric計算は決定論的処理。LLM由来AnnotationはSemantic MetricだけがEffective Inputとして参照する。
-
-## 3. Metric実行Group
+## 2. Metric Group
 
 ```text
 style-metrics-basic
 style-metrics-semantic
 ```
 
-### Basic
+BasicはStructureRevisionだけで計算し、Speaker/Entity/Term/Semantic Annotationを読まない。
 
-StructureRevisionだけで計算する。**Speaker/Entity/Term/Semantic Annotationを一切読まない。**
+SemanticはCurrent Dependency Run + 10 Effective Viewから得られるSpeaker、Term Novelty/Explanation、Block Primary Semanticを使う。
 
-対象:
+Scene Function/Tone/Pace/InformationLoad/Interaction/POVはMetric入力にしない。08/11 selector/filter用途。
 
-- Length
-- Dialogue Ratio / Utterance
-- Narration Run
-- Conversation Run / Dialogue Turn Count
-
-### Semantic
-
-Effective Semantic Dataを入力にする。
-
-- Semantic Composition
-- Term Load
-- Speaker / Character
-
-Semantic Provider未設定でもBasic Metricは利用可能。
-
-## 4. 文字数
-
-`metric_char_count(text)`:
-
-```text
-Unicode code pointのうち str.isspace() == false
-```
-
-句読点・括弧・記号は含める。
-
-`analyzable_chars` は `dialogue/narration/monologue` Block合計。Heading/Separator/Unknown除外。
-
-## 5. MetricDefinition
+## 3. MetricDefinition
 
 ```python
 @dataclass(frozen=True)
@@ -71,18 +27,73 @@ class MetricDefinition:
     name: str
     version: int
     unit: str
-    value_type: Literal["int", "float", "nullable_float"]
+    value_type: Literal["int", "float"]
     scope_types: tuple[str, ...]
-    required_inputs: tuple[str, ...]
+    group: Literal["basic", "semantic"]
     description: str
     zero_width_tolerance: float | None
 ```
 
-Measurementは `metric_name + metric_version` を保存する。
+MetricDefinitionはv1ではCode Registryを正本としDB Tableを作らない。
 
-## 6. 初期Metric
+MissingはNULL値Measurementではなく**Measurement Row不存在**で表現する。
 
-### Basic Length
+式、対象集合、分母、Bridge Rule等を変更したらMetric Versionを上げる。
+
+## 4. 共通文字数 / Percentile
+
+`metric_char_count(text)` = `str.isspace()==False`のUnicode Code Point数。句読点、括弧、記号は含める。
+
+Percentile:
+
+```text
+valuesを昇順Sort
+index = (n - 1) * q
+floor/ceil間をlinear interpolation
+```
+
+観測0件ならPercentile Measurementを作らない。
+
+## 5. Measurement Scope
+
+```text
+document
+scene
+character
+```
+
+Reference EpisodeはStyleDocumentの`document` Measurement。Work/Corpusは08 Aggregate。
+
+Scene Measurementは指定StructureRevisionのScene単位。
+
+### Character Measurement
+
+v1 Character MeasurementはDocument全体人物単位のみ。Scene×Character Measurementは作らない。
+
+Target IDはStyle Entity ID。
+
+対象Entity:
+
+```text
+Enabled Person Entity
+AND
+Current Structure内で
+  Effective Mentionが1件以上
+  OR Effective Speakerが1件以上
+```
+
+Reference Work Scope Entityでも、そのEpisodeにCurrent Mention/SpeakerがなければそのDocumentにCharacter Measurementを作らない。
+
+登場Mentionはあるが発言0件の場合:
+
+```text
+speaker.utterance_count = 0
+sample_count = 1
+```
+
+は有効。Utterance Length/Question Ratio/Consecutive Turnsは観測なしなので作らない。
+
+## 6. Basic Length Metric
 
 ```text
 text.char_count
@@ -94,7 +105,12 @@ paragraph.len.p50
 paragraph.len.p90
 ```
 
-### Basic Dialogue / Rhythm
+- `text.char_count`: Scope内`dialogue+narration` Block文字数合計。Heading/Separator/Unknown除外。対象Block 0件でも0を保存可。
+- `sentence.len`: Scope内Dialogue/Narration Sentenceを1観測。
+- `block.len`: Scope内Dialogue/Narration Blockを1観測。
+- `paragraph.len`: `paragraph_index`でGroupし、同ParagraphのDialogue/Narration文字数合計を1観測。Heading/SeparatorだけのParagraphは観測外。
+
+## 7. Dialogue Metric
 
 ```text
 dialogue.char_ratio
@@ -103,11 +119,42 @@ dialogue.utterance_len.p50
 dialogue.utterance_len.p90
 dialogue.turn_count.p50
 dialogue.turn_count.p90
+```
+
+`dialogue.char_ratio`:
+
+```text
+sum(dialogue chars) / sum(dialogue+narration chars)
+```
+
+分母0ならMeasurementなし。Dialogue 0件かつ分母>0なら有効0。
+
+`utterance_count`はDialogue Block件数。0件も有効Count。
+
+`utterance_len`はDialogue Blockを1発言とし、外側`「」`1組だけ除いて長さを測る。
+
+### Conversation Run / turn_count
+
+同一Scene内:
+
+1. 連続Dialogueは同Run。
+2. Dialogue間にNarration 1 Blockだけで40 chars以下ならBridge。
+3. Narration 41 chars以上、Narration連続2件、Heading/Separator/Unknown、Scene境界で終了。
+
+`dialogue.turn_count`はRun内Dialogue Block数。Speaker交替数ではない。
+
+40 chars Rule変更時はMetric Version Up。
+
+## 8. Narration Run
+
+```text
 narration.run_len.p50
 narration.run_len.p90
 ```
 
-### Semantic Composition
+同一Scene内の連続Narration Block文字数合計を1観測。Dialogue/Heading/Separator/Unknown/Scene境界で終了。
+
+## 9. Semantic Composition
 
 ```text
 semantic.action.char_ratio
@@ -117,16 +164,19 @@ semantic.psychology.char_ratio
 semantic.transition.char_ratio
 ```
 
-### Term
+06 Effective `block.semantic_primary`を使う。
 
-```text
-term.new_per_1000_chars
-term.explained_same_scene_ratio
-term.explanation_delay.p50
-term.explanation_delay.p90
-```
+分子: 該当PrimaryのNarration Block chars。
 
-### Speaker
+分母: ScopeのDialogue+Narration Block chars。
+
+`other/unclear`は分子外。Dialogueは分母に入るため比率合計は1未満になり得る。
+
+Current Block Primaryが`source=unknown`のNarration Blockが1件でもある場合、そのDocument/SceneのComposition Ratioは作らない。
+
+Narration Blockが0件で分母>0の場合、各Composition Ratioは有効0。
+
+## 10. Speaker Metric
 
 ```text
 speaker.utterance_count
@@ -136,124 +186,27 @@ speaker.question_ratio
 speaker.consecutive_turns.p50
 ```
 
-## 7. Paragraph
+Section 5 Eligible Characterごとに算出する。
 
-03 `Block.paragraph_index` でgroupし、同ParagraphのBlock char数を合計する。
+Current Effective SpeakerがそのEnabled Person Entityへ確定したDialogueだけ発言観測に使う。
 
-## 8. dialogue.char_ratio
+`question_ratio` = 外側閉じ括弧除外後末尾が`?`/`？`の発言数 / Speaker確定発言数。分母0ならRowなし。
 
-```text
-sum(dialogue Block chars) / analyzable_chars
-```
+`consecutive_turns` = Section 7 Conversation Run内の同一Speaker連続Dialogue Block数。Unknown SpeakerはStreakを切る。Bridge NarrationはStreakへ加算しない。
 
-分母0はNULL。DBは0〜1 ratio。
-
-## 9. Utterance Length / Percentile
-
-外側 `「` `」` が1組あればその1組だけ除外。内側句読点/Nested Quoteは含める。
-
-Percentile:
+## 11. Term Metric
 
 ```text
-sorted values
-index = (n - 1) * q
-lower = floor(index)
-upper = ceil(index)
-value = lower_value + fraction * (upper_value - lower_value)
+term.new_per_1000_chars
+term.explained_same_scene_ratio
+term.explanation_delay.p50
+term.explanation_delay.p90
 ```
 
-整数観測でもpercentile結果はfloat。
+05 `first_appearance_complete=true` のTargetだけ生成する。
 
-## 10. Basic Conversation Run / dialogue.turn_count
-
-Conversation Runは**Structureだけ**から決める。
-
-基本規則:
-
-1. 同一Scene内の連続Dialogue Blockを1 Runとする。
-2. Dialogue Block間にNarration Blockが1件だけ挟まる場合、そのNarrationが `metric_char_count <= 40` ならRunを継続する。
-3. 2件以上連続Narration、40 chars超Narration、Monologue、Heading、Separator、Scene境界、UnknownでRun終了。
-4. Narrationの意味・Speaker Attribution Evidenceは参照しない。
-
-例:
-
-```text
-dialogue
-narration 18 chars
-dialogue
-```
-
-は1 Conversation Run。
-
-```text
-dialogue
-narration 58 chars
-dialogue
-```
-
-は2 Run。
-
-`dialogue.turn_count` の1観測値はRun内Dialogue Block数。Speakerの同一/異同は見ない。
-
-この40 chars bridge ruleを変更する場合は `dialogue.turn_count` Metric versionを上げる。
-
-## 11. speaker.consecutive_turns.p50
-
-Semantic Character Metric。
-
-Conversation Runの切り方はSection 10の決定論的Runを再利用し、その中でEffective Speakerだけを参照する。
-
-同一Effective Speakerが連続するDialogue Block数をStreakとする。
-
-例:
-
-```text
-A, A, B, A, A, A, unknown, A
-```
-
-A:
-
-```text
-2, 3, 1
-```
-
-B:
-
-```text
-1
-```
-
-UnknownはStreakを切り、どのCharacter観測にも含めない。Bridge NarrationはRunを維持するだけでStreak数に加算しない。
-
-Streak 0件ならMeasurementを作らない。
-
-## 12. Narration Run
-
-連続 `narration + monologue` Blockのchar数合計。Dialogue、Heading、Separator、Scene境界で区切る。
-
-## 13. Semantic Ratio
-
-06 Effective Primary SemanticだけCategory分子へ入れる。
-
-```text
-category chars / analyzable_chars
-```
-
-`other/unclear` は分子に入れない。合計1未満可。
-
-## 14. Speaker Metric
-
-Effective Speaker確定Dialogueだけ人物別Metricへ使用する。
-
-Question Ratio:
-
-```text
-閉じ括弧除外後末尾が ?/？ の発言数 / Speaker確定発言数
-```
-
-## 15. Term Metric
-
-Effective Termが `term.enabled=false` なら全Term Metric対象から除外する。
+- Reference: Work Prefix Complete。
+- Project: Target Text/Structure Term Resolver Succeeded。
 
 Eligible Novelty:
 
@@ -262,37 +215,27 @@ work_specific
 specialized_real_world
 ```
 
-`new_per_1000_chars`:
+`new_per_1000_chars` = Eligible First Term数 / Dialogue+Narration chars ×1000。分母0ならなし。Eligible Term 0件は有効0、`sample_count=0`。
 
-```text
-eligible first TermMention / analyzable_chars * 1000
-```
+`explained_same_scene_ratio` = Effective Sufficient ExplanationありEligible First Term数 / Eligible First Term数。分母0ならなし。
 
-`explained_same_scene_ratio`:
+`explanation_delay`はExplanationありEligible First Termだけ観測。説明なしTermをDelay=0にしない。
 
-```text
-同SceneにEffective Sufficient ExplanationがあるEligible初出Term数
-/ Eligible初出Term数
-```
+## 12. Semantic Metric Partial Policy
 
-分母0はNULL。Delay NULLはPercentile除外。
+`style-metrics-semantic`はDependencyを`subject_partial_allowed`で利用できるがMetricごとにCompleteness判定する。
 
-Term canonical label/typeのManualOverrideは表示・分類へ反映するが、Metric eligibilityは `enabled + novelty + explanation` を正本とする。
+- Speaker Metric: Section 5 Eligible Character + Current Effective Speakerで算出。
+- Semantic Composition: Scope内Narration Block Primaryが全件`source != unknown`必須。
+- Term First Appearance Metric: 05 Completeness必須。
 
-## 16. Scope
+Run Status:
 
-Measurement target:
+- 実行対象Metricがすべて正常算出または仕様上Not Applicable -> `succeeded`。
+- 1件以上Measurement生成 + 必要Input不足で生成できないMetricあり -> `partial`。
+- Measurement 0件かつ必要Input Branchがすべて利用不能 -> `failed`。
 
-```text
-document
-episode
-scene
-character
-```
-
-Work/Corpusは08 Aggregate。
-
-## 17. Measurement
+## 13. Measurement Schema / sample_count
 
 ```text
 id
@@ -308,82 +251,84 @@ sample_count
 created_at
 ```
 
-Valueは型に応じ片方だけ。
+MetricDefinitionに従いValueはReal/Intの片方だけ非NULL。Missing Rowは作らない。
 
 `sample_count`:
 
-- Percentile: Sentence/Block/Utterance/Run/Streak件数
-- Char Ratio: Analyzable Block件数
-- Term Ratio: Eligible Term件数
-- Scalar Char Count: 1
+- Scalar Count/Char Count: 1。
+- Percentile: 元観測数。
+- Dialogue/Semantic char ratio: 分母に寄与したAnalyzable Block数。
+- Speaker question ratio: Speaker確定発言数。
+- Term ratio: Eligible First Appearance Term数。
 
-## 18. Partial Semantic Input
+## 14. State / Policy Dependency
 
-`style-metrics-semantic`:
-
-- 必要Semantic Inputが欠けるSceneではその依存Scene Metricを作らない。
-- Document-wide ratioに必要なSceneが欠けるならDocument Metricを作らない。
-- Unknown SpeakerはCharacter Metricから除外。
-- Disabled Entity/Termは対象から除外。
-
-Missingを0/NULL rowで代用しない。
-
-## 19. Profile利用
-
-Aggregate対象は09 Effective AnalysisRun選択を通過したCurrent Measurementだけ。
-
-- Basic: Current `style-metrics-basic` Run
-- Semantic: Current `style-metrics-semantic` Runまたは利用可能なComplete Scene Measurement
-- Current Effective StructureRevision
-- ManualOverride反映後のRecompute済み結果
-
-旧Measurementは削除しない。
-
-## 20. Zero-width Tolerance
-
-MetricDefinitionへ明示する。
+09 `style-metrics-semantic` State Input:
 
 ```text
-dialogue.char_ratio: 0.02
-semantic.*.char_ratio: 0.02
-sentence/block/paragraph/utterance/run length: 5.0 chars
-count系: 1.0
-term.new_per_1000_chars: 0.2
-term.explanation_delay: 10.0 chars
+metric_effective_state
+term_first_appearance
 ```
 
-変更時はMetricDefinitionまたはLint Policy Versionを上げる。
+`metric_effective_state`:
 
-## 21. Test
+- Speaker Correction/Review。
+- Term Novelty Correction/Review。
+- First Appearance TermMention Explanation Correction/Review。
+- Block Primary Correction/Review。
 
-- Whitespace Char Count
-- Paragraph Grouping
-- Dialogue Ratio
-- Analyzable Chars 0
-- Percentile n=1/2/odd/even
-- Nested Quote
-- Conversation Run: Dialogue連続
-- Conversation Run: 40 chars以下NarrationでBridge
-- Conversation Run: 41 chars以上Narrationで分断
-- **Basic MetricがSpeaker/Semantic Annotationを読まない**
-- A,A,B,A,A,A,unknown,A Streak
-- Bridge NarrationでRun維持/Streak非加算
-- Narration Run
-- Semantic other/unclear
-- Term enabled=false除外
-- Term Effective Novelty/Explanation
-- Speaker Unknown
-- Semantic Partial Scope
-- Override Recompute
+Entity/Term EnabledはRegistry→Resolver Dependency経路だけ。Scene Axis/POVも含めない。
 
-## 22. Codex禁止事項
+Semantic Metric Policy Input:
 
-- 平均だけ保存
-- Metric式をUIへ複製
-- Ratioを0〜100保存
-- Semantic二重カウント
-- Missingを0扱い
-- Basic MetricをSpeaker/Term/Semantic Annotation依存にする
-- `dialogue.turn_count` Bridge判定へSpeaker Evidenceを持ち込む
-- Zero-width ToleranceをLint側で推測
-- `speaker.consecutive_turns.p50` をConversation全体Turn Countと混同
+```text
+speaker_effective
+term_explanation_effective
+block_semantic_effective
+```
+
+## 15. Zero-width Tolerance
+
+初期値:
+
+```text
+ratio: 0.02
+length: 5 chars
+count: 1
+term.new_per_1000_chars: 0.2
+term.explanation_delay: 10 chars
+```
+
+MetricDefinitionへ保持する。
+
+## 16. Test
+
+- Basic Metric Semantic State非依存。
+- MetricDefinition value_typeはint/floatのみ、Missing Row不存在。
+- Sentence/Block/Paragraph対象集合。
+- Dialogue0件 Count/Ratio。
+- Dialogue Bridge40-41/Narration Run。
+- Character対象はCurrent Mention/SpeakerのあるEntityだけ。
+- 非登場Reference EntityへCharacter Rowなし。
+- Mentionのみ人物 -> utterance_count=0、他Speaker Metricなし。
+- Semantic Composition source=unknownでなし / Narration0で0。
+- Speaker Streak/Question Ratio。
+- Prefix Complete/Incomplete Term Metric。
+- Project Resolver PartialでTerm Metricなし。
+- Eligible Term0件new_per_1000=0。
+- 説明なしTermはRatio分母/Delay sample外。
+- sample_count。
+- Scene Axis変更でMetric State不変。
+
+## 17. Codex禁止事項
+
+- Basic MetricへSemantic依存追加。
+- Nullable Value MeasurementでMissingを表現。
+- 全Work Entityへ全Episode Character Measurement生成。
+- Scene×Character Measurement追加。
+- Dialogue turn_countをSpeaker交替数として実装。
+- source=unknown Blockを`unclear`扱いしてComposition算出。
+- Partial Term Resolverから初出Metric作成。
+- 説明なしTermをDelay=0扱い。
+- Missingを0へ変換。
+- Ratioを0〜100保存。

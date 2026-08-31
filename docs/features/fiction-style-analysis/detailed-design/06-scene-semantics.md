@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Scene/Blockへ意味ラベルを付与し、局面別に文体統計を比較できるようにする。Scene分類はMulti-axisを正本とし、判断不能を無理に既知Labelへ押し込まない。Scene Boundary Analyzerは03がMaterializeできるBlock境界候補だけを返す。
+Scene/Blockへ意味ラベルを付与し、局面別統計・StyleRule Selector・Lintを可能にする。Scene分類はMulti-axisを正本とし、**解析結果としての`unclear`** と **Current推論が存在しない`unknown`** を区別する。
 
 上位仕様は `../basic-design.md`。
 
@@ -19,9 +19,7 @@ CORE/src/novel_core/style_analysis/
     scene_boundary.py
 ```
 
-## 3. Scene Taxonomy
-
-`scene-taxonomy-v1`。
+## 3. Scene Taxonomy v1
 
 ### function: multi-select
 
@@ -59,7 +57,7 @@ other
 unclear
 ```
 
-### pace: single-select
+### pace
 
 ```text
 slow
@@ -68,7 +66,7 @@ fast
 unclear
 ```
 
-### information_load: single-select
+### information_load
 
 ```text
 low
@@ -77,7 +75,7 @@ high
 unclear
 ```
 
-### interaction: single-select
+### interaction
 
 ```text
 solo
@@ -88,79 +86,94 @@ mixed
 unclear
 ```
 
-`unclear` は他Labelと同時指定しない。`other` は分類可能だがTaxonomy外、`unclear` は判断不能。
+Multi-selectで`unclear`はConcrete Labelと同時Effectiveにしない。
 
-## 4. Annotation形式
+`other` = 分類可能だがTaxonomy外。
+
+`unclear` = Current推論は存在するが判断不能。
+
+`unknown` = Current推論/Manual値が存在しないEffective View状態でありTaxonomy Labelではない。
+
+## 4. Raw Annotation
+
+Axisごとに1 Annotation。
 
 Multi-select:
 
 ```json
-[
-  {"label": "daily", "confidence": 0.91},
-  {"label": "dialogue", "confidence": 0.96}
-]
+{"labels":[{"label":"daily","confidence":0.91},{"label":"dialogue","confidence":0.96}]}
 ```
 
 Single-select:
 
 ```json
-{"label": "medium", "confidence": 0.84}
+{"label":"medium","confidence":0.84}
 ```
 
-Axisごとに `style_annotations` へ保存する。
+`scene-semantic-classifier`入力:
 
-## 5. Scene ClassifierはEntity/Term非依存
+- Scene Text。
+- Block ID/type/text。
 
-`scene-semantic-classifier` はScene本文の読み味を分類するため、次だけを入力にする。
+Entity/Term/Speaker/Genre/別Scene全文は入力しない。
 
-- Scene全文
-- Block ID/type/text
+## 5. Effective View共通順位
 
-Speaker名、Entity一覧、Term一覧、作品あらすじ、Genre、前後Scene全文を入力しない。
+10を正本とし、Scene/Block/POVも次を使う。
 
-これによりEntity/Term Resolverの状態変更でScene Classifierを無駄にStale化しない。
+```text
+ManualOverride
+> Confirmed Current Inference
+> Current Eligible Inference
+> Unknown/Default
+```
 
-## 6. Function定義
+Rejected Current InferenceはEffectiveにしない。
 
-| Label | 判定基準 |
-|---|---|
-| daily | 日常行動・雑談・通常生活が中心 |
-| setup | 後続展開の前提・準備 |
-| dialogue | 会話自体がScene推進の中心 |
-| exposition | 設定・背景・知識伝達が中心 |
-| meeting | 会議・協議・正式打合せ |
-| investigation | 情報収集・推理・検証 |
-| travel | 移動そのものが主要活動 |
-| introspection | 内面思考・自己評価が中心 |
-| conflict | 対立・交渉・口論 |
-| action | 身体行動・戦闘・追跡等 |
-| transition | 時間/場所/章の橋渡し |
-| reveal | 重要情報の明示 |
-| payoff | 前段準備/伏線の成果が中心 |
-| other | 上記以外の明確な機能 |
-| unclear | 材料不足・混在で判断不能 |
+ConfirmedはConfidence Thresholdに関係なくRaw値を採用するが、Taxonomy/Schema Validationは必須。
 
-## 7. Pace / Information Load
+Current Rawが存在しない、またはCurrent RawがRejectedされManual/Confirmed代替もない場合:
 
-Pace:
+```text
+source = unknown
+value = null
+```
 
-- slow: 内省・詳細描写・長い説明が多く状態変化が少ない
-- medium: 中間
-- fast: 短いやり取り/行動/状態変化が連続
-- unclear: 単一判定が不安定
+## 6. Effective Function / Tone
 
-Information Load:
+Manual Set List:
 
-- low: 既知前提の会話/行動中心
-- medium: 数個の新情報
-- high: 固有概念・設定・因果説明が集中
-- unclear: 判断不能
+- Known Labelのみ。
+- 1件以上。
+- 重複なし。
+- `unclear` + Concrete同時禁止。
 
-Term Analyzer結果を補助Signalに使わない。Scene本文だけで判定する。
+Confirmed Current Annotation:
 
-## 8. POV Classifier
+- Raw Label集合をValidation。
+- Concrete Labelが1件以上なら`unclear`除外。
+- Concrete 0件なら`[unclear]`。
 
-POV:
+Unreviewed Current Raw:
+
+1. `confidence >= AnalysisPolicy.scene_label_effective` のConcrete Labelだけ採用。
+2. Concreteが1件以上なら`unclear`除外。
+3. Concreteが0件だがRaw Annotationあり -> `[unclear]`, source=inferred。
+4. Rawなし -> source=unknown/value=null。
+
+## 7. Effective Single Axis
+
+Pace/InformationLoad/Interaction:
+
+- ManualOverride最優先。
+- Confirmed Current -> Raw Labelを採用。
+- Unreviewed Current Raw confidence >= `scene_label_effective` -> Raw Label。
+- Unreviewed Current Rawはあるがthreshold未満 -> `unclear`, source=inferred。
+- Rawなし/Rejectedのみ -> value=null, source=unknown。
+
+## 8. POV
+
+Raw:
 
 ```text
 pov_mode = first_person | third_limited | omniscient | objective | unclear
@@ -168,21 +181,28 @@ pov_entity_id nullable
 confidence
 ```
 
-`pov-classifier` は `entity-resolver` に依存する。
+`pov-classifier` はEntity Resolverに`subject_partial_allowed`で依存し、04 `mention_resolution` Stateも入力に含める。
 
 入力:
 
-- Scene Text/Blocks
-- 同SceneのEffective Mention Entity
-- Enabled Person EntityのEffective Name
+- Scene Text/Blocks。
+- 同Scene Current Effective Mention Entity。
+- Enabled Person Entity Name。
 
-Mode自体はEntity未解決でも判定可能。Entityが一意に解決できない場合は `pov_entity_id=NULL`。
+Effective:
 
-POV Shift疑いはRaw Annotationで保持し、Structureを直接変更しない。
+- Manual Override。
+- Confirmed Current。
+- Unreviewed Current confidence >= `pov_effective`。
+- Unreviewed Current confidence未満 -> mode=unclear/source=inferred。
+- Rawなし/Rejectedのみ -> source=unknown、mode/entity null。
+- Raw EntityがDisabled/Current Resolution外 -> Entity IDだけNULL。Modeは保持可。
 
-## 9. Block Semantics
+POVはv1 Aggregate/Lint Selector対象外。
 
-`block-semantic-classifier` はBlock Text/Typeだけを入力とし、Entity/Term/Speakerに依存しない。
+## 9. Block Primary Semantic
+
+`block-semantic-classifier` は`block_type=narration`だけ。
 
 Primary:
 
@@ -196,51 +216,27 @@ other
 unclear
 ```
 
-Secondary:
+Entity/Term/Speaker非依存。Dialogueは分類しない。
 
-```text
-sensory
-worldbuilding
-backstory
-emotion
-reasoning
-summary
-foreshadowing
-```
+Effective:
 
-構成比はPrimaryだけ。`other/unclear` はカテゴリ分子に入れない。
+- Manual `block.semantic_primary`。
+- Confirmed Current。
+- Unreviewed Current Raw + confidence >= `block_semantic_effective`。
+- Unreviewed Current Rawありthreshold未満 -> unclear/inferred。
+- Rawなし/Rejectedのみ -> value=null/source=unknown。
 
-Dialogue Function:
-
-```text
-casual
-information
-question
-exposition
-conflict
-command
-emotional
-other
-unclear
-```
-
-Multi-label可。v1必須Metric外。
+Secondary Tag/Dialogue Functionはv1で実装しない。
 
 ## 10. Scene Boundary Analyzer
 
-Analyzer ID: `scene-boundary-detector`。
-
-入力は03 Automatic Base StructureRevisionの1 Base Sceneずつ。Candidate位置はそのScene内Block境界だけ。
+Input: 03 Automatic Base Scene。OutputはBlock境界`after_block_id`だけ。
 
 ```json
 {
-  "boundaries": [
-    {
-      "after_block_id": 55,
-      "reasons": ["time_shift", "location_shift"],
-      "confidence": 0.88
-    }
-  ]
+  "after_block_id":55,
+  "reasons":["time_shift","location_shift"],
+  "confidence":0.88
 }
 ```
 
@@ -250,124 +246,92 @@ Reason:
 time_shift
 location_shift
 pov_shift
-participant_reset
 context_reset
 ```
 
-Boundary AnalyzerはEntity Resolver/Speaker/Termを入力にしない。本文の文脈だけで判定する。
+Entity/Speaker/Term非依存。
 
 Validation:
 
-- `after_block_id` がInput Base Scene所属
-- Scene末尾Blockは候補不可
-- 既存Separator/Heading境界重複不可
-- Confidence 0〜1
-- Reason Known Enum >=1
+- Input Base Scene所属。
+- Scene末尾不可。
+- Existing明示境界重複不可。
+- Confidence 0..1。
+- Known Reason 1件以上。
 
-Invalid CandidateだけDrop。
+全Valid CandidateをRaw Annotation保存する。`scene_boundary_candidate_min`未満も保存する。
 
-## 11. Boundary Annotation
+## 11. Boundary Policy
 
-```text
-annotation_type = scene_boundary_candidate
-subject_type = block
-subject_id = after_block_id
-analysis_run_id = boundary run
-confidence
-value_json = {
-  "base_structure_revision_id": 7,
-  "reasons": ["time_shift"]
-}
-```
+- `scene_boundary_auto_apply`: 03 Semantic Materializationにだけ使用。
+- `scene_boundary_candidate_min`: API/UI Proposal表示下限にだけ使用。
 
-Run `structure_revision_id` も同Base Revision。
+Candidate Min変更でAnalysisRun/StructureをStaleにしない。
 
-## 12. Boundary適用
+Raw Boundary AnalyzerはPolicy Threshold非依存。
 
-09 AnalysisPolicy:
-
-```text
-scene_boundary_auto_apply = 0.85
-scene_boundary_candidate_min = 0.60
-```
-
-- >= Auto Apply: Semantic Structure Materialize対象
-- Candidate Min以上/Auto Apply未満: Proposalとして保存
-- Candidate Min未満: DB保存不要
-
-ReviewQueueへ自動追加しない。
-
-## 13. Confidence Policy
-
-09 AnalysisPolicy正本:
-
-```text
-scene_label_effective = 0.80
-block_semantic_effective = 0.75
-scene_boundary_auto_apply = 0.85
-scene_boundary_candidate_min = 0.60
-```
-
-Threshold未満Scene/Block分類はRaw Inferenceとして保存しEffective Viewでは `unclear`。
-
-## 14. Chunking / Reduce
+## 12. Chunking
 
 Scene >30,000 Code Points:
 
-- Block境界で最大15,000 Code Points Chunk
-- 各Chunk分類
-- Function/Tone: Labelごと最高ConfidenceでRaw集合
-- Concrete Labelが残れば`unclear`除外。Concrete 0なら`unclear`
-- Pace/InformationLoad/Interaction: Chunk SummaryからReduce Call
-- POV: Entity Resolver結果を参照しつつ矛盾時`unclear`
+- Block境界で最大15,000 Code Points Chunk。
+- Function/Tone: Labelごとmax confidence Reduce。
+- Pace/InformationLoad/Interaction: Chunk SummaryからReduce Call。
+- POV: Reduce Call。
+- Block Primary: Block単位。
 
-BoundaryはAdjacent Chunk ContextをOverlap可。Output Block IDはDedupe。
+Chunkingで永続Structureを変更しない。
 
-## 15. Human Overrideとの関係
+## 13. Aggregate / Lint State
 
-Scene/Block Classifier Run自体はManual OverrideでStaleにしない。Raw Inferenceとして有効なまま保持する。
+Scene Axisは07 Semantic Metric入力ではない。
 
-10 Scene Semantic OverrideはEffective Viewだけを変え、07 `style-metrics-semantic` のState Fingerprintを変化させてMetric再計算を促す。
+Function/Tone/Pace/InformationLoad/Interaction Correction/Review:
 
-POV Entity解決に影響するEntity Human State変更は09 `pov-classifier` Current判定へ反映する。
+- Raw Scene Classifier Run非Stale。
+- Semantic Metric非Stale。
+- 08 Scene Filter State変更。
+- 11参照Selector Axis Input変更。
 
-## 16. Version
+POV Correctionはv1 Display-only。
 
-```text
-scene-semantic-classifier v1
-block-semantic-classifier v1
-pov-classifier v1
-scene-boundary-detector v1
-scene-taxonomy-v1
-```
+Block Primary Correction/Reviewだけ07 Semantic Metricへ影響する。
 
-## 17. Test
+## 14. Selector Matching
 
-- Daily/Exposition/Meeting/Introspection/Action/Travel/Reveal/Conflict
-- Unclear vs Other
-- Scene ClassifierがSpeaker/Entity/Term非依存
-- Block ClassifierがSemantic Registry非依存
-- Chunk Reduce
-- POV Entity Resolver Dependency
-- Disabled EntityはPOV Entity候補外
-- Boundary Block Membership
-- Scene末尾Candidate拒否
-- Invalid CandidateだけDrop
-- High Candidate Auto Apply
-- Middle Candidate Proposal
-- Low Candidate非保存
-- Annotation Contract/Base Structure一致
-- Scene OverrideでClassifier Run自体はStaleにならずMetricだけ再計算
+08/11共通:
 
-## 18. Codex禁止事項
+- `source=unknown` -> Selector判定不能。
+- Effective `unclear` -> 通常Taxonomy値としてMatch/Non-match。
+- Multi-select Axis: Selector scalarはContains、Selector listはIntersection>=1。
+- Single-select Axis: Equality、Selector listならIN。
+- 複数AxisはAND。
 
-- Sceneを単一Scene Typeへ縮約
-- Functionを数値Heuristicだけで決定
-- Scene ClassifierへSpeaker/Entity/Termを暗黙入力
-- Block ClassifierへEntity/Termを暗黙入力
-- LLMがStructure Rowを直接編集
-- Secondary Tag二重カウント
-- 判断不能をOtherへ強制
-- Boundary Proposal全件ReviewItem化
-- Arbitrary Character Offset Boundary
-- UnclearとConcrete Labelの同時Effective化
+## 15. Test
+
+- Multi-select / unclear exclusivity。
+- No Current Run -> source unknown/value null。
+- Low Confidence Current -> unclear/inferred。
+- Rejected Currentだけ -> unknown。
+- Confirmed InferenceはThreshold未満でもValidation後採用。
+- Manual unclearとunknown区別。
+- Scene Classifier Registry非依存。
+- POV mention_resolution State依存/threshold/Disabled Entity。
+- Block Primary Narration only。
+- Block Primary unknown vs unclear。
+- Boundary all-valid save。
+- Candidate Minはdisplay only。
+- Scene Axis OverrideでMetric非Stale。
+- Block Primary OverrideでMetric Stale。
+- Selector unknown/unclear区別。
+
+## 16. Codex禁止事項
+
+- Current分類なしをTaxonomy `unclear`として保存/集計。
+- Sceneを単一Typeへ縮約。
+- Scene ClassifierへEntity/Term/Speaker入力。
+- DialogueをBlock Primary分類。
+- Secondary/Dialog Function追加。
+- LLMから任意Character Offset Split。
+- Candidate Minを保存Thresholdにする。
+- Scene Axis修正だけでSemantic Metric再解析。

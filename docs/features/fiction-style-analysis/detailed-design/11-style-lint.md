@@ -2,93 +2,168 @@
 
 ## 1. 目的
 
-自作品Measurementを選択したStyleProfileと比較し、差分を `Finding` として提示する。Lintは文章の優劣を断定せず、参照範囲との差・根拠・解析coverageを示す。
+Project DocumentのMeasurementを指定StyleProfileVersionと比較し、参照範囲との差をFindingとして提示する。文章の優劣を断定せず、Coverage・Evidence・Input Stalenessを示す。
 
 上位仕様は `../basic-design.md`。
 
-## 2. 実装先
+## 2. Lint Request / Scope
 
 ```text
-CORE/src/novel_core/style_analysis/
-  lint_models.py
-  lint_repository.py
-  lint_service.py
-  evidence_service.py
-```
-
-自動書き換えはv1 scope外。
-
-## 3. Lint入力
-
-```text
-project document_id
+document_id
 text_revision_id
 structure_revision_id
 profile_id
 profile_version_no
-basic/semantic metric run IDs
+scene_id nullable
 ```
 
-指定revisionを正本としlatest draftへ暗黙読み替えしない。
+ClientはMetric Run IDを指定しない。LintServiceが09 Current Metric Runを必要Groupだけ`subject_partial_allowed`で解決する。
 
-## 4. Rule適用
+Text/Structure/ProfileVersionをlatestへ暗黙読み替えしない。
 
-specificity:
+### `scene_id = NULL`
+
+Document Lint。
 
 ```text
-character
-> multi-axis scene selector
-> single-axis scene selector
-> global
+document rules
+scene rules for all scenes
+character rules
 ```
 
-同metric/同specificityで複数enabled Ruleが競合する場合はProfile version作成時のvalidation errorとする。Lint開始時に初めて発見しない。
+を評価する。
 
-## 5. Range判定
+### `scene_id != NULL`
 
-- `min <= observed <= max`: Findingなし
-- 下回る: lower deviation
-- 上回る: upper deviation
-- preferredだけから外れてもFindingなし
-- min/max片側のみ可
-
-## 6. Deviation
-
-通常range幅 > 0:
+Specific Scene Lint。
 
 ```text
-upper = (observed - max) / (max - min)
-lower = (min - observed) / (max - min)
+scene rules for that scene only
 ```
 
-`min == max` は07 `MetricDefinition.zero_width_tolerance` を使う。
+を評価する。Document/Character Ruleは評価しない。
+
+v1 Character MeasurementはDocument全体人物単位でありScene×Character Measurementを持たないため。
+
+## 3. Rule Target Enumeration
+
+`target_scope`を正本とする。
+
+### document
+
+Target=StyleDocument 1件。Selector`{}`。
+
+### scene
+
+Target=指定StructureRevisionのScene。
+
+### character
+
+Selector`project_character_id`を04 Manual Linkで:
 
 ```text
-deviation = abs(observed - boundary) / tolerance
+project_character_id
+-> same Project Documentのenabled person Style Entity
+-> character Measurement target_id
 ```
 
-MetricDefinitionにtoleranceがないzero-width RuleはProfile validation errorとする。Lint側でunitから値を推測しない。
+へ解決する。
 
-## 7. Severity
+- Linkなし/Entity disabled -> Not Applicable。Pairを作らない。
+- Linkあり + Character Measurementなし -> ApplicableだがMissing。
+- Sceneとの組合せなし。
 
-`severity_policy=standard`:
+## 4. Scene Selector
 
-| deviation | severity |
-|---:|---|
-| <= 0 | none |
-| >0〜0.25 | info |
-| >0.25〜0.75 | warning |
-| >0.75 | strong_warning |
-
-weightはsortだけに使う。
+許可Axis:
 
 ```text
-sort_score = deviation * weight
+function
+tone
+pace
+information_load
+interaction
 ```
 
-UI文言は「参照範囲との差」として表示する。
+StyleRule Selectorは08どおり`scene` wrapperなし。
 
-## 8. Finding
+複数Axis AND、同Axis配列OR。Selector`{}`は全SceneへMatch。
+
+### Available + Match
+
+Matching Rule候補。
+
+### Available + Non-match
+
+Not Applicable。Coverageへ数えない。
+
+### Required Axis `source=unknown`
+
+Selector判定不能。
+
+- `applicable_rule_count += 1`。
+- `missing_rule_count += 1`。
+- Findingなし。
+- `SELECTOR_UNAVAILABLE:{axis}` WarningをDedupe。
+- Specificity競合へ参加させない。
+
+Unavailable具体Ruleがあっても、AvailableなGlobal/低Specificity Ruleの評価を妨げない。
+
+Effective`unclear`は通常Taxonomy値としてMatch判定する。
+
+## 5. Specificity
+
+同じ`target_scope`内でAvailableかつMatching RuleだけをTarget/Metricごとに比較する。
+
+```text
+document: 0
+scene: Selectorに含まれるAxis数
+character: 0
+```
+
+最大Specificity Ruleをすべて評価し、低Specificity Matching RuleはそのTarget/Metricでは評価しない。
+
+同SceneへDaily RuleとCalm Ruleが同Specificityで一致すれば両方評価する。
+
+完全同一`target_scope + canonical selector + metric + version`のEnabled Rule重複だけ08で拒否する。
+
+## 6. Range / Deviation / Severity
+
+08どおりEnabled Ruleは`min_value`と`max_value`を両方持つ。
+
+- `min <= observed <= max` -> Findingなし。
+- `observed < min` -> Lower Finding。
+- `observed > max` -> Upper Finding。
+- preferred差だけではFindingなし。
+
+### Range幅 > 0
+
+```text
+upper deviation = (observed - max) / (max - min)
+lower deviation = (min - observed) / (max - min)
+```
+
+### `min == max`
+
+07 `MetricDefinition.zero_width_tolerance`を使う。
+
+```text
+deviation = abs(observed - min) / tolerance
+```
+
+ToleranceなしZero-width Ruleは08 Profile Validation Error。
+
+Severity `standard`:
+
+```text
+0 < deviation <= 0.25      info
+0.25 < deviation <= 0.75   warning
+deviation > 0.75           strong_warning
+```
+
+`sort_score = deviation * weight`。WeightはSeverityに使わない。
+
+## 7. Finding
 
 ```text
 id
@@ -98,8 +173,8 @@ target_type
 target_id
 metric_name
 observed_value
-expected_min nullable
-expected_max nullable
+expected_min
+expected_max
 preferred_value nullable
 deviation
 severity
@@ -109,50 +184,21 @@ evidence_json
 created_at
 ```
 
-初期explanation code:
+同Target/Metricへ同Specificity Ruleが複数一致すればRuleごとにFinding生成可。UIはRule Scope/Selectorを表示する。
 
-```text
-above_reference_range
-below_reference_range
-insufficient_dialogue
-long_narration_run
-high_exposition_ratio
-high_new_term_density
-long_term_explanation_delay
-```
+## 8. Evidence
 
-定型説明はCORE/APIでcode + metric dataから生成し、LLM callは不要。
+最大5 Span。
 
-## 9. Evidence
+- Narration Run: Run Span。
+- Exposition Ratio: 長いEffective Exposition Block最大5。
+- New Term Density: Eligible First Appearance Mention最大5。
+- Explanation Delay: First Mention + Effective Sufficient Explanation。
+- 一意Spanなし: `evidence_kind=scope_metric`。
 
-最大5span。
+Finding Rowへ本文Excerptを複製しない。Text/Structure ID + Span/Subject IDを保持する。
 
-- narration run: run span
-- exposition ratio: 長いexposition Block上位5
-- new term density: eligible初出Term Mention上位5
-- explanation delay: 初出 + sufficient explanation
-- scope ratio: 一意spanがなければ `evidence_kind=scope_metric`
-
-Finding rowへ本文excerptを複製しない。
-
-## 10. Scope
-
-```text
-document whole
-specific scene
-```
-
-複数episodeは1documentずつjob作成。
-
-## 11. Missing metric / coverage
-
-Rule対象Metricがない場合はFindingを作らずwarningへ追加する。
-
-```text
-METRIC_UNAVAILABLE:{metric}
-```
-
-「50%以上missingならfail」のような割合thresholdは設けない。LintRunは最後まで処理し、次を返す。
+## 9. Coverage
 
 ```text
 enabled_rule_count
@@ -161,17 +207,102 @@ missing_rule_count
 coverage_ratio
 ```
 
-`applicable_rule_count=0` でもrun自体は `succeeded`。UIは「比較可能なMetricがありません」と表示する。分析不足とシステム障害を混同しない。
+`enabled_rule_count`:
+
+- Document Lint: ProfileVersionの全Enabled Rule数。
+- Scene-only Lint: Enabled Scene Rule数。
+
+`applicable_rule_count`:
+
+- Specificity選択後に評価対象となったRule×Target Pair。
+- Selector Unavailable Rule×Scene Pair。
+
+`missing_rule_count`:
+
+- Applicable PairでMeasurementなし。
+- Selector Unavailable Pair。
+
+```text
+applicable == 0 -> coverage_ratio = 0.0
+else -> (applicable - missing) / applicable
+```
+
+Warnings:
+
+```text
+METRIC_UNAVAILABLE:{metric}
+SELECTOR_UNAVAILABLE:{axis}
+```
+
+Missing割合だけでLintをFailさせない。
+
+## 10. 必要Inputだけ解決
+
+Enabled Rule + Request Scopeを先に読み必要Inputだけ解決する。
+
+- Basic Metric Rule候補 -> Basic Metric Run。
+- Semantic Metric Rule候補 -> Semantic Metric Run。
+- Scene Rule -> そのRuleが参照するAxisだけEffective State。
+- Character Rule -> 参照project_character_id Linkだけ。
+
+Scene-only LintではDocument/Character Rule入力を解決しない。
+
+## 11. Lint Input Fingerprint
+
+```text
+document_id
+text_revision_id
+structure_revision_id
+profile_version_id
+scene_id nullable
+selected required basic_metric_run_id nullable
+selected required semantic_metric_run_id nullable
+referenced Scene Axis state only
+referenced Project Character Link mapping only
+```
+
+Scene State:
+
+```text
+(scene_id, axis, source, effective_value)
+```
+
+Character Link:
+
+```text
+(project_character_id, style_entity_id)
+```
+
+をSortしてCanonical SHA-256。
+
+Unknown→Known変化も反映する。未使用Run/Axis/Link変更では変えない。
+
+ProfileVersionがImmutableなのでRule一覧を別Hashしない。
 
 ## 12. Staleness
 
-LintRunはinput TextRevision/Draft IDを保持する。latest draftが異なればAPI `stale=true`。
+`stale=true` if:
 
-旧Findingは削除しない。UIから最新本文capture/analyze/lintへ進める。
+1. Lint TextRevision != Document Current Text、または
+2. Lint StructureRevision != Document Current Structure、または
+3. 同Request Scope/ProfileVersionで現在Input Fingerprintと保存値が不一致。
 
-## 13. Finding review
+Historical Lintは閲覧可能。StaleはErrorではない。
 
-`style_finding_reviews`:
+## 13. LintRun Status
+
+```text
+running
+succeeded
+failed
+cancelled
+```
+
+Metric/Selector不足はWarning/Coverage。Partial Statusは使わない。Queue状態は`style_jobs`。
+
+09 `run_lint` Jobから実行する。
+
+## 14. Finding Review
 
 ```text
 finding_id
@@ -180,64 +311,65 @@ note nullable
 created_at
 ```
 
-同一TextRevision/ProfileVersionかつ同rule+target+evidence fingerprintならreview状態を表示継承してよい。別revisionへ継承しない。
+Finding ReviewもAppend-only Eventとし、同Findingの最新Reviewを表示状態に使う。
 
-## 14. Sort
-
-```text
-strong_warning
-warning
-info
-```
-
-同severityは `sort_score DESC, target order ASC, id ASC`。
-
-## 15. API返却
-
-Finding list:
+再Lint時の表示継承条件:
 
 ```text
-finding metadata
-metric values
-最大5 excerpt
+same text_revision_id
+same structure_revision_id
+same profile_version_id
+same rule_id
+same target identity
+same evidence canonical fingerprint
 ```
 
-excerpt最大400 code points/件。
+別Revisionへ継承しない。
 
-## 16. 推奨文言
+## 15. Sort / 文言
 
-v1は数値的な指摘だけ。
+`strong_warning -> warning -> info`。
 
-例:
+同Severityは:
 
 ```text
-このSceneの説明文比率は42%で、参照範囲18〜31%を上回っています。
-最長の説明Blockは286文字です。
+sort_score DESC
+target order ASC
+id ASC
 ```
 
-文章生成・書き換え提案は別設計。
+文言は数値差を定型表示する。生成的な本文書き換え提案はv1対象外。
 
-## 17. テスト
+## 16. Test
 
-- range内Findingなし
-- min/max上下
-- zero-width MetricDefinition tolerance
-- tolerance未定義Profile validation error
-- specificity
-- weightはseverity非影響
-- evidence最大5
-- missing metric warning
-- missingが多くてもrun成功 + coverage
-- applicable 0表示
-- stale detection
-- ignored継承同revisionのみ
+- Document LintでDocument/Scene/Character Rule。
+- Scene-onlyでScene Ruleだけ。
+- Scene-only enabled_rule_countはScene Ruleだけ。
+- Character Link disabled/なしNot Applicable、LinkありMeasurementなしMissing。
+- Selector Available Match/Non-match。
+- Selector Unknown -> Applicable+Missing+Warning。
+- Unknown Specific RuleがGlobal Ruleを抑制しない。
+- Effective unclearは通常Taxonomy値。
+- Same Specificity複数Rule。
+- Both-side Range内/上下。
+- min=max Tolerance。
+- Preferred差だけでFindingなし。
+- Basic-onlyでSemantic Run変更Fingerprint不変。
+- 未参照Scene Axis変更Fingerprint不変。
+- Unknown→Known参照AxisでFingerprint変化。
+- Input Fingerprint Stale。
+- Coverage0 Succeeded。
+- Evidence/Review継承。
 
-## 18. Codex実装時の禁止事項
+## 17. Codex禁止事項
 
-- 総合文章品質scoreを追加しない。
-- Lintを自動修正へ接続しない。
-- preferredとの差だけでwarningにしない。
-- Profile外heuristicを勝手に追加しない。
-- missing割合だけでLintRunをfailさせない。
-- zero-width toleranceをunitから推測しない。
-- 本文の長い引用をFinding rowへ複製しない。
+- Current Scene Axisなしを`unclear`としてSelector判定。
+- Selector Unavailable RuleでGlobal Ruleを抑制。
+- target_scopeをSelectorから推測。
+- Aggregate形式の`scene` wrapperをStyleRule Selectorとして要求。
+- Scene-onlyでDocument/Character Rule評価。
+- 片側Range用の独自Deviation式追加。
+- Preferred差だけでFinding生成。
+- Missing割合でLint Fail。
+- StaleをError扱い。
+- 総合品質Score/自動本文修正追加。

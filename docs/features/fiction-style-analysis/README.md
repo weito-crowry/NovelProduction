@@ -1,6 +1,6 @@
 # Fiction Style Analysis
 
-小説本文の収集・正規化・構造解析・意味抽出・文体計測・文体プロファイル化・自作品評価を扱う開発単位の設計ドキュメント。
+小説本文のLocal Import、正規化、構造解析、意味抽出、文体計測、Corpus/Profile化、自作品Lintを扱う開発単位の設計ドキュメント。
 
 ## ドキュメント構成
 
@@ -26,32 +26,48 @@ docs/features/fiction-style-analysis/
    └─ 14-testing-and-evaluation.md
 ```
 
-- [basic-design.md](basic-design.md): 上位責務、Current Revision、Registry、Runtime、Corpus/Profileの基本設計。
-- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、SA-A〜SA-H、Codex実装運用。
+- [basic-design.md](basic-design.md): 上位責務とv1 Scope。
+- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、SA-A〜SA-H、Codex実装運用。
+
+## v1の入口
+
+Reference Corpusの入口はユーザーが手元に用意したLocal Fileだけとする。
+
+```text
+TXT
+HTML file
+EPUB
+```
+
+Narou/Kakuyomu等のサイト固有Network Downloader、Generic Crawler、Refreshはv1 Scope外。取得方式は別途検討し、将来Phaseで追加する。
 
 ## 設計方針
 
 - Source/Revision/Run/Version/Dependencyを追跡可能にする。
 - Current Text/StructureはStyleDocumentの明示Pointerで管理する。
-- Stable IdentityとRunごとの推論を分離する。
+- Raw/Canonical/Structure/Semantic/Measurement/Aggregate/Profileを分離する。
+- Stable Entity/Term IdentityとRunごとの推論を分離する。
 - Reference WorkではEntity/Term RegistryをEpisode横断で管理する。
+- Registry自然成長とManual Correctionを区別し、不要な全再解析を避ける。
 - Manual Entity/Term/AliasをStyle Analysis内で作成可能にする。
-- Analyzer入力へ影響するHuman DecisionはState Fingerprintで追跡する。
+- Human Decisionは必要なAnalyzer/Metric/Aggregate/LintだけへStateとして反映する。
 - Unknown/Low-confidenceを正常状態として扱い、Reviewを必須化しない。
-- JobはProject-local DBへ永続化し、単一Workerで処理する。
+- JobはProject-local DBへ永続化し、API Process全体の単一Workerで処理する。
+- Work一括解析は子Jobを作らず同Work Job内でEpisode順に実行する。
+- Aggregate/Profile/Lintは入力FingerprintとCoverageを持つ。
 - 実装判断をCodexへ残さないため、DB/API/UI/Test契約を詳細設計で具体化する。
 
 ## 実装境界
 
-- CORE: Domain、SQLite、Normalization、Structure、Analyzer、Metric、Profile、Lint
-- API: Source Adapter、Model Adapter、StyleJobWorker、FastAPI Routes
-- WEBUI: Collection、Reference Work Analysis、Document Analysis、Corpus/Profile、Override/Review、Lint
-- MCP: v1 Scope外。既存59 Tool Contractを維持
+- CORE: Domain、SQLite、Normalization、Structure、Analyzer、Metric、Aggregate、Profile、Lint。
+- API: Local Source Adapter、Model Adapter、StyleJobWorker、FastAPI Routes。
+- WEBUI: Local Sources、Reference Work Analysis、Document Analysis、Corpus/Profile、Override/Review、Lint。
+- MCP: v1 Scope外。既存59 Tool Contractを維持。
 
-## ステータス
+## Status
 
-- 基本設計: v0.4 Draft
-- 詳細設計: v0.4 Self-review反映版
-- 実装: 未着手
+- 基本設計: v1.0 Implementation Ready。
+- 詳細設計: v1.0 Implementation Ready。
+- 実装: 未着手。
 
 実装開始時は `detailed-design/README.md` のSA-A〜SA-Hを基準に、ChatGPT側でPhase Scopeを確定してCodex Lunaへ具体的に指示する。

@@ -2,175 +2,185 @@
 
 ## 1. 目的
 
-Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選択、Current Structure、Job表示、Manual Entity/Term操作、Query Invalidationを確定する。
+Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選択、Current Pointer、Local File Import、Analysis Job、Manual Correction、Aggregate/Profile/Lint UIを確定する。
 
 上位仕様は `../basic-design.md`。
 
 ## 2. 境界
 
-- v1でMCP Tool追加なし、既存Tool Count 59維持。
+- v1でMCP Tool追加なし。既存Tool Count 59維持。
 - Style推論から既存Character/World/Canonを自動更新しない。
 - WebSocket/SSE追加なし。JobはPolling。
+- Source Site固有Network Downloader/Refreshなし。
+- Local TXT/HTML/EPUB Importのみ。
 - rights_basis/毎回の確認Dialogなし。
+- 既存API Client/Query Cache/Project Scope Error Contractを再利用する。
+- Profile Import/Exportはv1 scope外。
 
-## 3. API実装先
+URL Prefix:`/projects/{project_id}/style-analysis`。
 
-```text
-API/src/novel_api/
-  style_analysis/
-    ingestion_service.py
-    source_fetcher.py
-    runtime.py
-    job_worker.py
-    model_client.py
-    adapters/...
-  routes/
-    style_sources.py
-    style_analysis.py
-    style_corpora.py
-    style_profiles.py
-    style_review.py
-    style_lint.py
-  schemas/style_analysis.py
+## 3. Revision明示方針
+
+- Text取得:`text_revision_id`。
+- Structure取得/編集:`structure_revision_id`。
+- Analyze:`text_revision_id`必須、Structure optional。
+- Lint:Text + Structure + Profile Version。
+
+Semantics/MetricはStructure IDを明示しServerが09 Current Runを選ぶ。Responseは採用Run IDを返す。
+
+latest Revision/Structureへ暗黙読み替えしない。
+
+## 4. Analysis Status
+
+10 `AnalysisStatusService`を正本とする。
+
+```json
+{
+  "analysis_status": {
+    "basic":{"state":"not_analyzed | current | stale","reasons":[]},
+    "semantic":{"state":"not_analyzed | current | stale | partial","reasons":[]}
+  }
+}
 ```
 
-既存API Client/Query Cacheを再利用する。
+Deterministicのみ完了ならBasic current / Semantic not_analyzed。
 
-## 4. URL Prefix / Revision方針
+`analysis_stale`等の永続boolをAPI Contractへ追加しない。
+
+## 5. Local File Import API
 
 ```text
-/projects/{project_id}/style-analysis
+POST /imports/file
 ```
 
-明示必須:
-
-- Text: text_revision_id
-- Structure閲覧/編集: structure_revision_id
-- Lint: text_revision_id + structure_revision_id + profile_version_no
-- Profile Export: version_no
-
-Semantics/MetricはStructure IDを明示しServerが09 Current Run Resolverを使える。ResponseはSelected Run IDを返す。
-
-## 5. Source / Reference Work API
+Multipart:
 
 ```text
-POST   /imports
-POST   /imports/file
-GET    /imports/{import_id}
+source_type = text | html_file | epub
+file
+```
+
+同期処理。Job Rowを作らない。
+
+New:`201` + `reused_existing=false/reference_work_id/source_id`。
+
+Duplicate:`200` + `reused_existing=true/reference_work_id/source_id`。
+
+Upload超過:`413`。
+
+Unsupported Type/Parse/Encoding/Normalization Errorは既存Error EnvelopeでCodeを返す。
+
+URL Import/Refresh Endpointはv1で作らない。
+
+## 6. Reference Work API
+
+```text
 GET    /reference-works
 GET    /reference-works/{work_id}
 GET    /reference-works/{work_id}/episodes
 GET    /reference-episodes/{episode_id}
-POST   /reference-works/{work_id}/refresh
 POST   /reference-works/{work_id}/analyze
 DELETE /reference-works/{work_id}
 ```
 
-Import Response `202 + import_id + job_id`。Refresh/Analyze Response `202 + job_id`。
+### Work Detail
 
-Work/Episode Responseには `current_text_revision_id` とDocumentの `current_structure_revision_id` を含める。
-
-Work Analyze:
-
-```json
-{"preset":"deterministic"}
+```text
+reference_work_id
+source_id
+source_type
+title
+author_name
+episode_count
+created_at
 ```
 
-または `full`。
+Workは複数Episode/StyleDocumentを持つため単一`style_document_id`/Current Pointerを返さない。
 
-Purgeは12 Service Transaction、204。
+### Episode Detail
 
-## 6. Document / Structure API
+```text
+reference_episode_id
+reference_work_id
+title
+order_index
+style_document_id
+current_text_revision_id nullable
+current_structure_revision_id nullable
+current_structure_kind nullable
+analysis_status
+```
+
+### Work Analyze
+
+Request:
+
+```json
+{
+  "preset":"full",
+  "rebuild_structure":false
+}
+```
+
+Preset:`deterministic|full`。
+
+Full Provider未設定はJob作成前409 `ANALYZER_PROVIDER_UNAVAILABLE`。
+
+Job開始時に各Episode Current TextをSnapshotし09どおりEpisode Order順にinline処理する。
+
+Response:`202 + job_id`。
+
+Deleteは01 Source Row Purge、204、通常確認1回。
+
+## 7. Project Capture / Document API
 
 ```text
 POST /project-episodes/{episode_id}/capture
 GET  /documents
 GET  /documents/{document_id}
 GET  /documents/{document_id}/revisions
-GET  /documents/{document_id}/text
+GET  /documents/{document_id}/text?text_revision_id={id}
 GET  /documents/{document_id}/structures
-GET  /documents/{document_id}/structure
+GET  /documents/{document_id}/structure?structure_revision_id={id}
 POST /documents/{document_id}/structures/{structure_revision_id}/select-current
 GET  /documents/{document_id}/structure/boundary-proposals
 POST /documents/{document_id}/scenes/{scene_id}/split
 POST /documents/{document_id}/scenes/merge
 ```
 
-### Document Detail
+Capture Request:`{"draft_id":123}`。Draft ID必須。
 
-返却:
+Document Summary:
 
 ```text
 document_id
 kind
 current_text_revision_id nullable
 current_structure_revision_id nullable
+current_structure_kind nullable
+analysis_status
 ```
 
-Reference DocumentのCurrent TextはReferenceEpisode Pointer。Project Documentは最新CaptureされたTextRevisionをDocument Serviceが明示管理する。Capture成功時に新TextRevisionをCurrent Textとし、Current StructureをNULLへClearする。
+## 8. Structure Select / Manual Edit
 
-### Text
+Structure Selectorは閲覧対象変更だけ。Selector変更でCurrent Pointerを更新しない。
 
-```text
-GET /documents/{id}/text?text_revision_id=10
-```
+Select Currentは同Document + Current TextRevision所属をValidationし200 updated Document Summary。
 
-省略422。
+Split/Merge:
 
-### Structures List
+- Current Structureのみ。
+- `expected_structure_revision_id`必須。
+- 成功新Manual RevisionをCurrent化。
 
-各Revision:
+Boundary Proposal:
 
-```text
-structure_revision_id
-text_revision_id
-source_kind
-parent_structure_revision_id
-is_current
-created_at
-```
+- Default:`confidence >= scene_boundary_candidate_min`。
+- `include_below_threshold=true`:Raw全Valid Candidate。
 
-### Structure Detail
+Candidate Minは表示Filterだけ。
 
-```text
-GET /documents/{id}/structure?structure_revision_id=9
-```
-
-返却:
-
-```text
-text_revision_id
-structure_revision_id
-is_current
-source_kind
-parent_structure_revision_id
-semantic_source_run_id nullable
-scenes/blocks/sentences
-```
-
-### Select Current
-
-```text
-POST /documents/{id}/structures/{structure_revision_id}/select-current
-```
-
-Body不要。
-
-Validation:
-
-- StructureがDocument所属。
-- Document Current TextRevision所属。
-- 成功204またはCurrent Document Summary 200。実装では既存API慣例に合わせ、v1は200で更新後Document Summaryを返す。
-
-この操作はStructureを変更せずPointerだけ更新する。Corpus/Aggregate/Lint Current入力が変わるため関連QueryをInvalidateする。
-
-Historical Structure Selector変更だけではこのAPIを呼ばない。
-
-### Split/Merge
-
-`expected_structure_revision_id` 必須。対象はCurrent Structureに限定する。成功時に新Manual RevisionがCurrentになる。
-
-## 7. Analysis / Job API
+## 9. Document Analysis / Job API
 
 ```text
 POST /documents/{document_id}/analyze
@@ -181,135 +191,91 @@ GET  /analysis-runs
 GET  /analysis-runs/{run_id}
 GET  /analysis-runs/{run_id}/outputs
 GET  /analysis-runs/{run_id}/measurements
-GET  /documents/{document_id}/semantics
-GET  /documents/{document_id}/metrics
-GET  /documents/{document_id}/scenes/{scene_id}/metrics
+GET  /documents/{document_id}/semantics?structure_revision_id={id}
+GET  /documents/{document_id}/metrics?structure_revision_id={id}
+GET  /documents/{document_id}/scenes/{scene_id}/metrics?structure_revision_id={id}
 ```
 
-Analyze:
+Analyze Request:
 
 ```json
 {
   "text_revision_id":10,
   "structure_revision_id":null,
-  "preset":"full"
+  "preset":"full",
+  "rebuild_structure":false
 }
 ```
 
-- Structure omitted: 09のFinal StructureをCurrentへ設定可能。
-- Structure explicit: Current Pointer変更なし。
-- Full Provider未設定: 409 before Job creation。
+Validation:
+
+- Explicit Structureは指定Text所属。
+- Explicit Structure + rebuild=true ->422。
+- Current Manual/Semantic + default Full ->保持。
+- Current Automatic + Full ->Boundary実行/Semantic昇格可能。
+- rebuild=true ->Automaticから再生成。
+
+Public preset:`deterministic|full`のみ。09 `metrics`は内部Correction Job専用。
+
+Full Provider未設定はJob作成前409 `ANALYZER_PROVIDER_UNAVAILABLE`。
 
 Job Response:
 
 ```text
 job_id/job_type/status
 progress_current/progress_total
-result
-warnings
+result/warnings
 error_code/error_message
 ```
 
-終了Status `succeeded|partial|failed|cancelled`。Retryは新Job Row。
+Pollingは`queued|running`中だけ。
 
-## 8. Entity API
-
-Manual Entity/Manual AliasをStyle Analysis内で作成する。
+## 10. Entity / Character Link / Term API
 
 ```text
-POST /entities
-POST /entities/{entity_id}/aliases
+POST   /entities
+POST   /entities/{entity_id}/aliases
+PUT    /documents/{document_id}/character-links/{project_character_id}
+DELETE /documents/{document_id}/character-links/{project_character_id}
+POST   /terms
+POST   /terms/{term_id}/aliases
 ```
 
-### POST /entities
+Manual Entity/TermはReference WorkまたはDocument Scope exactly one。Same Name/Label別Identity可。
+
+Alias再送Idempotent。
+
+Character Link PUT:
 
 ```json
-{
-  "reference_work_id":12,
-  "document_id":null,
-  "entity_type":"person",
-  "canonical_name":"田中"
-}
+{"style_entity_id":77}
 ```
 
-Scope exactly one。Response 201 Entity Effective Summary。
+Style Entityは指定Project DocumentのEnabled Person。Authoring Character/World/Canonを作成/更新しない。
 
-Project Document用は `document_id` を指定する。
-
-これはStyle Entity作成であり、Authoring `characters` を作らない。
-
-### Alias
-
-```json
-{"alias":"田中さん","alias_kind":"title"}
-```
-
-Response 201。完全同一Manual Alias再送はIdempotentに200/既存Resource返却でもよいが、API契約を単純化するためv1は200でEntity Alias Summaryを返す。
-
-Manual Entity/Alias作成後、関連Documentに `analysis_stale=true` を表示できる。自動Work全再解析はしない。
-
-## 9. Term API
+## 11. Semantics / Correction API
 
 ```text
-POST /terms
-POST /terms/{term_id}/aliases
-```
-
-### POST /terms
-
-```json
-{
-  "reference_work_id":12,
-  "document_id":null,
-  "canonical_label":"統合国家知性機構",
-  "term_type":"institution"
-}
-```
-
-Scope exactly one。Response 201 Style Term Summary。
-
-### Alias
-
-```json
-{"alias":"知性機構"}
-```
-
-同一Manual Alias再送はIdempotent。
-
-Authoring World/Canonへ自動登録しない。
-
-## 10. Semantics / Direct Correction
-
-```text
-GET  /documents/{document_id}/semantics?structure_revision_id=9
+GET  /documents/{document_id}/semantics?structure_revision_id={id}
 POST /overrides
 POST /inference-reviews
 ```
 
 Semantics Response:
 
-- Entity/Term/Speaker/Scene/POV Effective/Raw
-- Selected Run IDs
-- `analysis_stale` / stale reasons where applicable
+- Entity/Mention/Speaker。
+- Term/TermMention Explanation。
+- Scene Axis/POV。
+- Block Primary Semantic。
+- Raw + Effective。
+- Selected AnalysisRun IDs。
+- Analysis Status。
 
-Override:
+Override Operation:`set|clear|revert`。Note optional。Generic二重CASなし。
 
-```json
-{
-  "subject_type":"block",
-  "subject_id":55,
-  "field_path":"block.speaker_entity_id",
-  "operation":"set",
-  "value":3,
-  "structure_revision_id":9,
-  "base_analysis_run_id":31,
-  "note":null
-}
-```
+Correction後のJob/Stateは10を正本とする。
 
-Operation `set|clear|revert`。Note optional。Generic二重CASなし。
-
-## 11. Corpus API
+## 12. Corpus API
 
 ```text
 GET/POST /corpora
@@ -318,72 +284,124 @@ POST   /corpora/{corpus_id}/works
 DELETE /corpora/{corpus_id}/works/{work_id}
 PUT    /corpora/{corpus_id}/episodes/{episode_id}
 DELETE /corpora/{corpus_id}/episodes/{episode_id}
-POST   /corpora/{corpus_id}/recompute
-GET    /corpora/{corpus_id}/metrics
 GET    /corpora/compare
 ```
 
-Work Membership追加Request:
+Membership解決は08 CORE Resolverを共用する。
+
+## 13. Aggregate API
+
+Corpus:
+
+```text
+POST /corpora/{corpus_id}/aggregates/recompute
+GET  /corpora/{corpus_id}/aggregates
+```
+
+Reference Work:
+
+```text
+POST /reference-works/{work_id}/aggregates/recompute
+GET  /reference-works/{work_id}/aggregates
+```
+
+Recompute Request:
 
 ```json
-{"reference_work_id":12,"include_all_episodes":true}
+{
+  "specs":[
+    {
+      "measurement_target_type":"document",
+      "filter":{},
+      "metric_names":["dialogue.char_ratio"]
+    },
+    {
+      "measurement_target_type":"scene",
+      "filter":{"scene":{"function":["daily"]}},
+      "metric_names":["dialogue.char_ratio"]
+    }
+  ]
+}
 ```
 
-Episode PUT:
+ContainerはURL、Metric VersionはRegistry Current Version。
 
-```json
-{"membership_mode":"exclude"}
-```
+Response:`202 + recompute_aggregate job_id`。
 
-08 Membership ResolverをCOREで共用する。
+Job ResultはSpec/MetricごとにStatistic→Aggregate IDを返す。
 
-Corpus Metrics/Compare Responseは:
+GETはHistorical Aggregateに`stale/warnings/aggregate_policy_version/count4種`を返す。
+
+## 14. Profile APIは同期
 
 ```text
-source_measurement_count
-sample_count
-work_count
-skipped_target_count
+GET    /profiles
+POST   /profiles/from-corpus
+POST   /profiles/manual
+GET    /profiles/{profile_id}
+PATCH  /profiles/{profile_id}
+GET    /profiles/{profile_id}/versions
+GET    /profiles/{profile_id}/versions/{version_no}
+POST   /profiles/{profile_id}/versions
+POST   /profiles/{profile_id}/activate
+POST   /profiles/{profile_id}/archive
 ```
 
-を区別して返す。
+Profile/Version作成は同期Transaction。Jobを作らない。
 
-## 12. Profile API
+`from-corpus`はExact median/p25/p75 Aggregate IDsを渡す。08 Validation後201。
+
+Stale Aggregate明示利用時はWarningを返すが拒否しない。
+
+Manual/New Version Ruleは`target_scope`必須。
+
+Enabled Ruleはmin/max両方必須。preferred指定時は範囲内。
+
+New Version Requestは`parent_version_no + full rules snapshot`。New VersionだけでActive変更なし。
+
+Import/Export Endpointはv1で作らない。
+
+## 15. Review / Lint API
+
+ReviewItem:
 
 ```text
-GET/POST/PATCH Profile系
-GET/POST Version系
-POST /profiles/{id}/activate
-POST /profiles/{id}/archive
-GET /profiles/{id}/versions/{version_no}/export
-POST /profiles/import
+GET  /review-items
+GET  /review-items/{id}
+POST /review-items/{id}/confirm
+POST /review-items/{id}/reject
+POST /review-items/{id}/ignore
 ```
 
-ActivateはVersion No明示。New VersionだけでActive Version変更なし。
-
-## 13. Review / Lint API
-
-Review Item:
-
-```text
-GET /review-items
-POST confirm/reject/ignore
-```
-
-ReviewItem Writeだけ `expected_version`。
+ReviewItem Writeだけ`expected_version`。
 
 Lint:
 
 ```text
 POST /documents/{id}/lint
-GET /lint-runs
-GET /lint-runs/{id}/findings
+GET  /lint-runs
+GET  /lint-runs/{id}
+GET  /lint-runs/{id}/findings
 POST /findings/{id}/review
 ```
 
-Lint RequestはText/Structure/Profile Version明示。
+Lint Request:
 
-## 14. WebUI Routes
+```json
+{
+  "text_revision_id":10,
+  "structure_revision_id":9,
+  "profile_id":3,
+  "profile_version_no":2,
+  "scene_id":null
+}
+```
+
+POST lintは`202 + run_lint job_id`。ClientはMetric Run IDを指定しない。
+
+Job Resultへ`lint_run_id`。Selector unavailable/Metric missingはCoverage WarningでありJob Failureではない。
+
+## 16. WebUI Routes
 
 ```text
 /projects/:projectId/style-analysis
@@ -398,116 +416,163 @@ Lint RequestはText/Structure/Profile Version明示。
 .../lint
 ```
 
-Project Sidebarに `文体分析`。
+Project Sidebarに`文体分析`。
 
-## 15. Reference Work UI
+## 17. Sources / Reference UI
 
-- Metadata/Episode List
-- Current Text/Current Structure表示
-- Work全体Analyze Button/Preset
-- Job Progress
-- Partial時Succeeded/Partial/Failed Episode表示
-- Refresh/Purge
+Sources:
 
-## 16. Document Analysis UI
+- TXT/HTML/EPUB File Picker。
+- Import Type選択。
+- 同期Import Result。
+- Duplicate Existing Work Link。
+- Reference Work一覧。
+
+Network URL Input/Refresh Buttonは表示しない。
+
+Reference Work:
+
+- Work metadata。
+- Episode一覧。
+- Episode Current Text/Structure/Analysis Status。
+- deterministic/full Work Analyze。
+- Work Job Progress/Partial Episode表示。
+- Purge確認1回。
+
+Blocking rights checkboxなし。
+
+## 18. Document Analysis UI
 
 Header:
 
 ```text
 TextRevision selector
 StructureRevision selector
-Current Structure badge
-Analysis status
+Current Structure kind/badge
+Basic analysis state
+Semantic analysis state
 ```
 
-Structure Selectorは閲覧対象を変えるだけ。
+Selector変更だけでCurrent Pointer変更なし。
 
-CurrentでないRevisionを表示時:
+Analyze UI:
+
+- Manual/Semantic Current ->通常Fullで保持。
+- Automatic Current ->FullでSemantic昇格可能。
+- Advanced `構造を再生成して解析` ->rebuild=true。
+
+Tabs:`Text|Structure|Semantics|Metrics`。
+
+SemanticsではManual Entity/Term/Alias、Character Link、Mention Resolution/Speaker、Term Novelty/Explanation、Scene Axis/POV、Block Primary、Raw/Effective/Selected Run IDsを表示・編集する。
+
+`not_analyzed`, `stale`, `partial`を同じエラー表示にしない。
+
+## 19. Corpus / Aggregate / Profile UI
+
+Corpus Membershipは08規則をそのまま表示する。
+
+Aggregate Builder:
+
+- Target Type document|scene。
+- SceneだけFilter Editor。
+- Metric選択。
+- Recompute Job Progress。
+- Statistic/Count/Stale/Warning/Provenance表示。
+- Axis未解析SceneはSkipped表示。
+
+Profile from CorpusではAggregate Groupを選択しUIがmedian/p25/p75 Exact IDsを送る。
+
+Rule Editor:
 
 ```text
-「このStructureをCurrentに設定」
+document -> selectorなし
+scene -> Scene Axis
+character -> Project Character
 ```
 
-Buttonを表示する。押した時だけSelect Current API。
+Enabled Ruleはmin/max両方必須。
 
-Tabs:
+`保存`と`保存して有効化`を分離する。
 
-- Text
-- Structure
-- Semantics
-- Metrics
+## 20. Lint UI
 
-Semantics:
+- Text/Structure/Profile Version。
+- Document/Specific Scene Scope。
+- 202 Job Polling。
+- Coverage/Stale。
+- Finding + Rule Scope + Evidence。
+- Selector unavailable Warning。
+- Coverage0も通常結果。
 
-- Manual Entity/Term作成
-- Manual Alias追加
-- Entity/Term Enable/Disable/Name/Type修正
-- Mention/Speaker修正
-- Alias Confirm/Reject
-- Selected Run ID
+## 21. Query Invalidation
 
-## 17. Corpus / Profile / Lint UI
+- Local Import/Purge ->Reference系。
+- Capture ->Document/Revisions。
+- Analyze/Rebuild ->Document/Structure/Run/Semantics/Metric。
+- Select Current ->Document/Structures/Aggregate/Lint Staleness。
+- Manual Entity/Term/Alias ->Semantics/Analysis Status。
+- Character Link ->Semantics/Lint。
+- Metric-only Override ->Semantics/Metric/Job/Aggregate/Lint。
+- Semantic Reanalysis Required Correction ->Semantics/Analysis Status。
+- Scene Axis Override ->Semantics/Aggregate/Lint。
+- Corpus Membership ->Corpus/Aggregate Staleness。
+- Aggregate Recompute ->Aggregate。
+- Profile Sync Write ->Profile。
+- Lint Job ->Lint。
 
-Corpus Membership UIは08のDefault/Override規則をそのまま表示する。Include All=false時は明示Include Episodeを選ぶ。
+全Project Queryを無差別Invalidateしない。
 
-Corpus MetricsはMeasurement Count/Sample Count/Work Count/Skippedを表示する。
-
-Profile Editorは `保存` と `保存して有効化` を分離。
-
-LintはRevision/Profile Version/Coverage/Stale/Findingを表示。Coverage 0は通常結果。
-
-## 18. Job Polling / Query Invalidation
-
-`queued|running` の間2秒Polling。`partial` は終了状態。
-
-Invalidate:
-
-- Import/Refresh/Purge -> Reference系
-- Work/Document Analyze -> Document/Structure/Run/Semantics/Metric
-- Select Current -> Document/Structures/Corpus Metrics/Lint Staleness
-- Manual Entity/Term/Alias -> Semantics/Analysis Stale State
-- Override/Review -> Semantics/Metric/Jobs
-- Corpus Membership -> Corpus Detail/Metrics
-- Profile Version/Activate -> Profile系
-- Lint -> Lint系
-
-## 19. Testing
+## 22. Test
 
 API:
 
-- Explicit Revision
-- Select Current: valid/current-text mismatch
-- Historical SelectorでPointer不変
-- Omitted AnalyzeでPointer更新 / Explicit Analyzeで不変
-- Manual Entity/Term Create Scope Validation
-- Same-name Manual Identity許容
-- Manual Alias Idempotent
-- Authoring Table非更新
-- Job Progress/Partial/Retry
-- Corpus Membership Mode Validation
-- Corpus Count Fields
-- Profile Activation
-- Direct Override/Revert
+- Local New201/Duplicate200/Jobなし。
+- Network Import/Refresh Endpoint不存在。
+- Work Detailに単一Document Pointerを返さない。
+- Episode DetailにDocument/Current Pointer/Statusを返す。
+- Work Full Analyze Provider disabled ->409。
+- Basic/Semantic Status。
+- Explicit Revision。
+- Select CurrentとHistorical Selector分離。
+- Current Manual/Semantic Full保持、Automatic Full昇格。
+- rebuild/Explicit validation。
+- Job Progress/Partial/Retry。
+- Manual Identity/Link/Override。
+- Aggregate Recompute202/Stale/Policy Version。
+- Profile from-corpus/manual/new-version同期、Jobなし。
+- Profile min/max/preferred Validation。
+- Profile Import/Export不存在。
+- Lint POST202/run_lint result。
 
 WebUI:
 
-- Current Structure Badge/Select Button
-- SelectorだけではCurrent変更なし
-- Manual Entity/Term/Alias操作
-- Work Analysis Progress/Partial
-- Corpus Include/Exclude
-- Count表示
-- Profile Save vs Activate
-- Lint Coverage
+- Local Sync Import/No Network Controls。
+- Work/Episode表示責務分離。
+- Status/Current Structure/Automatic昇格/Rebuild。
+- Semantic Correction。
+- Aggregate Builder。
+- Profile Exact Aggregate Group/Stale Warning/Range必須。
+- Save vs Activate。
+- Lint Job Polling/Coverage/Stale。
 
-## 20. Codex禁止事項
+## 23. Codex禁止事項
 
-- MCP変更
-- WebSocket/SSE追加
-- Authoring Character/World/CanonへStyle Identity自動Write
-- Structure Selector変更だけでCurrent Pointer変更
-- Explicit Structure AnalyzeでCurrent Pointer変更
-- Manual Entity/Term作成をReviewQueue必須にする
-- Corpus Membership規則をUI独自実装
-- Count Fieldsを1つにまとめる
-- Low-confidence修正をReviewQueue必須化
+- `analysis_stale`等永続bool追加。
+- Basic/Semantic状態を単一化。
+- MCP変更。
+- WebSocket/SSE追加。
+- Network Source Import/Refresh UI/API追加。
+- Work Detailへ単一EpisodeのCurrent Pointerを混入。
+- Local File ImportをJob化。
+- `build_profile` Job追加。
+- Profile作成をWorkerへ回す。
+- Authoring Character/World/Canonへ自動Write。
+- Structure Selector変更だけでCurrent Pointer変更。
+- Current Manual/Semanticを通常Fullで置換。
+- Current Automatic FullでBoundary常時Skip。
+- metrics presetをPublic UIへ露出。
+- Manual CorrectionをReviewQueue必須化。
+- Profile生成でAggregateを暗黙Latest選択。
+- Stale Aggregateを安全上の理由だけで選択禁止。
+- Enabled片側Rangeを追加。
+- Profile Import/Export追加。
