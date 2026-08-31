@@ -18,7 +18,7 @@ epub
 
 将来Site Adapterを追加する場合は、その時点の公式利用条件と取得手段を別Phaseで再設計する。
 
-## 3. 実装境界
+## 3. 実装境界 / Parser依存
 
 ```text
 CORE/src/novel_core/style_analysis/
@@ -33,12 +33,36 @@ API/src/novel_api/style_analysis/
     text.py
     html_file.py
     epub.py
+    html_dom.py
 ```
 
 - TXT/HTML/EPUB Parse: API Adapter。
 - Raw→Canonical Normalization/TextRevision: CORE 02。
 - AdapterはDBへ書かない。
 - ImportはHTTP Request内で同期実行し、Jobを作らない。
+
+API Runtime Dependencyへ次だけ追加する。
+
+```text
+beautifulsoup4>=4.13,<5.0
+```
+
+HTML/XHTML DOM Parseは:
+
+```python
+BeautifulSoup(payload_or_text, "html.parser")
+```
+
+を使用する。Parser Backendを`lxml`/`html5lib`へ切替えない。
+
+EPUB ZIP/Container/OPF ParseはPython標準Library:
+
+```text
+zipfile
+xml.etree.ElementTree
+```
+
+を使用する。`ebooklib`/`lxml`はv1で追加しない。
 
 ## 4. Source Identity
 
@@ -133,6 +157,8 @@ File upload: 100 MiB
 
 超過は `SOURCE_TOO_LARGE`。
 
+EPUBはZIP Central Directoryを読んだ時点で、Spine本文として読み込むEntryの`ZipInfo.file_size`合計が200 MiBを超える場合も`SOURCE_TOO_LARGE`とする。これは単一の展開量上限であり、Entry個別の追加制限はv1で設けない。
+
 Upload Staging Table、Temporary Spool、Streaming Importはv1で導入しない。
 
 ## 8. SourceSnapshot / Current Text
@@ -163,11 +189,12 @@ current_structure_revision_id = NULL
 - 1 File = 1 Episode。
 - `external_episode_id = "1"`。
 - Work/Episode Title = filename stem。
+- Decodeは`utf-8-sig` strict。
 - Decode不能は `SOURCE_ENCODING_ERROR`。
 
 ## 10. HTML本文抽出共通アルゴリズム
 
-`html_file` とEPUB内XHTMLは同じ決定論的DOM→Raw Text Utilityを使う。
+`html_file` とEPUB内XHTMLは同じ`html_dom.py`決定論的DOM→Raw Text Utilityを使う。
 
 ### 10.1 Content Root
 
@@ -198,11 +225,13 @@ aside
 form
 ```
 
+BeautifulSoup Tree上で対象Tagを`decompose()`してから本文Walkする。
+
 ### 10.3 DOM→raw_text
 
 DOMをDocument Orderで1回だけWalkしText Nodeを重複なく出力する。
 
-- Text Node: 文字列をそのまま出力。HTML EntityはParser Decode後の文字。
+- `NavigableString`: 文字列をそのまま出力。HTML EntityはParser Decode後の文字。
 - `<br>`: 単一 `\n`。
 - `<ruby>`: `rt/rp` Subtreeを除外しSurface Textだけ出力。
 - `<hr>`: 文字を出力せず、現在のraw code point offsetを`scene_break_offsets_raw`へ記録する。
@@ -236,10 +265,14 @@ li main ol p pre section table ul
 - Authorは自動推定せずNULL。
 - Raw Textが空なら `SOURCE_EMPTY`。
 
+`BeautifulSoup`へUpload Bytesを直接渡し、宣言Charset/BOMをLibraryのdecode処理へ任せる。最終`raw_text`はPython `str`。
+
 ## 12. epub Adapter
 
 - DRMなしEPUBのみ。
-- ZIP/OPF/SpineをParse。
+- `zipfile.ZipFile`でArchive Open。
+- `META-INF/container.xml`を`xml.etree.ElementTree`でParseしOPF Pathを解決。
+- OPF Manifest/SpineをElementTreeでParse。
 - Spine順に1 Spine Document = 1 Episode。
 - Navigation/CoverだけのItemは除外。
 - `external_episode_id = "spine:{1-based-order}"`。
@@ -247,6 +280,10 @@ li main ol p pre section table ul
 - Work Title/Author = EPUB Metadata → filename stem/NULL fallback。
 - 各Spine XHTMLはSection 10 UtilityでRaw Text化。
 - 同じUpload SourceSnapshotを複数Episodeが参照してよい。
+
+ZIP PathはPOSIX相対PathとしてOPF所在Directory基準で`posixpath.normpath`解決する。`..`解決後にArchive Root外を指すPathは`SOURCE_PARSE_ERROR`。
+
+EPUB3 Navigation DocumentはManifest `properties`に`nav`を含むItemを使用する。EPUB2 NCXがある場合はSpine `toc`参照先を使用する。Navigation Labelを取得できなくてもHeading/Fallbackへ進み、Import全体を失敗させない。
 
 ## 13. Duplicate / Re-import
 
@@ -292,16 +329,19 @@ Network Error系はv1に存在しない。
 
 ## 16. Test
 
+- API Runtime Dependencyは`beautifulsoup4>=4.13,<5.0`。
+- HTML/XHTML Parser backend=`html.parser`。
+- `lxml/html5lib/ebooklib`非依存。
 - TXT/HTML/EPUB Identity = Upload SHA-256。
 - New -> 201同期、Jobなし。
 - Duplicate -> 200、Parse/Persistなし。
 - Duplicate Race -> Existing Reuse。
-- Upload Limit/Encoding/Parse Error。
+- Upload Limit/EPUB selected uncompressed total/Encoding/Parse Error。
 - HTML Root Selection article→main→body。
 - HTML除外Element。
 - DOM WalkでText重複なし。
 - Block Boundary / br / ruby / hr Serialization。
-- EPUB Spine Order/Metadata/Title fallback。
+- EPUB container.xml/OPF/Spine/Nav/NCX/Metadata/Title fallback。
 - Adapter ParseとNormalization責務分離。
 - Same Normalization Input -> TextRevision Reuse。
 - Same Raw TextでもHint変更 -> New TextRevision。
@@ -315,6 +355,8 @@ Network Error系はv1に存在しない。
 - Remote URL Import追加。
 - Refresh機能追加。
 - Readability等を独断導入して本文抽出規則を変更。
+- `lxml/html5lib/ebooklib`を独断追加。
+- HTML Parser Backend変更。
 - Local File ImportをJob化。
 - Upload Staging Table追加。
 - Adapter内へCanonical Normalizationを実装。

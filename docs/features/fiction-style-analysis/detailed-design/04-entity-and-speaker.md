@@ -4,7 +4,7 @@
 
 人物・組織・場所等のMention候補を抽出し、Work/Document内Stable Entityへ解決し、Dialogue SpeakerとPOVの人物参照に利用する。Reference作品ではEpisodeを跨いで同じEntityを追跡する。
 
-上位仕様は `../basic-design.md`。
+上位仕様は `../basic-design.md`。Model Resolver/Prompt JSON契約は15を正本とする。
 
 ## 2. 実装先
 
@@ -104,7 +104,7 @@ Alias Kind:`name|surname|given_name|nickname|title|role`。
 
 Manual Alias同一再送はIdempotent。
 
-Inferred AliasだけではAuto Merge根拠にしない。Confirmed Inferred AliasまたはManual AliasだけをResolver Candidateとして使う。
+Manual/Confirmed Inferred AliasだけをResolver Exact Alias候補へ使う。Unreviewed Inferred Aliasは表示/Review対象だがResolver候補にしない。Rejected Inferred Aliasも候補にしない。
 
 ## 5. Mention Extractor
 
@@ -174,23 +174,24 @@ Project Document   -> same document_id
 
 候補生成ではMention Rowの`surface/mention_type/entity_type_candidate/canonical_name_candidate`を必ず利用する。
 
-Auto Resolution:
+Resolution順:
 
-1. Effective Canonical Name完全一致。ただし同名候補複数なら選ばない。
-2. Confirmed/Manual Alias完全一致。ただし複数なら選ばない。
-3. Model同一判定が09 `entity_resolution_auto_merge` 以上。
+1. Effective Canonical Name完全一致がExactly 1件 ->そのEntityへ解決。
+2. Manual/Confirmed Alias完全一致がExactly 1件 ->そのEntityへ解決。
+3. Exact Canonical/Alias Matchが複数件 ->**unresolved。Model Resolverを呼ばない**。
+4. Exact Match 0件 ->15 Candidate Shortlistを作りModel Resolverを呼ぶ。
 
 自動統合しない:
 
-- 姓だけ。
-- Pronounだけ。
-- Role Titleだけ。
-- 同名/同Alias候補複数。
+- 姓だけを根拠にしたExact Merge。
+- Pronounだけで新Entity作成。
+- Role Titleだけで新Entity作成。
+- 同名/同AliasExact候補複数。
 - Disabled Entity。
 
-Proper Name/Alias候補で既存候補なし、または明確に別実体と判断した場合だけ新`origin=inferred` Entityを作成できる。
+Model `existing/new` Decisionは15 Validation/Thresholdを満たす場合だけ採用する。
 
-## 7. Resolution Output
+## 7. Resolution Output / Inferred Alias生成
 
 Mention RowをUpdateしない。
 
@@ -216,6 +217,36 @@ ManualOverride mention.entity_id
 
 Rejected ResolutionはEffectiveにしない。
 
+### Model existing解決時のInferred Alias
+
+15 Model Resolverが`decision=existing`で解決し、Mention Surfaceが:
+
+- Effective Canonical Nameと完全一致しない。
+- Manual Alias/Confirmed Aliasと完全一致しない。
+- 同じEntityの同一文字列Inferred Alias Rowがまだ存在しない。
+
+場合だけ、新`origin=inferred` Aliasを1件作成する。
+
+```text
+entity_id = resolved entity
+alias = mention.surface.strip()
+analysis_run_id = current entity-resolver run
+source_mention_id = mention.id
+```
+
+Alias Kind mapping:
+
+```text
+proper_name -> name
+alias -> nickname
+role_title -> role
+pronoun -> Alias Rowを作らない
+```
+
+このAliasは10 `entity_alias.acceptance`でConfirmedされるまでResolver Exact Alias候補へ使わない。
+
+Model `new` Decisionで新Entityを作る場合、そのMention Surfaceを別Alias Rowとして重複保存しない。Stable Canonical Nameだけで開始する。
+
 ## 8. Incremental Reference Registry
 
 Reference Work Entity RegistryはIncremental Stable Registry。
@@ -239,17 +270,7 @@ Analyzer入力:
 
 過去Speaker推論やManual Speaker値をSpeaker Analyzer入力へ入れない。
 
-出力:
-
-```json
-{
-  "block_id":15,
-  "speaker_entity_id":3,
-  "confidence":0.87,
-  "evidence_block_ids":[14,16],
-  "reason_code":"explicit_speech_tag"
-}
-```
+Output/Promptは15を正本とする。
 
 Reason:`explicit_speech_tag|adjacent_action|turn_taking|addressed_name|scene_context|unknown`。
 
@@ -327,10 +348,12 @@ Semantics画面から直接:
 - Mention Resolution Set/Clear/Revert。
 - Resolution Confirm/Reject。
 - Speaker Set/Clear/Revert/Confirm/Reject。
-- Alias Confirm/Reject。
+- Inferred Alias Confirm/Reject。
 - Project Character Link。
 
 を操作可能。
+
+Inference Review Field Pathは10を正本とする。
 
 Correction後の再解析分類は10を正本とする。
 
@@ -340,13 +363,18 @@ Correction後の再解析分類は10を正本とする。
 - Candidate Type/Name Persist。
 - Mention RowにEntity IDなし。
 - Resolver Candidate Fields利用。
+- Exact Unique Canonical/Alias解決。
+- Exact Duplicate Canonical/Alias -> unresolved/Model非実行。
+- 15 Candidate Shortlist/Model Contract。
 - Resolver Cache不可/Registry Fingerprint。
 - Partial Mention Run成功MentionだけResolve。
 - Work Episode跨ぎResolution。
-- 同名複数で強制選択なし。
 - Manual Entity/Alias。
 - Disabled Entity除外。
-- Inferred AliasだけではMergeなし。
+- Unreviewed Inferred AliasではMergeなし。
+- Model existing非既知Surface -> Inferred Alias作成。
+- Alias Kind mapping。
+- Inferred Alias Confirm後Exact Alias候補化、Reject後除外。
 - Resolution Confirm/RejectでEffective Mention変更。
 - Resolution Review変更でSpeaker/POV Stale。
 - Explicit/Adjacent Speaker Effective。
@@ -363,10 +391,11 @@ Correction後の再解析分類は10を正本とする。
 - Mention Candidate Fieldを捨てる。
 - Mention RowへEntity ID追加。
 - Resolver Cache。
+- Exact同名複数からModelで強制選択。
 - 全DialogueへSpeaker強制割当。
-- 同名候補複数から強制Merge。
 - Stable Entity Rowを再解析でUpdate。
-- Inferred AliasだけでAuto Merge。
+- Unreviewed Inferred AliasでAuto Merge。
+- PronounからAlias/New Identity生成。
 - 過去Speaker/Manual SpeakerをSpeaker Analyzer入力へ入れる。
 - Raw Speaker ConfidenceをCurrent Thresholdへ合わせて書き換える。
 - turn_taking単独を自動Effective化。

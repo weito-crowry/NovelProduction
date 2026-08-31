@@ -4,7 +4,7 @@
 
 作品固有の用語・制度・技術・概念等を抽出し、Reference Work全体で同じTermを追跡する。Work/Document内初出、同Scene内説明、説明遅延を再現可能に計測できることを目的とする。
 
-上位仕様は `../basic-design.md`。
+上位仕様は `../basic-design.md`。Model Resolver/Prompt JSON契約は15を正本とする。
 
 ## 2. Term Scope / Stable Identity
 
@@ -70,19 +70,31 @@ TermService.create_manual_term(
 
 - Scope exactly one。
 - Label trim後1〜200文字。
-- Same Label別Term可。
+- Same Label別Termを許容。
 - `origin=manual`, `created_by_run_id=NULL`。
 - ReviewItem不要。
 
-`style_term_aliases`はTerm/Alias/Origin/Run/Timestampを持つ。
+Alias:
 
-Manual Alias同一再送はIdempotent。Inferred AliasだけではAuto Resolution根拠にせず、Confirmed Inferred AliasまたはManual Aliasだけを使う。
+```text
+style_term_aliases
+  id
+  term_id
+  alias
+  origin = inferred | manual
+  analysis_run_id nullable
+  created_at
+```
+
+Manual Alias同一再送はIdempotent。
+
+Manual/Confirmed Inferred AliasだけをResolver Exact Alias候補へ使う。Unreviewed/Rejected Inferred AliasはExact Resolution候補にしない。
 
 ## 4. Term Candidate Extractor
 
 `term-candidate-extractor` はTerm/Entity Registry非依存のCache可能Analyzer。
 
-入力: Scene Text + Block ID/type/span。
+入力:Scene Text + Block ID/type/span。
 
 出力:
 
@@ -117,15 +129,18 @@ Span Validationは04 Mentionと同じ規則。Candidate ExtractorはTerm Identit
 
 `term-resolver` はCandidate Runに`subject_partial_allowed`で依存し、Current Enabled Term Registryを読む。Cache不可。
 
-Reference: same reference_work_id。Project: same document_id。
+Reference:same reference_work_id。Project:same document_id。
 
-Auto Resolution:
+Resolution順:
 
-1. Effective Canonical Label完全一致。ただし複数候補なら選ばない。
-2. Confirmed/Manual Alias一致。ただし複数候補なら選ばない。
-3. Model同一判定が09 `term_resolution_auto_merge` 以上。
+1. Effective Canonical Label完全一致がExactly 1件 ->そのTermへ解決。
+2. Manual/Confirmed Alias完全一致がExactly 1件 ->そのTermへ解決。
+3. Exact Canonical/Alias Matchが複数件 ->**unresolved。Model Resolverを呼ばない**。
+4. Exact Match 0件 ->15 Candidate Shortlistを作りModel Resolverを呼ぶ。
 
-既存候補なし、または明確に別Termの場合だけ新`origin=inferred` Identityを作成できる。既存Identity RowをUpdateしない。
+Model `existing/new` Decisionは15 Validation/Thresholdを満たす場合だけ採用する。
+
+既存候補なし、またはModelが明確に別Termと判定した場合だけ新`origin=inferred` Identityを作成できる。既存Identity RowをUpdateしない。
 
 Resolved CandidateごとにTermMentionを作成する。
 
@@ -141,6 +156,29 @@ analysis_run_id
 ```
 
 `occurrence_index`は保存しない。
+
+### 5.1 Model existing解決時のInferred Alias
+
+15 Model Resolverが`decision=existing`で解決し、Candidate Surfaceが:
+
+- Effective Canonical Labelと完全一致しない。
+- Manual/Confirmed Aliasと完全一致しない。
+- 同じTermに同一文字列Inferred Alias Rowがまだ存在しない。
+
+場合だけ:
+
+```text
+term_id = resolved term
+alias = candidate.surface.strip()
+origin = inferred
+analysis_run_id = current term-resolver run
+```
+
+でAlias Rowを作る。
+
+このAliasは10 `term_alias.acceptance`でConfirmedされるまでResolver Exact Alias候補へ使わない。
+
+Model `new` Decisionで新Termを作る場合、そのSurfaceを別Alias Rowとして重複保存しない。Stable Canonical Labelだけで開始する。
 
 ## 6. Novelty
 
@@ -168,9 +206,9 @@ uncertain
 
 Candidate Reduce:
 
-- concrete valueが1種類だけ -> その値。
-- concrete conflict -> `uncertain`。
-- 全uncertain -> `uncertain`。
+- concrete valueが1種類だけ ->その値。
+- concrete conflict ->`uncertain`。
+- 全uncertain ->`uncertain`。
 - confidenceはReduce対象Candidateの最小値。
 
 Effective Novelty:
@@ -257,15 +295,34 @@ ProjectはTarget Structure内Current Resolver TermMentionを`start_cp`でSortし
 
 Completenessを満たさない場合、07の初出依存Metricを作らない。
 
-## 11. Term ExplanationはTermMention単位
+## 11. Term ExplanationはTermMention単位・1件へReduction
 
 `term-explanation-detector` は`term-resolver`に`subject_partial_allowed`で依存し、Current Enabled TermMentionを対象にする。
+
+探索Window:
+
+- Mention Block前2 Block。
+- Mention Block後6 Block。
+- 見つからなければ同Scene末尾まで。
+- 別Sceneへ自動拡張しない。
+
+Model Contractは15を正本とし、1 TermMentionについて0件以上のCandidateを返し得る。Persistence前にValid Candidateを次の順でSortし、**先頭1件だけ**を`term_explanation` Annotationとして保存する。
+
+Sort Key:
+
+1. `completeness`: `sufficient` > `partial`。
+2. `confidence`:高い順。
+3. `abs(start_cp - term_mention.start_cp)`:小さい順。
+4. `start_cp`:小さい順。
+5. `end_cp`:小さい順。
+
+Persist:
 
 ```text
 annotation_type = term_explanation
 subject_type = term_mention
 subject_id = term_mention_id
-start_cp/end_cp = explanation span
+start_cp/end_cp = selected explanation span
 confidence
 analysis_run_id
 value_json = {
@@ -275,29 +332,29 @@ value_json = {
 }
 ```
 
+1 `term-explanation-detector` Run × 1 TermMentionにつき最大1 Annotation。Valid Candidate 0件ならAnnotationなし。
+
+説明Spanはv1では単一Block内に限定する。複数Blockを跨ぐCandidateはInvalidとしてDropする。
+
 Kind:`definition|paraphrase|example|contextual_clue|contrast|other`。
-
 Completeness:`partial|sufficient`。
-
-探索Window:
-
-- Mention Block前2 Block。
-- Mention Block後6 Block。
-- 見つからなければ同Scene末尾まで。
-- 別Sceneへ自動拡張しない。
 
 ## 12. Effective Sufficient Explanation
 
 ```text
 ManualOverride term_mention.sufficient_explanation_annotation_id
-> Confirmed Current term_explanation
+> Confirmed Current term_mention.explanation Inference
 > Current term_explanation if completeness=sufficient and confidence >= AnalysisPolicy.term_explanation_effective
 > None
 ```
 
 Manual Clearは「このMentionには十分な説明なし」。
 
+Confirmed Review対象は10 `subject_type=term_mention, field_path=term_mention.explanation`。Section 11でCurrent Run内Annotation最大1件なので対象は一意。
+
 Override Annotationは同TermMention Subject + 指定Text/Structure LineageをService Validationする。
+
+Confirmed Current Annotationが`completeness=partial`の場合、Review済みでもSufficient Explanationとしては採用しない。Reviewは推論結果確認であり`partial`を`sufficient`へ変換しない。
 
 ## 13. 説明Metricとの関係
 
@@ -324,30 +381,56 @@ First Appearance Mentionを`M`とする。
 
 09 `term_first_appearance`はSection 9を正本とする。
 
-## 15. Test
+## 15. Review / Correction
+
+Semantics UIで:
+
+- Manual Term/Alias。
+- Term Enable/Disable/Label/Type。
+- Term Novelty Set/Revert/Confirm/Reject。
+- Inferred Alias Confirm/Reject。
+- TermMention Explanation Set/Clear/Revert/Confirm/Reject。
+
+を操作可能。
+
+Inference Review Field Pathは10を正本とする。
+
+Correction後の再解析分類は10を正本とする。
+
+## 16. Test
 
 - Candidate Extractor Registry非依存。
 - Candidate Span/Block Persist。
 - Resolver Partial Candidate入力。
 - Resolver Cache不可。
+- Exact Unique Canonical/Alias解決。
+- Exact Duplicate Canonical/Alias ->unresolved/Model非実行。
+- 15 Candidate Shortlist/Model Contract。
 - Manual Term/Alias。
 - Same Label別Term。
 - Work Episode跨ぎResolution。
+- Model existing未知Surface ->Inferred Alias作成。
+- Unreviewed Inferred AliasではExact Resolution不可。
+- Inferred Alias Confirm後候補化、Reject後除外。
 - Novelty Reduce Agreement/Conflict。
-- Reference Prefix全Succeeded -> Complete。
-- 前方Current Text/Structure欠落 -> Incomplete。
-- 前方Resolver Partial -> Incomplete。
-- Project Resolver Succeeded -> Complete。
-- Project Resolver Partial -> Incomplete。
+- Reference Prefix全Succeeded ->Complete。
+- 前方Current Text/Structure欠落 ->Incomplete。
+- 前方Resolver Partial ->Incomplete。
+- Project Resolver Succeeded ->Complete。
+- Project Resolver Partial ->Incomplete。
 - Target In-flight Context使用。
 - 前方Revision変更でState変更。
-- Explanation subject=TermMention。
+- Explanation Candidate 0件 ->Annotationなし。
+- 複数Explanation Candidate ->sufficient/confidence/distance/span順で1件Reduction。
+- `term_explanation` 1 Run×1 TermMention最大1。
+- 複数Block跨ぎCandidate Drop。
 - 同Scene前方説明/後方説明/説明なし。
 - 別Sceneへ探索しない。
+- Confirmed partialをsufficient扱いしない。
 - Delay負/正。
 - Incomplete時初出依存Metricなし。
 
-## 16. Codex禁止事項
+## 17. Codex禁止事項
 
 - Term Candidate Span/Block情報を捨てる。
 - 解析済みEpisode subsetだけでWork First Appearanceを確定。
@@ -355,7 +438,12 @@ First Appearance Mentionを`M`とする。
 - `occurrence_index`保存。
 - Candidate ExtractorへRegistry入力。
 - Resolver Cache。
+- Exact同Label複数からModelで強制選択。
+- Unreviewed Inferred AliasをExact Resolution候補にする。
 - Stable IdentityへNoveltyを戻す。
+- `term_explanation`を1 Run×1 TermMention複数Rowで保存。
+- 複数Block跨ぎExplanationをv1で保存。
+- Confirmed partial Explanationをsufficientへ昇格。
 - ExplanationをTerm Identity単位で保存。
 - Explanation探索を別Sceneへ勝手に拡張。
 - Project World/Canonへ自動登録。

@@ -43,14 +43,7 @@ created_at
 resolved_at nullable
 ```
 
-Priority:
-
-```text
-normal
-high
-```
-
-Default=`normal`。
+Priority:`normal|high`。Default=`normal`。
 
 Status:
 
@@ -81,14 +74,36 @@ user_marked
 
 Low Confidence/Unknownだけを理由に自動ReviewItem生成しない。
 
-### 3.1 Manual ReviewItem作成
+### 3.1 ReviewItem Subject Registry
 
-ユーザーは任意Subjectを「後で確認」として登録できる。
+v1で許可する`subject_type`は次だけ。
+
+```text
+structure_revision
+scene
+block
+mention
+term_mention
+entity
+term
+```
+
+Scope解決:
+
+- `structure_revision|scene|block|mention|term_mention` -> 所属StyleDocumentの`document_id` Scope。
+- Project Scope `entity|term` -> Identityの`document_id` Scope。
+- Reference Scope `entity|term` -> Identityの`reference_work_id` Scope。
+
+AliasはReviewItem Subjectにしない。Alias Confirm/RejectはSection 7 InferenceReviewを使う。
+
+### 3.2 Manual ReviewItem作成
+
+ユーザーはSection 3.1 Subjectを「後で確認」として登録できる。
 
 ```python
 ReviewService.create_manual_review_item(
     *,
-    subject_type: str,
+    subject_type: ReviewSubjectType,
     subject_id: int,
     analysis_run_id: int | None = None,
     priority: Literal["normal", "high"] = "normal",
@@ -106,13 +121,13 @@ resolution_note = NULL
 resolved_at = NULL
 ```
 
+`analysis_run_id`指定時は同Scope内RunであることをValidationする。
+
 `evidence_json`はSubjectを再表示するためのID/Span参照だけをServiceが生成する。本文全文を複製しない。
 
-同Subjectへ複数`manual_review`を作成することは許容する。v1でUnique/Dedupe制約を追加しない。
+同Subjectへ複数`manual_review`を作成可能。v1でUnique/Dedupe制約を追加しない。
 
-### 3.2 Resolve / Ignore
-
-更新可能なのはReviewItemの管理状態だけ。
+### 3.3 Resolve / Ignore / Supersede
 
 `resolve(expected_version, note)`:
 
@@ -138,7 +153,16 @@ version += 1
 
 ReviewItem Resolve/IgnoreはInference Confirm/Reject、Override、Structure Split/Merge等を暗黙実行しない。
 
-`superseded`は内部Serviceが「元Subject/ProposalがCurrent Lineageでは意味を失った」と判断した場合だけ使用する。User APIから直接指定しない。
+`superseded`は内部Service専用。Current Lineage変更等でOpen ItemのSubject/Proposalが意味を失った場合だけ:
+
+```text
+open -> superseded
+resolution_note = NULL
+resolved_at = now
+version += 1
+```
+
+とする。Public APIから直接指定しない。
 
 ## 4. ManualOverride Append-only Event
 
@@ -157,13 +181,7 @@ note nullable
 created_at
 ```
 
-Operation:
-
-```text
-set
-clear
-revert
-```
+Operation:`set|clear|revert`。
 
 - `set`: Explicit Value。
 - `clear`: Field定義上のExplicit None/Unknown。
@@ -257,15 +275,9 @@ Entity/Term:
 - 同Project DB内。
 - Reference Work/Document Scope Validationを各Serviceで行う。
 
-Name/Label:
+Name/Label:trim後1〜200文字、Uniqueness強制なし。
 
-- trim後1〜200文字。
-- Uniqueness強制なし。
-
-Speaker/POV Entity:
-
-- Enabled Person Entity。
-- 対象Scopeで利用可能。
+Speaker/POV Entity:Enabled Person Entity、対象Scopeで利用可能。
 
 TermMention Explanation Annotation:
 
@@ -276,11 +288,14 @@ TermMention Explanation Annotation:
 
 ReviewItem Manual Create:
 
+- Section 3.1 Known Subject Type。
 - Subjectが同Project DB内に存在。
-- `analysis_run_id`指定時は同Subject Scopeかつ同Project DB。
+- `analysis_run_id`指定時は同Subject Scope。
 - Priority Known Enum。
 
 ## 7. Inference Review
+
+InferenceReviewはRaw Inference 1件のConfirm/Rejectだけを扱う。ReviewItemとは別責務。
 
 ```text
 id
@@ -293,13 +308,42 @@ note nullable
 created_at
 ```
 
-同Inferenceの最新Reviewを採用する。
+同じ `(analysis_run_id,subject_type,subject_id,field_path)` の最新Reviewを`created_at DESC,id DESC`で採用する。
 
-ReviewItemなしで利用可能。
+### 7.1 v1 Inference Review Registry
 
-ConfirmedはConfidence Thresholdに関係なくRaw Inferenceを承認したものとしてEffectiveに使う。ただしField Schema/Taxonomy Validationは行う。
+次の組合せ以外は422 `INFERENCE_REVIEW_TARGET_INVALID`。
 
-Alias ConfirmationもInferenceReviewを使う。
+| subject_type | field_path | Raw source |
+|---|---|---|
+| `mention` | `mention.entity_resolution` | Current `entity-resolver` Annotation |
+| `block` | `block.speaker` | Current `speaker-attribution` Annotation |
+| `block` | `block.semantic_primary` | Current `block-semantic-classifier` Annotation |
+| `term` | `term.novelty` | Current `term-resolver` Annotation |
+| `term_mention` | `term_mention.explanation` | Current `term-explanation-detector` Annotation |
+| `scene` | `scene.function` | Current `scene-semantic-classifier` Annotation |
+| `scene` | `scene.tone` | Current `scene-semantic-classifier` Annotation |
+| `scene` | `scene.pace` | Current `scene-semantic-classifier` Annotation |
+| `scene` | `scene.information_load` | Current `scene-semantic-classifier` Annotation |
+| `scene` | `scene.interaction` | Current `scene-semantic-classifier` Annotation |
+| `scene` | `scene.pov` | Current `pov-classifier` Annotation |
+| `entity_alias` | `entity_alias.acceptance` | Inferred `style_entity_aliases` Row |
+| `term_alias` | `term_alias.acceptance` | Inferred `style_term_aliases` Row |
+
+Annotation-backed Targetは指定Run内に対象Subject/FieldのRaw AnnotationがExactly 1件存在することを必須とする。05どおり`term_explanation`も1 Run×1 TermMention最大1件。
+
+Alias Target:
+
+- `subject_id`はAlias Row ID。
+- Alias `origin=inferred`。
+- `analysis_run_id`はAlias Rowの`analysis_run_id`と一致。
+- Parent Entity/Term ScopeからReview Scopeを解決する。
+
+ConfirmedはConfidence Thresholdに関係なくRaw値を承認したものとしてEffectiveに使う。ただしField Schema/Taxonomy Validationは行う。
+
+RejectedはそのRaw InferenceをEffective候補から除外する。
+
+Alias `confirmed`はResolverでConfirmed Aliasとして使用可能、`rejected`は候補から除外する。
 
 ## 8. Typed Effective Resolver
 
@@ -379,10 +423,10 @@ term_mention.sufficient_explanation_annotation_id
 次のInference ReviewでEffective値が変わる場合も同分類:
 
 ```text
-speaker
+block.speaker
 block.semantic_primary
 term.novelty
-term_explanation
+term_mention.explanation
 ```
 
 Semantic Metric Groupだけ再計算する。確認Dialog不要。
@@ -398,12 +442,12 @@ entity.canonical_name
 entity.entity_type
 mention.entity_id
 mention.entity_resolution Confirm/Reject
-Entity Alias Confirm/Reject
+entity_alias.acceptance Confirm/Reject
 Manual Term/Alias
 term.enabled
 term.canonical_label
 term.term_type
-Term Alias Confirm/Reject
+term_alias.acceptance Confirm/Reject
 ```
 
 Entity/Term Enable変更をMetric-onlyで完了扱いしない。
@@ -418,7 +462,7 @@ scene.information_load
 scene.interaction
 ```
 
-および同Axis Inference Review。
+および同Field Inference Review。
 
 Semantic Metricは再計算しない。08/11 FingerprintでAggregate/Lint Staleを表現する。
 
@@ -429,7 +473,7 @@ scene.pov_mode
 scene.pov_entity_id
 ```
 
-およびPOV Review。
+および`scene.pov` Review。
 
 v1 Metric/Selectorへ使わないため再計算Jobなし。
 
@@ -571,15 +615,21 @@ ReviewItemは本文全文を複製しない。
 
 ## 15. Test
 
+- ReviewItem Subject Registry外拒否。
+- Manual ReviewItem Createはmanual_review/user_marked/open/version1。
+- ReviewItem Scope解決 document/reference_work。
+- ReviewItem priority normal/high。
+- ReviewItem Resolve/Ignore expected_version、resolution_note、version increment。
+- Internal Supersede open->superseded。
+- Closed ReviewItem再更新拒否。
+- ReviewItem ResolveでDomain Correctionなし。
+- Inference Review Registry全組合せ。
+- Registry外subject/field拒否。
+- Alias Review Parent Scope/Run一致。
 - Manual > Confirmed > Inferred。
 - Rejected非Effective。
 - Append-only Set/Clear/Revert/Fallback/New Set。
 - Existing Override Update/Deleteなし。
-- Manual ReviewItem Createはmanual_review/user_marked/open/version1。
-- ReviewItem priority normal/high。
-- ReviewItem Resolve/Ignore expected_version、resolution_note、version increment。
-- Closed ReviewItem再更新拒否。
-- ReviewItem ResolveでDomain Correctionなし。
 - Low-confidence自動Reviewなし。
 - Speaker Clear = Explicit Unknown。
 - Mention Clear = Explicit Unresolved。
@@ -587,7 +637,6 @@ ReviewItemは本文全文を複製しない。
 - Confirmed InferenceはThreshold未満でも承認値採用。
 - Function/Tone Validation。
 - Disabled Identity。
-- Alias Confirm/Reject。
 - Structure Subject Stale。
 - Explanation Lineage。
 - Metric-only4分類だけmetrics preset。
@@ -604,8 +653,10 @@ ReviewItemは本文全文を複製しない。
 
 ## 16. Codex禁止事項
 
+- ReviewItem Subject Typeを独自追加。
+- Inference Review subject/field組合せを独自追加。
 - ReviewItemをInference Reviewの代替にする。
-- Manual ReviewItem作成をReview対象Typeごとの個別APIへ分散する。
+- Manual ReviewItem作成を対象Typeごとの個別APIへ分散する。
 - Low-confidence Review量産。
 - ReviewItem Resolve/IgnoreでInference/Override/Structureを暗黙変更。
 - ReviewItem note/priorityを必須入力化。

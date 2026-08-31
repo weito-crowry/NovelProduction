@@ -4,7 +4,7 @@
 
 Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選択、Current Pointer、Local File Import、Analysis Job、Manual Correction、Aggregate/Profile/Lint UIを確定する。
 
-上位仕様は `../basic-design.md`。
+上位仕様は `../basic-design.md`。Local Parserは01、Semantic Model Client/Prompt Contractは15を正本とする。
 
 ## 2. 境界
 
@@ -16,6 +16,7 @@ Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選
 - rights_basis/毎回の確認Dialogなし。
 - 既存API Client/Query Cache/Project Scope Error Contractを再利用する。
 - Profile Import/Exportはv1 scope外。
+- API Runtime Dependency追加は01 `beautifulsoup4`、15 `httpx`だけ。
 
 URL Prefix:
 
@@ -126,7 +127,7 @@ Request:
 
 Preset:`deterministic|full`。
 
-Full Provider未設定はJob作成前409 `ANALYZER_PROVIDER_UNAVAILABLE`。
+Full Provider未設定はJob作成前409 `ANALYZER_PROVIDER_UNAVAILABLE`。Provider設定判定は15 `ApiSettings`を使う。
 
 Job開始時に各Episode Current TextをSnapshotし09どおりEpisode Order順にinline処理する。
 
@@ -238,11 +239,15 @@ POST   /terms
 POST   /terms/{term_id}/aliases
 ```
 
-Manual Entity/TermはReference WorkまたはDocument Scope exactly one。Same Name/Label別Identity可。
+Manual Entity/TermはReference WorkまたはDocument Scope exactly one。04/05のService SignatureをRequest Schemaへそのまま写す。Same Name/Label別Identity可。
 
 Alias再送Idempotent。
 
-Character Link PUT:`{"style_entity_id":77}`。
+Character Link PUT:
+
+```json
+{"style_entity_id":77}
+```
 
 Style Entityは指定Project DocumentのEnabled Person。Authoring Character/World/Canonを作成/更新しない。
 
@@ -264,7 +269,24 @@ Semantics Response:
 - Selected AnalysisRun IDs。
 - Analysis Status。
 
-Override Operation:`set|clear|revert`。Note optional。Generic二重CASなし。
+Override Request:
+
+```json
+{
+  "subject_type":"block",
+  "subject_id":55,
+  "field_path":"block.speaker_entity_id",
+  "operation":"set",
+  "value":5,
+  "base_analysis_run_id":101,
+  "structure_revision_id":9,
+  "note":null
+}
+```
+
+`subject_type/field_path/operation/value`は10 Override Registryを正本とする。`value`はAPI層でField型Validation後、Repositoryでは`value_json`へ保存する。Clear/Revertでは`value`省略またはNULL。
+
+Note optional。Generic二重CASなし。
 
 Inference Review Request:
 
@@ -273,13 +295,17 @@ Inference Review Request:
   "analysis_run_id":101,
   "subject_type":"block",
   "subject_id":55,
-  "field_path":"speaker",
+  "field_path":"block.speaker",
   "review_status":"confirmed",
   "note":null
 }
 ```
 
-`review_status=confirmed|rejected`。ReviewItemを経由しない。
+`review_status=confirmed|rejected`。
+
+`subject_type + field_path + analysis_run_id`は10 Inference Review Registryへ完全一致する必要がある。Registry外は422 `INFERENCE_REVIEW_TARGET_INVALID`。
+
+ReviewItemを経由しない。
 
 Correction後のJob/Stateは10を正本とする。
 
@@ -310,12 +336,13 @@ Request:
 }
 ```
 
+- `subject_type`は10 ReviewItem Subject Registryだけ。
 - `priority`省略時`normal`。
 - `normal|high`のみ。
 - Serverが`item_type=manual_review`, `reason_code=user_marked`, `status=open`, `version=1`を設定。
 - Response:`201 ReviewItem`。
 - 同SubjectのOpen Manual Review重複は許容する。
-- Note入力はCreate時に持たない。補足が必要なら対象Domain側に残すか、Resolve/Ignore時`resolution_note`を使う。
+- Note入力はCreate時に持たない。
 
 ### Resolve / Ignore
 
@@ -368,7 +395,17 @@ POST /reference-works/{work_id}/aggregates/recompute
 GET  /reference-works/{work_id}/aggregates
 ```
 
-Recompute RequestはTarget/Scene Filter/Metric Namesを指定。ContainerはURL、Metric VersionはRegistry Current Version。
+Recompute Request:
+
+```json
+{
+  "measurement_target_type":"scene",
+  "filter":{"scene":{"function":["daily"]}},
+  "metric_names":["dialogue.char_ratio","sentence.len.p50"]
+}
+```
+
+Document Targetでは`filter={}`のみ許可。Metric Namesは07 Registry存在必須。Metric VersionはRegistry Current Version。
 
 Response:`202 + recompute_aggregate job_id`。
 
@@ -393,17 +430,73 @@ POST   /profiles/{profile_id}/archive
 
 Profile/Version作成は同期Transaction。Jobを作らない。
 
-`from-corpus`はExact median/p25/p75 Aggregate IDsを渡す。08 Validation後201。
+### from-corpus
 
-Stale Aggregate明示利用時はWarningを返すが拒否しない。
+Rule Source Request:
 
-Manual/New Version Ruleは`target_scope`必須。
+```json
+{
+  "corpus_id":3,
+  "name":"参考文体",
+  "description":"",
+  "rules":[
+    {
+      "preferred_aggregate_id":101,
+      "min_aggregate_id":102,
+      "max_aggregate_id":103
+    }
+  ]
+}
+```
+
+08 Validation後201。Sample Policy不足SourceはRule Skipし、Response Warningへ理由を返す。
+
+Stale Aggregate明示利用時もWarningのみで拒否しない。
+
+### manual / new version
+
+Manual Profile Requestは`name/description/rules` Full Snapshot。
+
+New Version Request:
+
+```json
+{
+  "parent_version_no":2,
+  "rules":[...full rule snapshot...]
+}
+```
+
+Rule必須Field:
+
+```text
+target_scope
+scope_selector
+metric_name
+metric_version
+weight
+enabled
+severity_policy
+```
+
+Enabledなら`min_value/max_value`必須、preferred optional。
 
 Rule `preferred_value/min_value/max_value/weight`はJSON Numberを受ける。bool、NaN、Infinityは拒否。MetricDefinitionが`value_type=int`でもRule Rangeの整数性は要求しない。Serverはfinite floatへ正規化する。
 
-Enabled Ruleはmin/max両方必須。preferred指定時は範囲内。
+New VersionだけでActive変更なし。
 
-New Version Requestは`parent_version_no + full rules snapshot`。New VersionだけでActive変更なし。
+### profile identity update / activate / archive
+
+`PATCH /profiles/{id}`は`name`/`description`だけ変更可能。status/active_versionは変更しない。
+
+Activate Request:
+
+```json
+{"version_no":3}
+```
+
+指定Versionを`active_version_id`へ設定しProfile status=`active`。
+
+ArchiveはBodyなしでstatus=`archived`。Version/Rule保持。Archived VersionをHistorical Lint Requestで明示利用することは許可するが、WebUI新規LintのDefault Selectorからは除外する。
 
 Import/Export Endpointはv1で作らない。
 
@@ -489,13 +582,15 @@ Tabs:`Text|Structure|Semantics|Metrics`。
 
 SemanticsではManual Entity/Term/Alias、Character Link、Mention Resolution/Speaker、Term Novelty/Explanation、Scene Axis/POV、Block Primary、Raw/Effective/Selected Run IDsを表示・編集する。
 
+Inference Review UIは10 RegistryにあるRaw InferenceだけConfirm/Rejectを表示する。
+
 `not_analyzed`, `stale`, `partial`を同じエラー表示にしない。
 
 Review画面:
 
 - Open/Resolved/Ignored Item一覧。
-- 任意Subjectから`後で確認`でManual ReviewItem作成。
-- priority normal/high変更はCreate時だけ。v1で既存Item priority編集APIは作らない。
+- 10 Registry内Subjectから`後で確認`でManual ReviewItem作成。
+- priority normal/highはCreate時だけ。v1で既存Item priority編集APIは作らない。
 - Resolve/Ignore。
 - Confirm/Rejectは対象InferenceのSemantics UIから`/inference-reviews`を呼ぶ。
 
@@ -520,6 +615,8 @@ Count MetricでもRange入力は小数可。表示上のstepを整数へ固定�
 Enabled Ruleはmin/max両方必須。
 
 `保存`と`保存して有効化`を分離する。
+
+Archived Profileは通常選択肢から除外し、Historical Lint Detailからは参照可能。
 
 ## 21. Lint UI
 
@@ -566,14 +663,18 @@ API:
 - Current Manual/Semantic Full保持、Automatic Full昇格。
 - rebuild/Explicit validation。
 - Job Type別Partial可否。
-- Manual Identity/Link/Override/Inference Review。
-- ReviewItem Create -> manual_review/user_marked/open/version1。
-- ReviewItem Create priority default/normal/high。
+- Override Request Field Registry/Value型。
+- Inference Review Registry exact field paths。
+- Manual Identity/Link。
+- ReviewItem Create Subject Registry/priority/default。
 - ReviewItem resolve/ignore expected_version/note/closed conflict。
 - ReviewItem resolveでDomain Correctionを暗黙実行しない。
 - Generic ReviewItem confirm/reject不存在。
-- Aggregate Recompute202/Stale/Policy Version。
-- Profile from-corpus/manual/new-version同期、Jobなし。
+- Aggregate Recompute Request/202/Stale/Policy Version。
+- Profile from-corpus Exact3 ID Request。
+- Profile manual/new-version同期、Jobなし。
+- PATCH profile name/description only。
+- Activate version_no/Archive/Historical archived lint。
 - Count Metric Ruleへ小数Range可、bool/NaN/Infinity拒否。
 - Profile min/max/preferred Validation。
 - Profile Import/Export不存在。
@@ -588,7 +689,7 @@ WebUI:
 - Manual ReviewItem作成/Resolve/Ignore。
 - Aggregate Builder。
 - Profile Exact Aggregate Group/Stale Warning/Range必須/Count小数Range。
-- Save vs Activate。
+- Save vs Activate/Archived Default除外。
 - Lint Job Polling/Coverage/Stale。
 
 ## 24. Codex禁止事項
@@ -600,6 +701,8 @@ WebUI:
 - Network Source Import/Refresh UI/API追加。
 - Work Detailへ単一EpisodeのCurrent Pointerを混入。
 - Local File ImportをJob化。
+- 01/15以外のParser/Model Client方式を独自追加。
+- Inference Review Registry外Field Path追加。
 - Generic ReviewItem confirm/reject Endpoint追加。
 - ReviewItem CreateをInference Review Createとして実装。
 - ReviewItem resolveにInference/Override/Structure変更を暗黙連動。
