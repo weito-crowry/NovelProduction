@@ -69,9 +69,7 @@ metric_version
 
 Document Aggregateは`filter_json={}`固定。
 
-Scene AggregateのみScene Axis Filterを許可する。
-
-Scene Filter JSONはAggregate API/DBでは次を正本とする。
+Scene AggregateだけScene Axis Filterを許可する。
 
 ```json
 {
@@ -155,6 +153,8 @@ min
 max
 ```
 
+Aggregate値は**常にREAL**として保存する。元Measurementが`value_int`でも、平均・Percentile・Stddevは小数になり得るため整数へ丸めない。
+
 これをv1 Standard Statistic Setとする。Aggregate RowはImmutable Historical Snapshot。
 
 ## 8. Scene Filter
@@ -198,7 +198,7 @@ Scene Filterで実際に参照するAxisだけ:
 (scene_id, axis, source, effective_value)
 ```
 
-をSortしてCanonical SHA-256化する。
+をSortして09 Canonical Fingerprint UtilityでHashする。
 
 Filter未参照Axis変更ではAggregateをStaleにしない。Document AggregateではNULL。
 
@@ -222,7 +222,7 @@ Scene Structure自体が無いEpisodeはWarningで別表示する。
 
 ## 11. Aggregate Input Fingerprint
 
-Canonical SHA-256入力:
+09 Canonical Fingerprint Utilityへの入力:
 
 ```text
 aggregate_policy_version
@@ -255,8 +255,9 @@ Current入力0件でもFingerprintを計算する。Stale Aggregateを自動削�
 - Mean: arithmetic mean。
 - Stddev: population standard deviation (`statistics.pstdev`相当)。
 - Percentile: 07共通Utility。
-- 1観測Stddev=0。
+- 1観測Stddev=0.0。
 - 0観測なら新Aggregate Rowなし。
+- 結果はすべてPython `float`へ正規化して`value_real`へ保存する。
 
 ## 14. ProfileGenerationPolicy
 
@@ -298,6 +299,8 @@ StyleRule
 `source_kind=corpus|manual`。
 
 ProfileVersion/RuleはImmutable。
+
+Ruleの`preferred/min/max`は07 Measurement Storage Typeとは別契約で、すべてfinite REAL値として扱う。Count MetricでもCorpus Percentileが小数になるため整数へ丸めない。
 
 ## 16. Rule Selector
 
@@ -411,19 +414,21 @@ Corpus Ruleは3 Link。Manual Ruleは0 Link。
 ## 20. Profile Validation
 
 - Metric Name/Version存在。
-- Metricがtarget_scopeをsupport。
+- 07 MetricDefinitionが`target_scope`をsupport。
+- Rule値はJSON Numberとして受け、boolを拒否し、`float(value)`へ変換後`math.isfinite()`必須。
+- MetricDefinition `value_type=int`でもRule値の整数性を要求しない。
+- MetricDefinition UnitはRule/Observed/Aggregateで一致しているものとしてMetric Name+Versionから解決する。Ruleに別Unit列を持たない。
 - Enabled Ruleは`min_value`と`max_value`を両方必須。
 - Enabled Ruleは`min <= max`。
 - preferredはoptionalだが指定時`min <= preferred <= max`。
 - Disabled RuleはRangeなしを許可する。
-- Value TypeはMetricDefinitionと一致。
-- weight 0..5。
+- weightはfinite 0..5。
 - severity_policy=`standard`。
 - source_kind Known Enum。
 - target_scope別Selector Schema。
 - 完全同一`target_scope + canonical selector + metric + version` Enabled Rule重複禁止。
 - Character Ruleはproject_character_id必須。
-- `min == max`の場合、そのMetricDefinitionに`zero_width_tolerance`必須。
+- `min == max`の場合、07 MetricDefinition `zero_width_tolerance > 0`必須。
 
 片側Rangeはv1で実装しない。
 
@@ -471,6 +476,7 @@ warnings
 - Effective unclear通常Filter値。
 - Measurement Row等重み / Work等重みでない。
 - Count4種。
+- Count Measurementのmean/median/p25等もREAL保存、丸めなし。
 - Filter参照AxisだけState Hash。
 - Aggregate Measurement Link。
 - Current Input/Policy変更でStale。
@@ -481,6 +487,8 @@ warnings
 - Scene Aggregate wrapper除去してRule Selector生成。
 - Manual Profile Rule Source manual/link0。
 - New Version Full Snapshot/parent required/source manual。
+- Count Metric Manual Ruleへ小数Rangeを許可。
+- NaN/Infinity/bool Rule値拒否。
 - Enabled Rule min/max両方必須/preferred範囲。
 - Character Rule Auto生成なし。
 - New VersionでActive不変。
@@ -489,6 +497,8 @@ warnings
 
 - AggregatePolicyをAnalysisPolicyへ混ぜる。
 - aggregate_policy_versionをRowへ保存しない。
+- Aggregate結果を元Measurement `value_type=int`に合わせて丸める。
+- Rule値をMetricDefinition `value_type=int`だから整数必須にする。
 - Character MeasurementをCorpusでPool。
 - `sample_count`をWeightに使用。
 - Measurement Row等重みをWork等重みとして実装。

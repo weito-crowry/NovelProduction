@@ -17,7 +17,11 @@ Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選
 - 既存API Client/Query Cache/Project Scope Error Contractを再利用する。
 - Profile Import/Exportはv1 scope外。
 
-URL Prefix:`/projects/{project_id}/style-analysis`。
+URL Prefix:
+
+```text
+/projects/{project_id}/style-analysis
+```
 
 ## 3. Revision明示方針
 
@@ -62,9 +66,9 @@ file
 
 同期処理。Job Rowを作らない。
 
-New:`201` + `reused_existing=false/reference_work_id/source_id`。
-Duplicate:`200` + `reused_existing=true/reference_work_id/source_id`。
-Upload超過:`413`。
+- New:`201` + `reused_existing=false/reference_work_id/source_id`。
+- Duplicate:`200` + `reused_existing=true/reference_work_id/source_id`。
+- Upload超過:`413`。
 
 Unsupported Type/Parse/Encoding/Normalization Errorは既存Error EnvelopeでCodeを返す。
 
@@ -221,6 +225,8 @@ Job Response:`job_id/job_type/status/progress/result/warnings/error`。
 
 Pollingは`queued|running`中だけ。
 
+Job Type別`partial`可否は09を正本とし、Aggregate/Lintでは`partial`を返さない。
+
 ## 10. Entity / Character Link / Term API
 
 ```text
@@ -260,7 +266,20 @@ Semantics Response:
 
 Override Operation:`set|clear|revert`。Note optional。Generic二重CASなし。
 
-Inference Review Requestは対象Run/Subject/Field + `confirmed|rejected`。ReviewItemを経由しない。
+Inference Review Request:
+
+```json
+{
+  "analysis_run_id":101,
+  "subject_type":"block",
+  "subject_id":55,
+  "field_path":"speaker",
+  "review_status":"confirmed",
+  "note":null
+}
+```
+
+`review_status=confirmed|rejected`。ReviewItemを経由しない。
 
 Correction後のJob/Stateは10を正本とする。
 
@@ -271,11 +290,36 @@ ReviewItemは10どおり「後で確認したい項目」の管理であり、In
 ```text
 GET  /review-items
 GET  /review-items/{id}
+POST /review-items
 POST /review-items/{id}/resolve
 POST /review-items/{id}/ignore
 ```
 
-`resolve` Request:
+### Create
+
+User作成は`manual_review`だけ。
+
+Request:
+
+```json
+{
+  "subject_type":"scene",
+  "subject_id":42,
+  "analysis_run_id":null,
+  "priority":"normal"
+}
+```
+
+- `priority`省略時`normal`。
+- `normal|high`のみ。
+- Serverが`item_type=manual_review`, `reason_code=user_marked`, `status=open`, `version=1`を設定。
+- Response:`201 ReviewItem`。
+- 同SubjectのOpen Manual Review重複は許容する。
+- Note入力はCreate時に持たない。補足が必要なら対象Domain側に残すか、Resolve/Ignore時`resolution_note`を使う。
+
+### Resolve / Ignore
+
+Request:
 
 ```json
 {
@@ -284,9 +328,13 @@ POST /review-items/{id}/ignore
 }
 ```
 
-`ignore`も`expected_version`必須、note optional。
+- `expected_version`必須。
+- note optional。
+- Success:`200 ReviewItem`。
+- Version conflict:`409 VERSION_CONFLICT`。
+- Closed Item再更新:`409 REVIEW_ITEM_CLOSED`。
 
-ReviewItem Resolve自体はInference Confirm/Reject、Override、Structure Split等のDomain変更を暗黙実行しない。必要なDomain操作を先に各専用APIで行い、その後Itemをresolveする。
+ReviewItem Resolve/Ignore自体はInference Confirm/Reject、Override、Structure Split等のDomain変更を暗黙実行しない。必要なDomain操作を先に専用APIで行い、その後Itemを閉じる。
 
 Generic `/review-items/{id}/confirm` / `reject` Endpointは作らない。
 
@@ -350,6 +398,8 @@ Profile/Version作成は同期Transaction。Jobを作らない。
 Stale Aggregate明示利用時はWarningを返すが拒否しない。
 
 Manual/New Version Ruleは`target_scope`必須。
+
+Rule `preferred_value/min_value/max_value/weight`はJSON Numberを受ける。bool、NaN、Infinityは拒否。MetricDefinitionが`value_type=int`でもRule Rangeの整数性は要求しない。Serverはfinite floatへ正規化する。
 
 Enabled Ruleはmin/max両方必須。preferred指定時は範囲内。
 
@@ -441,7 +491,13 @@ SemanticsではManual Entity/Term/Alias、Character Link、Mention Resolution/Sp
 
 `not_analyzed`, `stale`, `partial`を同じエラー表示にしない。
 
-Review画面はReviewItemのopen/resolved/ignored管理だけを行い、Confirm/Reject操作は対象InferenceのSemantics UIから`/inference-reviews`を呼ぶ。
+Review画面:
+
+- Open/Resolved/Ignored Item一覧。
+- 任意Subjectから`後で確認`でManual ReviewItem作成。
+- priority normal/high変更はCreate時だけ。v1で既存Item priority編集APIは作らない。
+- Resolve/Ignore。
+- Confirm/Rejectは対象InferenceのSemantics UIから`/inference-reviews`を呼ぶ。
 
 ## 20. Corpus / Aggregate / Profile UI
 
@@ -458,6 +514,8 @@ document -> selectorなし
 scene -> Scene Axis
 character -> Project Character
 ```
+
+Count MetricでもRange入力は小数可。表示上のstepを整数へ固定しない。
 
 Enabled Ruleはmin/max両方必須。
 
@@ -484,7 +542,7 @@ Enabled Ruleはmin/max両方必須。
 - Metric-only Override ->Semantics/Metric/Job/Aggregate/Lint。
 - Semantic Reanalysis Required Correction ->Semantics/Analysis Status。
 - Scene Axis Override ->Semantics/Aggregate/Lint。
-- ReviewItem Resolve/Ignore ->ReviewItemのみ。
+- ReviewItem Create/Resolve/Ignore ->ReviewItemのみ。
 - Inference Review ->10分類に従う。
 - Corpus Membership ->Corpus/Aggregate Staleness。
 - Aggregate Recompute ->Aggregate。
@@ -507,12 +565,16 @@ API:
 - Select CurrentとHistorical Selector分離。
 - Current Manual/Semantic Full保持、Automatic Full昇格。
 - rebuild/Explicit validation。
-- Job Progress/Partial/Retry。
+- Job Type別Partial可否。
 - Manual Identity/Link/Override/Inference Review。
-- ReviewItemはresolve/ignoreのみ、generic confirm/reject不存在。
+- ReviewItem Create -> manual_review/user_marked/open/version1。
+- ReviewItem Create priority default/normal/high。
+- ReviewItem resolve/ignore expected_version/note/closed conflict。
 - ReviewItem resolveでDomain Correctionを暗黙実行しない。
+- Generic ReviewItem confirm/reject不存在。
 - Aggregate Recompute202/Stale/Policy Version。
 - Profile from-corpus/manual/new-version同期、Jobなし。
+- Count Metric Ruleへ小数Range可、bool/NaN/Infinity拒否。
 - Profile min/max/preferred Validation。
 - Profile Import/Export不存在。
 - Lint POST202/run_lint result。
@@ -523,8 +585,9 @@ WebUI:
 - Work/Episode表示責務分離。
 - Status/Current Structure/Automatic昇格/Rebuild。
 - Semantic Correction/Inference ReviewとReviewItem管理の分離。
+- Manual ReviewItem作成/Resolve/Ignore。
 - Aggregate Builder。
-- Profile Exact Aggregate Group/Stale Warning/Range必須。
+- Profile Exact Aggregate Group/Stale Warning/Range必須/Count小数Range。
 - Save vs Activate。
 - Lint Job Polling/Coverage/Stale。
 
@@ -538,7 +601,9 @@ WebUI:
 - Work Detailへ単一EpisodeのCurrent Pointerを混入。
 - Local File ImportをJob化。
 - Generic ReviewItem confirm/reject Endpoint追加。
+- ReviewItem CreateをInference Review Createとして実装。
 - ReviewItem resolveにInference/Override/Structure変更を暗黙連動。
+- Count Metric Ruleを整数入力だけに制限。
 - `build_profile` Job追加。
 - Profile作成をWorkerへ回す。
 - Authoring Character/World/Canonへ自動Write。

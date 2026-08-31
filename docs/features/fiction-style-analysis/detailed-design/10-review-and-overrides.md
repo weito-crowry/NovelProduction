@@ -23,7 +23,9 @@ Current Inferenceは09 Current AnalysisRun Resolverで選ぶ。旧Revision/旧De
 
 ## 3. ReviewItem
 
-ReviewItemは「ユーザーが後で確認したい項目」だけpersistする。
+ReviewItemは**ユーザーが後で確認したい項目だけ**persistする。Inferenceの真偽判定そのものはSection 7 InferenceReviewで行う。
+
+論理Schema:
 
 ```text
 id
@@ -35,10 +37,20 @@ priority
 status
 reason_code
 evidence_json
+resolution_note nullable
 version
 created_at
 resolved_at nullable
 ```
+
+Priority:
+
+```text
+normal
+high
+```
+
+Default=`normal`。
 
 Status:
 
@@ -49,7 +61,7 @@ ignored
 superseded
 ```
 
-初期Type:
+Type:
 
 ```text
 scene_boundary_proposal
@@ -58,7 +70,75 @@ stale_override
 manual_review
 ```
 
+Reason Code初期値:
+
+```text
+boundary_candidate
+structure_warning
+stale_override
+user_marked
+```
+
 Low Confidence/Unknownだけを理由に自動ReviewItem生成しない。
+
+### 3.1 Manual ReviewItem作成
+
+ユーザーは任意Subjectを「後で確認」として登録できる。
+
+```python
+ReviewService.create_manual_review_item(
+    *,
+    subject_type: str,
+    subject_id: int,
+    analysis_run_id: int | None = None,
+    priority: Literal["normal", "high"] = "normal",
+) -> ReviewItem
+```
+
+ServiceがSubjectからScopeを解決し、次を固定する。
+
+```text
+item_type = manual_review
+status = open
+reason_code = user_marked
+version = 1
+resolution_note = NULL
+resolved_at = NULL
+```
+
+`evidence_json`はSubjectを再表示するためのID/Span参照だけをServiceが生成する。本文全文を複製しない。
+
+同Subjectへ複数`manual_review`を作成することは許容する。v1でUnique/Dedupe制約を追加しない。
+
+### 3.2 Resolve / Ignore
+
+更新可能なのはReviewItemの管理状態だけ。
+
+`resolve(expected_version, note)`:
+
+```text
+open -> resolved
+resolution_note = note nullable
+resolved_at = now
+version += 1
+```
+
+`ignore(expected_version, note)`:
+
+```text
+open -> ignored
+resolution_note = note nullable
+resolved_at = now
+version += 1
+```
+
+`expected_version`不一致は409 `VERSION_CONFLICT`。
+
+`resolved|ignored|superseded`からの再Resolve/Ignoreは409 `REVIEW_ITEM_CLOSED`。
+
+ReviewItem Resolve/IgnoreはInference Confirm/Reject、Override、Structure Split/Merge等を暗黙実行しない。
+
+`superseded`は内部Serviceが「元Subject/ProposalがCurrent Lineageでは意味を失った」と判断した場合だけ使用する。User APIから直接指定しない。
 
 ## 4. ManualOverride Append-only Event
 
@@ -194,6 +274,12 @@ TermMention Explanation Annotation:
 - 同TermMention Subject。
 - 指定Text/Structure Lineage。
 
+ReviewItem Manual Create:
+
+- Subjectが同Project DB内に存在。
+- `analysis_run_id`指定時は同Subject Scopeかつ同Project DB。
+- Priority Known Enum。
+
 ## 7. Inference Review
 
 ```text
@@ -275,7 +361,7 @@ Migration候補を提示する場合だけ:
 
 TermMention Explanation Overrideが指定Current Lineage外ならEffectiveにしない。
 
-Low-confidence Reviewとは異なり、Stale Overrideは明示的な人手修正が使えなくなった場合なのでReviewItem生成を許可する。ただし同Subject/FieldのOpen Itemを重複生成しない。
+Stale Overrideは明示的人手修正が使えなくなった場合なのでReviewItem生成を許可する。ただし同Subject/FieldのOpen `stale_override` Itemは重複生成しない。
 
 ## 11. Correction後の処理分類
 
@@ -435,8 +521,6 @@ Stale原因がなく、Current Text/Structure Lineage上で:
 
 場合。
 
-Execution Failureによる不完全さを表し、古さとは区別する。
-
 #### not_analyzed
 
 DocumentにSucceeded/Partial Semantic Historical Runがなく、Current Semantic Outputもない。
@@ -464,6 +548,7 @@ SEMANTIC_BRANCH_PARTIAL
 ローカル単一User前提。
 
 - ReviewItem Resolve/Ignore: `expected_version`。
+- ReviewItem Create: CAS不要。
 - Structure Split/Merge: `expected_structure_revision_id`。
 - Direct Override: Structure依存Subjectだけ`structure_revision_id`。
 - Generic CAS Tokenなし。
@@ -490,6 +575,12 @@ ReviewItemは本文全文を複製しない。
 - Rejected非Effective。
 - Append-only Set/Clear/Revert/Fallback/New Set。
 - Existing Override Update/Deleteなし。
+- Manual ReviewItem Createはmanual_review/user_marked/open/version1。
+- ReviewItem priority normal/high。
+- ReviewItem Resolve/Ignore expected_version、resolution_note、version increment。
+- Closed ReviewItem再更新拒否。
+- ReviewItem ResolveでDomain Correctionなし。
+- Low-confidence自動Reviewなし。
 - Speaker Clear = Explicit Unknown。
 - Mention Clear = Explicit Unresolved。
 - TermMention Explanation Clear = Explicit None。
@@ -510,18 +601,19 @@ ReviewItemは本文全文を複製しない。
 - Current Execution Partialのみ -> semantic partial。
 - Semantic all current + old historical rows -> current。
 - Failed Basic attemptのみ -> basic not_analyzed。
-- Low-confidence自動Reviewなし。
 
 ## 16. Codex禁止事項
 
-- Supersede Pointer/Active Unique再導入。
-- Existing Override Event Update/Delete。
+- ReviewItemをInference Reviewの代替にする。
+- Manual ReviewItem作成をReview対象Typeごとの個別APIへ分散する。
 - Low-confidence Review量産。
-- Note/Reason必須化。
+- ReviewItem Resolve/IgnoreでInference/Override/Structureを暗黙変更。
+- ReviewItem note/priorityを必須入力化。
+- Supersede Pointer/Active UniqueをManualOverrideへ再導入。
+- Existing Override Event Update/Delete。
 - Generic二重CAS追加。
 - `clear`と`revert`同義化。
 - Entity/Term Enable変更をMetric-onlyで完了扱い。
-- Mention Resolution Review変更を無視してSpeaker/POVをCurrent扱い。
 - Scene Axis変更だけでSemantic Metric再解析。
 - Human Correctionの度にFull Analysis自動実行。
 - `analysis_stale`等の永続bool Column追加。

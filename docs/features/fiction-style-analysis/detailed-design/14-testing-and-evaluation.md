@@ -31,7 +31,22 @@ manual dogfood/evaluation
 - Semantic TestはFake Model Responseを使う。
 - 巨大Snapshot Frameworkは追加しない。
 
-## 4. Normalization
+## 4. Canonical Fingerprint
+
+09共通UtilityをUnit Testする。
+
+- Object key順が違っても同Hash。
+- JSON whitespace概念をHash入力へ持ち込まない。
+- Unicodeを`ensure_ascii=False` UTF-8でHash。
+- Sort済みCollectionで順序再現性。
+- Optional Fingerprint項目はMissing Keyではなく`null`。
+- NaN/Infinity拒否。
+- SHA-256 lowercase 64 hex。
+- InputなしFingerprint列はNULL、空Object Hashを代用しない。
+
+02/03/08/09/11が独自Serializerを実装していないことをCode Review/Testで確認する。
+
+## 5. Normalization
 
 - CRLF/BOM/NFC、NFKC非適用、全角空白保持。
 - TAB/Trailing Space。
@@ -45,7 +60,7 @@ manual dogfood/evaluation
 - Normalizer Version変更 -> New Revision。
 - Current Text変更 -> Current Structure Clear。
 
-## 5. Structure
+## 6. Structure
 
 - Scene/Block/Sentence Order/Span。
 - Block Global Order。
@@ -68,7 +83,7 @@ manual dogfood/evaluation
 - Historical TextでPointer不変。
 - Auto Apply Policy変更だけでCurrent Pointer不変。
 
-## 6. Local Source Import
+## 7. Local Source Import
 
 TXT:
 
@@ -110,7 +125,7 @@ Import Contract:
 - Purge Cascade。
 - Network Import/Refresh Endpoint/Job不存在。
 
-## 7. Migration / Storage Gate
+## 8. Migration / Storage Gate
 
 - Fresh001→008。
 - Existing005→008。
@@ -132,16 +147,19 @@ Import Contract:
 - Relation/Term-Link Tableなし。
 - Term Novelty Unique/Explanation TermMention Subject。
 - ManualOverride Scope/Purge/Append-only Repository。
+- ReviewItemは10契約 + Scope Pair。
 - Project Character Link Document uniqueness。
 - Measurement Unique。
 - AggregatePolicy Version/Input Fingerprint/Measurement Link。
+- Aggregate `value_real`はCount Metric統計でも丸めない。
 - Rule target_scope/source_kind/enabled min-max/preferred/Aggregate Source3 Role。
+- StyleRule numeric columnsはREALでCount Metric Ruleの小数値を許可。
 - Lint scene_id/Input Fingerprint。
 - `analysis_stale`等永続bool不存在。
 
 同じIntegrity Checkを全Scenarioへ重複追加しない。
 
-## 8. Entity / Speaker Regression
+## 9. Entity / Speaker Regression
 
 - Mention Extractor Registry非依存、Candidate Persist。
 - Resolver Cache不可/Partial Mention成功Subjectのみ。
@@ -160,7 +178,7 @@ Import Contract:
 - Project Character Manual Link。
 - Relation Analyzer不存在。
 
-## 9. Term Regression
+## 10. Term Regression
 
 - Candidate Registry非依存/Block Span Persist。
 - Resolver Cache不可/Partial Candidate成功Subjectのみ。
@@ -171,7 +189,7 @@ Import Contract:
 - Explanation subject=TermMention、同Scene前後/なし、別Scene探索なし。
 - Delay負/正。
 
-## 10. Scene / Block Semantic
+## 11. Scene / Block Semantic
 
 - Function/Tone Multi-select。
 - unclear vs source unknown。
@@ -183,14 +201,17 @@ Import Contract:
 - Candidate Min未満Raw保存、Auto ApplyだけStructure影響。
 - Scene Axis OverrideでSemantic Metric非Stale。
 
-## 11. Metric Unit / Registry
+## 12. Metric Registry / Calculation
 
-- MetricDefinition `value_type=int|float`のみ。
+07 v1 Metric RegistryをTable-driven Testの正本にする。
+
+- Metric NameがExactly 29件で重複なし。
+- 各DefinitionのGroup/Unit/Value Type/Scope/Tolerance完全一致。
+- `zero_width_tolerance > 0`。
+- Percentile Metricはすべて`value_type=float`。
+- Scalar Count/Char Countだけ指定されたMetricが`int`。
 - MissingはMeasurement Row不存在。
-- 07 Metric Scope Matrixを全Definitionで完全一致検証。
-- Document/Scene MetricをCharacter Scopeへ誤登録しない。
-- Speaker MetricをDocument/Scene Scopeへ誤登録しない。
-- Profile Rule ValidationがMetricDefinition.scope_typesを使用する。
+- Profile ValidationがMetricDefinition.scope_types/unit/toleranceを利用。
 - Sentence/Block/Paragraph対象集合。
 - Dialogue0件Count/Ratio、Utterance/Bridge40-41/Narration Run。
 - Character TargetはCurrent Mention/SpeakerありEntityだけ。
@@ -204,7 +225,7 @@ Import Contract:
 - 説明なしTermはRatio分母/Delay外。
 - sample_count。
 
-## 12. Runtime / Worker Integration
+## 13. Runtime / Worker Integration
 
 - DAG/Dependency Edge Mode/Independent Branch。
 - Scene Semantic非依存Semantic Metric。
@@ -218,14 +239,16 @@ Import Contract:
 - Current Automatic Full Semantic昇格。
 - Boundary FailureでAutomatic継続 + Full Job partial。
 - metrics preset Analyzer非再実行。
-- Document/Work Job Status。
 - Work Jobが子Jobを作らずinline処理。
 - Worker Thread1/FIFO/Recovery/Retry/Cancel。
+- analyze_document/analyze_reference_workだけ`partial`可。
+- recompute_aggregate 0 Input -> succeeded、Persistence Failure -> failed、partialなし。
+- run_lint Missing Metric/Selector -> succeeded、Invariant Failure -> failed、partialなし。
 - Local File/Profile生成はWorker不使用。
 - `build_profile` Job不存在。
 - run_lint Job payload/result lint_run_id。
 
-## 13. Aggregate / Corpus
+## 14. Aggregate / Corpus
 
 - Membership include/exclude。
 - AggregatePolicy Version persist/fingerprint/stale。
@@ -237,8 +260,9 @@ Import Contract:
 - FingerprintにStatistic/Target/Input IDs。
 - Aggregate→Measurement Link。
 - Current Input/Policy変更でStale。
+- Count Measurement統計もfloat結果をそのまま`value_real`保存。
 
-## 14. Profile
+## 15. Profile
 
 - ProfileGenerationPolicy独立。
 - Exact median/p25/p75 Aggregate IDs + AggregatePolicy Version一致。
@@ -248,18 +272,24 @@ Import Contract:
 - Manual Profileは同期Version1、Aggregate Linkなし。
 - New Versionはparent + Full Snapshot、同期、Jobなし。
 - 編集Versionはsource_kind=manual、旧Aggregate Provenance非継承。
+- Count Metric Manual Ruleへ小数Range可。
+- Rule bool/NaN/Infinity拒否。
 - Enabled Ruleはmin/max両方必須。
 - preferred指定時min<=preferred<=max。
 - Character Rule Auto生成なし。
 - Import/Export不存在。
 - Active不変。
 
-## 15. Review / Status
+## 16. Review / Status
 
 - Append-only Set/Clear/Revert、Existing Row Updateなし。
 - Inference Reviewは`confirmed|rejected`、ReviewItemと独立。
-- ReviewItem APIはresolve/ignoreだけ。
+- Manual ReviewItem Create -> item_type=manual_review/reason=user_marked/status=open/version1。
+- ReviewItem priority default normal、normal/highのみ。
+- ReviewItem Resolve/Ignore expected_version、resolution_note、version increment。
+- Closed ReviewItem再更新409。
 - ReviewItem resolveでDomain Correctionを暗黙実行しない。
+- Low-confidence自動Reviewなし。
 - TermMention Explanation Lineage。
 - Metric-only4分類だけmetrics preset。
 - Mention Resolution Review/Entity/Term Enabled ->Semantic Reanalysis Required。
@@ -271,7 +301,7 @@ Import Contract:
 - 全Current + 古い履歴 ->current。
 - 永続stale boolなし。
 
-## 16. Lint
+## 17. Lint
 
 - Document Lint Document/Scene/Character Rule。
 - Scene-only Scene Ruleだけ、enabled_rule_countもScene Ruleだけ。
@@ -279,12 +309,13 @@ Import Contract:
 - Unknown SpecificがGlobalを抑制しない。
 - Character LinkなしNot Applicable/MeasurementなしMissing。
 - Both-side Range内/上下、min=max Tolerance。
+- Count Metricの小数RangeでもDeviationをそのまま計算。
 - Preferred差だけFindingなし。
 - Basic-onlyでSemantic Run変更Fingerprint不変。
 - 未参照Axis変更不変/Unknown→Known変化。
 - Coverage0 Succeeded。
 
-## 17. API / WebUI
+## 18. API / WebUI
 
 API:
 
@@ -294,11 +325,13 @@ API:
 - Work Full Provider unavailable 409。
 - Basic/Semantic Status。
 - Current Manual/Semantic保持、Automatic Full昇格、rebuild/Explicit validation。
+- Job Type別Partial可否。
 - Aggregate Recompute202/Stale/Policy Version。
 - Profile from-corpus/manual/new-versionは同期でJobなし。
-- Profile min/max/preferred Validation。
+- Count Metric Rule小数Range可、invalid numeric拒否。
 - Profile Import/Export不存在。
-- ReviewItem resolve/ignoreとInference Reviewの分離。
+- ReviewItem Create/Resolve/IgnoreとInference Reviewの分離。
+- Generic ReviewItem Confirm/Reject不存在。
 - Lint POST202 + run_lint Job、Metric Run ID不要。
 
 WebUI:
@@ -307,11 +340,12 @@ WebUI:
 - Work/Episode表示責務分離。
 - Status/Structure kind/Automatic昇格/Rebuild。
 - Semantic Correction / Inference Review / ReviewItem管理分離。
+- Manual ReviewItem作成/Resolve/Ignore。
 - Aggregate Builder/Warning。
-- Profile同期Save/Stale Warning/min-max必須/Save vs Activate。
+- Profile同期Save/Stale Warning/min-max必須/Count小数Range/Save vs Activate。
 - Lint Job Polling/Coverage/Stale。
 
-## 18. Gold / E2E / Dogfood
+## 19. Gold / E2E / Dogfood
 
 Goldは自作短文の小規模Curated Set。根拠の薄い固定Precision/F1 Release Gateなし。
 
@@ -331,23 +365,27 @@ Local Text Import
 
 Live DogfoodはCI外。ユーザーが用意した少数Episode相当ファイルから確認して広げる。毎回の権利確認UI不要。
 
-## 19. CI / Completion
+## 20. CI / Completion
 
 既存Ruff/Format/Mypy/Pytest/Coverage、WEBUI lint/typecheck/test/build/e2e、pre-commitを正本とする。MCPは変更しないが既存CI RegressionとしてPASSを要求する。
 
 Coverage Gateを下げない。Coverageだけの低価値Testを大量追加しない。各SA Phaseは該当Scopeの検証だけ必須。未実施をPASS扱いしない。
 
-## 20. Codex禁止事項
+## 21. Codex禁止事項
 
 - Live Site/有料ModelをCIからCall。
 - Flaky Test Skipで完了扱い。
 - Coverage Threshold低下。
 - 全Layerへ同じInvariant重複。
+- 独自Fingerprint Serializer追加。
 - Network Import/Refresh前提Test追加。
 - Local File ImportをJob前提でTest。
-- Metric Scopeを実装側で推測するTest。
+- Metric Registry値を実装側で推測するTest。
+- Count Aggregate/Profile値を整数へ丸めるTest。
 - Generic ReviewItem confirm/rejectを期待するTest。
+- ReviewItem CreateをInference Review扱いするTest。
 - `build_profile` Jobを期待するTest。
+- Aggregate/Lint Jobのpartialを正しいとTest。
 - Profile作成をWorker前提にするTest。
 - Raw HashだけのTextRevision Reuseを正しいとTest。
 - Current Manual/Semantic通常Full置換を正しいとTest。

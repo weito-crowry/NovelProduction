@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-文体特徴を再現可能なMetricとして計測する。Metric計算はCOREの決定論的処理とし、式・対象Scope・Version・`sample_count`の意味を明示する。
+文体特徴を再現可能なMetricとして計測する。Metric計算はCOREの決定論的処理とし、式、対象Scope、Unit、Storage Value Type、Version、Zero-width Tolerance、`sample_count`の意味を明示する。
 
 上位仕様は `../basic-design.md`。
 
@@ -31,42 +31,54 @@ class MetricDefinition:
     scope_types: tuple[Literal["document", "scene", "character"], ...]
     group: Literal["basic", "semantic"]
     description: str
-    zero_width_tolerance: float | None
+    zero_width_tolerance: float
 ```
 
 MetricDefinitionはv1ではCode Registryを正本としDB Tableを作らない。
 
 MissingはNULL値MeasurementではなくMeasurement Row不存在で表現する。
 
-式、対象集合、分母、Bridge Rule、許可Scope等を変更したらMetric Versionを上げる。
+式、対象集合、分母、Bridge Rule、Unit、Value Type、許可Scope、Tolerance等の結果互換性が変わったらMetric Versionを上げる。
 
-## 4. Metric Scope Matrix
+`zero_width_tolerance`は全v1 Metricで必須。StyleRule `min == max`時だけ11が使用する。
 
-LunaはMetric名からScopeを推測せず、次をMetricDefinitionへそのまま登録する。
+## 4. v1 Metric Registry
 
-| Metric | document | scene | character |
-|---|:---:|:---:|:---:|
-| `text.char_count` | yes | yes | no |
-| `sentence.len.p50/p90` | yes | yes | no |
-| `block.len.p50/p90` | yes | yes | no |
-| `paragraph.len.p50/p90` | yes | yes | no |
-| `dialogue.char_ratio` | yes | yes | no |
-| `dialogue.utterance_count` | yes | yes | no |
-| `dialogue.utterance_len.p50/p90` | yes | yes | no |
-| `dialogue.turn_count.p50/p90` | yes | yes | no |
-| `narration.run_len.p50/p90` | yes | yes | no |
-| `semantic.*.char_ratio` | yes | yes | no |
-| `speaker.utterance_count` | no | no | yes |
-| `speaker.utterance_len.p50/p90` | no | no | yes |
-| `speaker.question_ratio` | no | no | yes |
-| `speaker.consecutive_turns.p50` | no | no | yes |
-| `term.new_per_1000_chars` | yes | yes | no |
-| `term.explained_same_scene_ratio` | yes | yes | no |
-| `term.explanation_delay.p50/p90` | yes | yes | no |
+LunaはMetric名からUnit/Type/Scope/Toleranceを推測せず、次をそのままRegistryへ登録する。
 
-Scene ScopeのTerm Metricは「Work/Document First Appearance MentionがそのScene内に存在するTerm」だけをそのSceneの分子/観測へ含める。
+| Metric | Group | Unit | Value Type | Scope | Zero-width Tolerance |
+|---|---|---|---|---|---:|
+| `text.char_count` | basic | `chars` | int | document, scene | 5.0 |
+| `sentence.len.p50` | basic | `chars` | float | document, scene | 5.0 |
+| `sentence.len.p90` | basic | `chars` | float | document, scene | 5.0 |
+| `block.len.p50` | basic | `chars` | float | document, scene | 5.0 |
+| `block.len.p90` | basic | `chars` | float | document, scene | 5.0 |
+| `paragraph.len.p50` | basic | `chars` | float | document, scene | 5.0 |
+| `paragraph.len.p90` | basic | `chars` | float | document, scene | 5.0 |
+| `dialogue.char_ratio` | basic | `ratio` | float | document, scene | 0.02 |
+| `dialogue.utterance_count` | basic | `count` | int | document, scene | 1.0 |
+| `dialogue.utterance_len.p50` | basic | `chars` | float | document, scene | 5.0 |
+| `dialogue.utterance_len.p90` | basic | `chars` | float | document, scene | 5.0 |
+| `dialogue.turn_count.p50` | basic | `count` | float | document, scene | 1.0 |
+| `dialogue.turn_count.p90` | basic | `count` | float | document, scene | 1.0 |
+| `narration.run_len.p50` | basic | `chars` | float | document, scene | 5.0 |
+| `narration.run_len.p90` | basic | `chars` | float | document, scene | 5.0 |
+| `semantic.action.char_ratio` | semantic | `ratio` | float | document, scene | 0.02 |
+| `semantic.description.char_ratio` | semantic | `ratio` | float | document, scene | 0.02 |
+| `semantic.exposition.char_ratio` | semantic | `ratio` | float | document, scene | 0.02 |
+| `semantic.psychology.char_ratio` | semantic | `ratio` | float | document, scene | 0.02 |
+| `semantic.transition.char_ratio` | semantic | `ratio` | float | document, scene | 0.02 |
+| `speaker.utterance_count` | semantic | `count` | int | character | 1.0 |
+| `speaker.utterance_len.p50` | semantic | `chars` | float | character | 5.0 |
+| `speaker.utterance_len.p90` | semantic | `chars` | float | character | 5.0 |
+| `speaker.question_ratio` | semantic | `ratio` | float | character | 0.02 |
+| `speaker.consecutive_turns.p50` | semantic | `count` | float | character | 1.0 |
+| `term.new_per_1000_chars` | semantic | `per_1000_chars` | float | document, scene | 0.2 |
+| `term.explained_same_scene_ratio` | semantic | `ratio` | float | document, scene | 0.02 |
+| `term.explanation_delay.p50` | semantic | `chars` | float | document, scene | 10.0 |
+| `term.explanation_delay.p90` | semantic | `chars` | float | document, scene | 10.0 |
 
-Character Metricはv1でDocument全体人物単位だけ。Scene×Character Measurementは作らない。
+`value_type=int`はMeasurement保存型を示す。08 AggregateやStyleRuleは複数Measurementの統計値を扱うため、元MetricがintでもAggregate/Rule値はREALになり得る。
 
 ## 5. 共通文字数 / Percentile
 
@@ -81,6 +93,8 @@ floor/ceil間をlinear interpolation
 ```
 
 観測0件ならPercentile Measurementを作らない。
+
+Percentileは入力が整数でも補間結果が小数になり得るためStorage Value Typeはfloat。
 
 ## 6. Character Target Enumeration
 
@@ -305,26 +319,13 @@ term_explanation_effective
 block_semantic_effective
 ```
 
-## 16. Zero-width Tolerance
+## 16. Test
 
-初期値:
-
-```text
-ratio: 0.02
-length: 5 chars
-count: 1
-term.new_per_1000_chars: 0.2
-term.explanation_delay: 10 chars
-```
-
-MetricDefinitionへ保持する。
-
-## 17. Test
-
-- MetricDefinition Scope Matrix完全一致。
-- Profile ValidationがMetric Scope Matrixを利用。
+- v1 RegistryのMetric名/Group/Unit/Value Type/Scope/Tolerance完全一致。
+- Percentile Metricは入力整数でもStorage Value Type=float。
+- Profile ValidationがMetricDefinition.scope_types/unit/toleranceを利用。
 - Basic Metric Semantic State非依存。
-- MetricDefinition value_typeはint/floatのみ、Missing Row不存在。
+- MissingはMeasurement Row不存在。
 - Sentence/Block/Paragraph対象集合。
 - Dialogue0件 Count/Ratio。
 - Dialogue Bridge40-41/Narration Run。
@@ -341,9 +342,11 @@ MetricDefinitionへ保持する。
 - sample_count。
 - Scene Axis変更でMetric State不変。
 
-## 18. Codex禁止事項
+## 17. Codex禁止事項
 
-- Metric Scopeを名前から推測。
+- Metric Registry値を名前から推測。
+- MetricDefinitionをDB由来の自由設定にする。
+- Percentile Countをintへ丸める。
 - Basic MetricへSemantic依存追加。
 - Nullable Value MeasurementでMissingを表現。
 - 全Work Entityへ全Episode Character Measurement生成。
