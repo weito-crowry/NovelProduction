@@ -9,7 +9,7 @@ from _support import initialize_test_work
 
 from novel_core.config import DatabaseConfig
 from novel_core.database import open_database
-from novel_core.errors import ValidationError, VersionConflictError
+from novel_core.errors import ValidationError, VersionConflictError, WorkNotFoundError
 from novel_core.services.draft_service import DraftService
 from novel_core.services.narrative_service import NarrativeService
 
@@ -96,6 +96,37 @@ def test_draft_save_is_linear_and_history_is_metadata_only(services) -> None:
     assert not hasattr(history[-1], "body")
     assert not hasattr(history[-1], "content_hash")
     assert services.drafts.get_draft(episode.id).revision == 2
+
+
+def test_latest_metadata_uses_latest_revision_without_document_payload(
+    services,
+) -> None:
+    first_episode = _episode(services, "第一話")
+    second_episode = _episode(services, "第二話")
+    first = services.drafts.save_draft(first_episode.id, plain_text="first")
+    services.drafts.save_draft(
+        first_episode.id,
+        html='<p id="known">second</p>',
+        expected_parent_draft_id=first.id,
+    )
+    services.drafts.save_draft(second_episode.id, plain_text="other")
+
+    metadata = services.drafts.latest_metadata()
+
+    assert [(item.episode_id, item.revision) for item in metadata] == [
+        (first_episode.id, 2),
+        (second_episode.id, 1),
+    ]
+    assert not hasattr(metadata[0], "document_json")
+
+
+def test_latest_metadata_matches_work_not_found_contract(tmp_path: Path) -> None:
+    connection = _open_database(tmp_path / "story.db")
+    try:
+        with pytest.raises(WorkNotFoundError, match="WORK_NOT_FOUND"):
+            DraftService(connection).latest_metadata()
+    finally:
+        connection.close()
 
 
 def test_stale_parent_is_rejected_without_partial_revision(services) -> None:

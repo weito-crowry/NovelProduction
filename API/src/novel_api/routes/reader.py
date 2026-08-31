@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from novel_core.document import render_web_html
 from novel_core.errors import NarrativeNotFoundError, WorkNotFoundError
+from novel_core.repositories.draft_repository import DraftMetadata
 from novel_core.repositories.narrative_repository import (
     ChapterRecord,
     EpisodeRecord,
@@ -18,7 +19,7 @@ from novel_core.services.draft_service import DraftSnapshot
 from novel_api.dependencies import resolve_project_target
 from novel_api.service_container import ServiceContainer, open_project_read_services
 
-router = APIRouter(prefix="/read/projects", tags=["reader"])
+router = APIRouter(prefix="/read/projects", tags=["reader"], include_in_schema=False)
 
 _READER_CSS = """
 :root {
@@ -81,7 +82,7 @@ a, .reader-nav-disabled { min-height: 2.75rem; }
 class _ReaderEpisode:
     episode: EpisodeRecord
     chapter_title: str
-    draft: DraftSnapshot | None
+    draft: DraftMetadata | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,29 +121,34 @@ def read_episode(request: Request, project_id: str, episode_id: int) -> HTMLResp
             raise HTTPException(status_code=404, detail="Not Found") from exc
 
         catalog = _load_catalog(services)
+        current = next(
+            (item for item in catalog.episodes if item.episode.id == episode_id),
+            None,
+        )
+        if current is None or current.draft is None:
+            raise HTTPException(status_code=404, detail="Not Found")
 
-    current = next(
-        (item for item in catalog.episodes if item.episode.id == episode_id),
-        None,
-    )
-    if current is None or current.draft is None:
-        raise HTTPException(status_code=404, detail="Not Found")
+        draft = services.draft.get_draft(episode_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Not Found")
 
-    ordered = tuple(item for item in catalog.episodes if item.draft is not None)
-    current_index = ordered.index(current)
-    previous = ordered[current_index - 1] if current_index > 0 else None
-    following = ordered[current_index + 1] if current_index + 1 < len(ordered) else None
-    return _html_response(
-        _render_episode(
+        ordered = tuple(item for item in catalog.episodes if item.draft is not None)
+        current_index = ordered.index(current)
+        previous = ordered[current_index - 1] if current_index > 0 else None
+        following = (
+            ordered[current_index + 1] if current_index + 1 < len(ordered) else None
+        )
+        content = _render_episode(
             project_id,
             catalog.work,
             current,
+            draft,
             current_index + 1,
             len(ordered),
             previous,
             following,
         )
-    )
+    return _html_response(content)
 
 
 def _load_catalog(services: ServiceContainer) -> _ReaderCatalog:
@@ -151,13 +157,16 @@ def _load_catalog(services: ServiceContainer) -> _ReaderCatalog:
     except WorkNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Not Found") from exc
 
+    latest_drafts = {
+        draft.episode_id: draft for draft in services.draft.latest_metadata()
+    }
     chapters: list[_ReaderChapter] = []
     for chapter in services.narrative.list_chapters():
         episodes = tuple(
             _ReaderEpisode(
                 episode=episode,
                 chapter_title=chapter.title,
-                draft=services.draft.get_draft(episode.id),
+                draft=latest_drafts.get(episode.id),
             )
             for episode in services.narrative.list_episodes(chapter.id)
         )
@@ -203,13 +212,13 @@ def _render_episode(
     project_id: str,
     work: WorkRecord,
     current: _ReaderEpisode,
+    draft: DraftSnapshot,
     position: int,
     total: int,
     previous: _ReaderEpisode | None,
     following: _ReaderEpisode | None,
 ) -> str:
-    assert current.draft is not None
-    body = render_web_html(current.draft.document, include_notes=False)
+    body = render_web_html(draft.document, include_notes=False)
     header = (
         '<header class="reader-header">'
         f'<p class="reader-eyebrow">{_escape(work.working_title)}</p>'

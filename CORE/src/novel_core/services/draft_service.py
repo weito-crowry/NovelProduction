@@ -187,6 +187,12 @@ class DraftService:
             work_id=work_id, episode_id=episode_id, limit=limit
         )
 
+    def latest_metadata(self) -> tuple[DraftMetadata, ...]:
+        work = self._work_repository.get()
+        if work is None:
+            raise WorkNotFoundError("WORK_NOT_FOUND")
+        return self._repository.latest_metadata_for_work(work.id)
+
     def _resolve_initial(
         self,
         *,

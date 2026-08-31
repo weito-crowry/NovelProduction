@@ -98,6 +98,38 @@ def test_reader_toc_is_server_html_and_preserves_narrative_order(
     assert "<script" not in response.text.lower()
 
 
+def test_reader_catalog_uses_metadata_and_only_loads_current_episode_document(
+    client: TestClient, monkeypatch
+) -> None:
+    from novel_core.services.draft_service import DraftService
+
+    episode_ids = _create_reader_project(client)
+    calls: list[int] = []
+    original = DraftService.get_draft
+
+    def tracked_get_draft(self, episode_id: int, revision: int | None = None):
+        calls.append(episode_id)
+        return original(self, episode_id, revision)
+
+    monkeypatch.setattr(DraftService, "get_draft", tracked_get_draft)
+
+    toc = client.get("/read/projects/reader-project/")
+    episode = client.get(
+        f"/read/projects/reader-project/episodes/{episode_ids['third']}/"
+    )
+
+    assert toc.status_code == 200
+    assert calls == [episode_ids["third"]]
+    assert episode.status_code == 200
+    assert "本文3" in episode.text
+
+
+def test_reader_routes_are_excluded_from_openapi_schema(client: TestClient) -> None:
+    paths = client.get("/openapi.json").json()["paths"]
+
+    assert not any(path.startswith("/read/") for path in paths)
+
+
 def test_reader_route_precedes_spa_fallback(data_root, tmp_path) -> None:
     from novel_api.app import create_app
     from novel_api.config import ApiSettings

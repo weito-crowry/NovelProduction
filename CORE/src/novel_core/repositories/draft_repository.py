@@ -113,3 +113,24 @@ class DraftRepository:
             (work_id, episode_id, limit),
         ).fetchall()
         return tuple(DraftMetadata(*row) for row in reversed(rows))
+
+    def latest_metadata_for_work(self, work_id: int) -> tuple[DraftMetadata, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT d.id, d.episode_id, d.revision, d.parent_draft_id,
+                   d.source_agent, d.change_summary, d.created_at
+            FROM drafts AS d
+            JOIN (
+                SELECT episode_id, MAX(revision) AS revision
+                FROM drafts
+                WHERE work_id = ?
+                GROUP BY episode_id
+            ) AS latest
+              ON latest.episode_id = d.episode_id
+             AND latest.revision = d.revision
+            WHERE d.work_id = ?
+            ORDER BY d.episode_id
+            """,
+            (work_id, work_id),
+        ).fetchall()
+        return tuple(DraftMetadata(*row) for row in rows)

@@ -107,3 +107,67 @@ def test_repository_history_is_metadata_only_and_returns_newest_window_oldest_fi
         )
     finally:
         connection.close()
+
+
+def test_repository_returns_latest_metadata_for_each_episode_without_documents(
+    tmp_path: Path,
+) -> None:
+    connection = _connection(tmp_path)
+    try:
+        first_episode_id, work_id = connection.execute(
+            "SELECT id, work_id FROM episodes ORDER BY id LIMIT 1"
+        ).fetchone()
+        chapter_id = connection.execute(
+            "SELECT chapter_id FROM episodes WHERE id = ?", (first_episode_id,)
+        ).fetchone()[0]
+        second_episode = NarrativeService(connection).create_episode(
+            chapter_id, "Second episode"
+        )
+        repository = DraftRepository(connection)
+
+        parent_id: int | None = None
+        for revision in range(1, 3):
+            repository.begin_write()
+            parent_id = repository.insert(
+                work_id=work_id,
+                episode_id=first_episode_id,
+                revision=revision,
+                parent_draft_id=parent_id,
+                document_json=f'{{"revision": {revision}}}',
+                source_agent=f"agent-{revision}",
+                change_summary=f"first-{revision}",
+            )
+            repository.commit()
+
+        repository.begin_write()
+        repository.insert(
+            work_id=work_id,
+            episode_id=second_episode.id,
+            revision=1,
+            parent_draft_id=None,
+            document_json='{"revision": 1}',
+            source_agent="second-agent",
+            change_summary="second-1",
+        )
+        repository.commit()
+
+        metadata = repository.latest_metadata_for_work(work_id)
+
+        assert [(item.episode_id, item.revision) for item in metadata] == [
+            (first_episode_id, 2),
+            (second_episode.id, 1),
+        ]
+        assert metadata[0].source_agent == "agent-2"
+        assert metadata[0].change_summary == "first-2"
+        assert tuple(field.name for field in dataclasses.fields(metadata[0])) == (
+            "id",
+            "episode_id",
+            "revision",
+            "parent_draft_id",
+            "source_agent",
+            "change_summary",
+            "created_at",
+        )
+        assert not hasattr(metadata[0], "document_json")
+    finally:
+        connection.close()
