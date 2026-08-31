@@ -96,6 +96,10 @@ describe("D2 structure routing and tree", () => {
     expect(await screen.findByText("Chapter One")).toBeInTheDocument();
     expect(screen.getByText("Episode One")).toBeInTheDocument();
     expect(screen.getByText("Scene One")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "読書ビュー" })).toHaveAttribute(
+      "href",
+      "/read/projects/A/",
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/projects/A/views/outline",
       expect.objectContaining({ headers: expect.any(Headers) }),

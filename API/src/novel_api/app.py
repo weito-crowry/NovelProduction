@@ -12,6 +12,7 @@ from novel_api.routes import (
     information_router,
     narrative_router,
     projects_router,
+    reader_router,
     relationships_router,
     timeline_router,
     work_router,
@@ -37,6 +38,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     app.include_router(narrative_router)
     app.include_router(information_router)
     app.include_router(authoring_router)
+    app.include_router(reader_router)
     app.include_router(views_router)
     if settings.webui_dist is not None:
         install_webui_routes(app, settings.webui_dist)

@@ -1413,4 +1413,23 @@ describe("Phase E manuscript read flows", () => {
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Manuscript editor" })).toHaveTextContent("server latest"));
     expect(freshReads).toBe(1);
   });
+
+  it("offers a safe relative reader link only when the latest draft exists", async () => {
+    vi.stubGlobal("fetch", routeFor(documentRead(1, 1)));
+    renderRoute();
+
+    await screen.findByText("Latest revision 1");
+    const readerLink = screen.getByRole("link", { name: "この話を読む" });
+    expect(readerLink).toHaveAttribute("href", "/read/projects/A/episodes/2/");
+    expect(readerLink).toHaveAttribute("target", "_blank");
+    expect(readerLink).toHaveAttribute("rel", "noopener noreferrer");
+    expect(readerLink.getAttribute("href")).not.toMatch(/localhost|127\.0\.0\.1|:\d+/);
+
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", routeFor(null));
+    renderRoute();
+    await screen.findByText("No manuscript draft yet.");
+    expect(screen.queryByRole("link", { name: "この話を読む" })).not.toBeInTheDocument();
+  });
 });

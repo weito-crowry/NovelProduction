@@ -39,6 +39,16 @@ export function StructurePage() {
 
   return (
     <AppShell projectId={projectId}>
+      <div className="detail-actions">
+        <a
+          className="button button-secondary"
+          href={readProjectUrl(projectId)}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          読書ビュー
+        </a>
+      </div>
       <div className={selection ? "structure-layout structure-detail-route" : "structure-layout"}>
         <section className="structure-tree-pane">
           <StructureTree
@@ -88,6 +98,10 @@ export function StructurePage() {
       )}
     </AppShell>
   );
+}
+
+function readProjectUrl(projectId: string): string {
+  return `/read/projects/${encodeURIComponent(projectId)}/`;
 }
 
 function StructureDetail({

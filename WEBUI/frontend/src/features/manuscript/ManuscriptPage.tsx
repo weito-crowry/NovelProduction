@@ -560,6 +560,7 @@ function ManuscriptReader({
             <div className="manuscript-toolbar">
               <div><strong>{isHistorical ? "Historical snapshot" : "Latest snapshot"}</strong><p className="read-only-meta">Revision {displayRevision} · {documentRead.created_at} · {documentRead.source_agent ?? "unknown source"}</p></div>
               <label className="toggle-control"><input type="checkbox" checked={includeNotes} onChange={(event) => setIncludeNotes(event.target.checked)} />Show production notes</label>
+              {!isHistorical && <a className="button button-secondary" href={readEpisodeUrl(projectId, episodeId)} target="_blank" rel="noopener noreferrer">この話を読む</a>}
               {!isHistorical && <Button type="button" onClick={() => void beginEdit()} disabled={snapshotLocked}>Edit manuscript</Button>}
             </div>
             {documentRead.content.blocks.length === 0 && <p className="empty-state-inline">This manuscript revision is empty.</p>}
@@ -825,4 +826,8 @@ function saveRefreshMessage(revision: number): string {
 
 function positiveId(value: string): number | null {
   return /^[1-9]\d*$/.test(value) ? Number(value) : null;
+}
+
+function readEpisodeUrl(projectId: string, episodeId: number): string {
+  return `/read/projects/${encodeURIComponent(projectId)}/episodes/${episodeId}/`;
 }
