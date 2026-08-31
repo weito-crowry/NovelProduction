@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-作品固有の用語・概念・技術名・制度名等を抽出し、「初出」「説明された位置」「説明までの距離」を計測可能にする。人物名抽出とは分離し、reference作品ではepisodeを跨いで同じTermを追跡する。
+作品固有の用語・概念・技術名・制度名等を抽出し、「初出」「説明された位置」「説明までの距離」を計測可能にする。Reference作品ではEpisodeを跨いで同じTermを追跡する。
 
 上位仕様は `../basic-design.md`。
 
@@ -19,16 +19,16 @@ CORE/src/novel_core/style_analysis/
     term_explanation.py
 ```
 
-## 3. Term scope / identity
+## 3. Term Scope / Identity
 
 Termは次のどちらか一方へ所属する。
 
 ```text
-reference_work_id  # reference作品全episode共通
-document_id        # project draft等の単独document
+reference_work_id  # Reference作品全Episode共通
+document_id        # Project Draft等の単独Document
 ```
 
-Term rowはstable identityであり、再解析のたびに推論属性を上書きしない。
+Term RowはStable Identity。
 
 ```text
 id
@@ -41,7 +41,7 @@ created_by_run_id nullable
 created_at
 ```
 
-`term_type`:
+Term Type:
 
 ```text
 world_term
@@ -58,68 +58,24 @@ other
 
 人物名はTermにしない。
 
-## 4. 推論属性はAnnotation
-
-`novelty` と `exact_match_safe` はTerm identityではなくAnalyzer出力なので `style_annotations` に保存する。
-
-### novelty
+Effective Correction Field:
 
 ```text
-annotation_type = term.novelty
-subject_type = term
-subject_id = term_id
-value_json = {"value": "work_specific"}
-confidence
-analysis_run_id
+term.enabled         bool, default true
+term.canonical_label string
+term.term_type       enum
 ```
 
-value:
+10 ManualOverrideで修正する。Disabled TermはResolver/Exact-match補完/Term Metricから除外する。
 
-```text
-work_specific
-specialized_real_world
-common_real_world
-uncertain
-```
+## 4. Term Candidate ExtractorはRegistry非依存
 
-### exact match safety
+`term-candidate-extractor` はCache可能なDocument Analyzerとし、**既存Term RegistryやEntity Registryを入力にしない。**
 
-```text
-annotation_type = term.exact_match_safe
-subject_type = term
-subject_id = term_id
-value_json = {"value": true}
-confidence
-analysis_run_id
-```
+入力:
 
-Effective Viewは10のManualOverride/confirmed/latest eligible inference順で解決する。再解析で旧Annotationをupdateしない。
-
-## 5. TermMention
-
-```text
-id
-term_id
-scene_id
-block_id
-start_cp
-end_cp
-surface
-analysis_run_id
-```
-
-`occurrence_index` は保存しない。初出/N回目はcurrent effective StructureRevision群のMentionを `episode.order_index, start_cp` でsortして計算する。
-
-同一surfaceの決定論的補完はeffective `term.exact_match_safe=true` のTermだけ行う。
-
-## 6. 候補抽出
-
-Scene単位でモデルへ渡す。
-
-- Scene text
+- Scene Text
 - Block ID/span
-- 同scopeの既存Term + effective label/alias
-- Entity一覧
 
 出力例:
 
@@ -131,82 +87,201 @@ Scene単位でモデルへ渡す。
       "block_id": 4,
       "start_in_block": 8,
       "end_in_block": 17,
-      "canonical_label": "統合国家知性機構",
-      "term_type": "institution",
-      "novelty": "work_specific",
-      "exact_match_safe": true,
+      "canonical_label_candidate": "統合国家知性機構",
+      "term_type_candidate": "institution",
+      "novelty_candidate": "work_specific",
+      "exact_match_safe_candidate": true,
       "confidence": 0.94
     }
   ]
 }
 ```
 
-新Term作成時はidentity row + 同じrun由来のnovelty/exact-match Annotationを作る。既存Termへ解決した場合は新しいAnnotationを追加し、Term rowを更新しない。
+Persistは `style_annotations`:
 
-span validationは04共通utility。
+```text
+annotation_type = term_candidate
+subject_type = block
+subject_id = block_id
+start_cp/end_cp = candidate surface span
+value_json = {
+  "surface": "...",
+  "canonical_label_candidate": "...",
+  "term_type_candidate": "...",
+  "novelty_candidate": "...",
+  "exact_match_safe_candidate": true
+}
+confidence
+analysis_run_id = term-candidate-extractor run
+```
 
-## 7. Term resolution
+Candidate ExtractorはTerm Identity/TermMentionを作らない。
 
-自動統合:
+Span Validationは04共通Utility。
 
-- effective canonical label完全一致
-- confirmed/manual alias一致
-- model同一判定 >= `AnalysisPolicy.term_resolution_auto_merge`
+## 5. Term Resolver
+
+`term-resolver` はTerm Candidate Runに依存し、Current Term Registryを読む。
+
+Reference:
+
+```text
+同 reference_work_id のEnabled Term Registry
+```
+
+Project:
+
+```text
+同 document_id のEnabled Term Registry
+```
+
+Resolverは09で `cacheable=false`。Full AnalysisごとにCurrent Registryを読む。
+
+入力Registryは09 `registry_input_fingerprint` に記録する。
+
+自動統合条件:
+
+1. Enabled TermのEffective Canonical Label完全一致。ただし同名Enabled Termが複数なら自動選択しない
+2. Confirmed/Manual Alias一致。ただし候補複数なら自動選択しない
+3. Model同一判定 >= `AnalysisPolicy.term_resolution_auto_merge`
 
 初期0.90。
 
-短縮形が一般語と衝突する場合、effective `exact_match_safe=false` とする。
+Disabled Termは候補にしない。
 
-## 8. Alias
+## 6. Resolver Output
 
-`style_term_aliases`:
+Resolverは必要に応じてTerm Identity/Aliasを作成し、各Candidateについて `style_term_mentions` を作る。
 
 ```text
 id
 term_id
-alias
-origin = inferred | manual
-analysis_run_id nullable
-created_at
+structure_revision_id
+scene_id
+block_id
+start_cp
+end_cp
+surface
+analysis_run_id = term-resolver run
 ```
 
-自動aliasは生成runを記録する。再解析で既存aliasをupdateしない。
+`occurrence_index` は持たない。
 
-## 9. NoveltyとMetric
+同じRunでEffective推論属性Annotationを作る。
 
-`term.new_per_1000_chars` のeligible:
+### Novelty
+
+```text
+annotation_type = term.novelty
+subject_type = term
+subject_id = term_id
+value_json = {"value": "work_specific"}
+confidence
+analysis_run_id = term-resolver run
+```
+
+Value:
 
 ```text
 work_specific
 specialized_real_world
+common_real_world
+uncertain
 ```
 
-`common_real_world` / `uncertain` は除外。
+### Exact Match Safety
 
-unknown/uncertainを理由にReviewItemを自動生成しない。Semantics/Term画面でfilter可能にする。
+```text
+annotation_type = term.exact_match_safe
+subject_type = term
+subject_id = term_id
+value_json = {"value": true}
+confidence
+analysis_run_id = term-resolver run
+```
+
+既存Termへ解決してもIdentity RowはUpdateしない。
+
+## 7. Work Registryのv1整合モデル
+
+Reference Work Term RegistryはIncremental Stable Registry。
+
+- Work全体解析JobはEpisode Order順にResolverを実行
+- ResolverはCache不可
+- 後続Episodeで新しいInferred Termが追加されても過去Episodeを自動全再解析しない
+- Work全体解析を再実行すれば全EpisodeをOrder順に再Resolver
+- 各Runに `registry_input_fingerprint` を残す
+
+全Episode更新ごとに自動全再解析する仕組みはv1で作らない。
+
+Manual/Confirmed Correctionは09 State Fingerprint対象。
+
+## 8. Alias
+
+```text
+style_term_aliases
+  id
+  term_id
+  alias
+  origin = inferred | manual
+  analysis_run_id nullable
+  created_at
+```
+
+- Inferred AliasだけではAuto Mergeしない
+- Confirmed Inference ReviewまたはManual AliasだけをResolution根拠に使う
+- Alias専用Disable機構はv1不要
+
+## 9. Effective Novelty / Exact Match
+
+Enabled Termだけ対象。
+
+Novelty:
+
+```text
+ManualOverride
+> Confirmed Current Resolver Inference
+> Current Resolver Inference
+> uncertain
+```
+
+Exact Match:
+
+```text
+ManualOverride
+> Confirmed Current Resolver Inference
+> Current Resolver Inference
+> false
+```
+
+Unknown状態でSurface補完しない。
+
+Effective `term.exact_match_safe=true` のTermだけ決定論的Surface補完を許可する。補完で作るTermMentionも、その補完を実行したCurrent `term-resolver` Run IDに所属させる。
 
 ## 10. 初出
 
-### reference work
+### Reference Work
 
-各ReferenceEpisodeのcurrent effective StructureRevisionに属するeffective TermMentionを:
+各ReferenceEpisodeのCurrent Text/Current Effective Structureに属するCurrent Term Resolver RunのTermMentionを:
 
 ```text
 reference_episode.order_index
 -> start_cp
 ```
 
-でsortし最初をfirst appearanceとする。
+でSortして最初をFirst Appearanceとする。
 
-### project document
+### Project Document
 
-current StructureRevision内 `start_cp` 最小Mention。API fieldは `first_in_document`。
+指定Current Structure内のCurrent Resolver Runで `start_cp` 最小。
 
-旧StructureRevision/旧AnalysisRun由来Mentionを混ぜない。
+旧Structure/旧Resolver Runを混ぜない。
 
-## 11. Term Explanation Annotation
+## 11. Term Explanation
 
-説明候補はTermをsubjectにする。
+`term-explanation-detector` は `term-resolver` に依存する。
+
+Enabled TermのCurrent TermMentionだけを対象にする。
 
 ```text
 annotation_type = term_explanation
@@ -222,7 +297,7 @@ value_json = {
 }
 ```
 
-`explanation_kind`:
+Kind:
 
 ```text
 definition
@@ -233,27 +308,21 @@ contrast
 other
 ```
 
-`completeness`: `partial | sufficient`。
+Completeness: `partial | sufficient`。
 
-初回windowは初出Blockの前2/後6。見つからなければ同Scene末尾まで。別Sceneへ自動拡張しない。
+初回Windowは初出Block前2/後6。見つからなければ同Scene末尾。別Sceneへ自動拡張しない。
 
-## 12. Effective sufficient explanation
+## 12. Effective Sufficient Explanation
 
-Termごとの「Lint/Metricで使うsufficient explanation」は次で決める。
+Enabled Termだけ対象。
 
-1. ManualOverride `term.sufficient_explanation_annotation_id` があればそのAnnotation。
-2. clear overrideならなし。
-3. confirmed sufficient explanation。
-4. current effective runの `completeness=sufficient` かつ confidence >= `term_explanation_effective` のうち本文順最初。
-5. それ以外なし。
+1. ManualOverride `term.sufficient_explanation_annotation_id`
+2. Clear Override -> Explicit None
+3. Confirmed Current Sufficient Explanation
+4. Current Explanation Runの `sufficient` + Confidence >= Policy の本文順最初
+5. それ以外なし
 
-ManualOverrideが指定するAnnotation IDは:
-
-- `annotation_type=term_explanation`
-- 同Term subject
-- current effective Text/Structure lineageに属する
-
-ことをserviceで検証する。
+Override Annotationは同TermかつCurrent Text/Structure LineageをServiceでValidation。
 
 ## 13. 説明遅延
 
@@ -261,17 +330,14 @@ ManualOverrideが指定するAnnotation IDは:
 first sufficient explanation start_cp - first mention start_cp
 ```
 
-同一episode内だけcode point差。
+同一Episodeのみ。
 
-- 説明先行は負値可。
-- sufficientなし/別episodeならNULL。
+- 説明先行: 負値可
+- Sufficientなし/別Episode: NULL
 
-補助Metric `term.explained_same_scene_ratio`。
-
-## 14. Entity link
+## 14. Entity Link
 
 ```text
-id
 term_id
 entity_id
 origin = inferred | manual
@@ -280,9 +346,26 @@ analysis_run_id nullable
 created_at
 ```
 
-scope一致必須。将来自動linkする場合threshold `term_entity_auto_link` 初期0.90、run provenance必須。v1はmanual linkだけでも要件を満たす。
+双方EnabledかつScope一致がEffective条件。
 
-## 15. Analyzer/version
+v1はManual Linkだけでよい。Term Candidate ExtractorへEntity一覧を入力しない。
+
+## 15. Human State Dependency
+
+09 `term_registry` State Fingerprint:
+
+- Manual Term Identity
+- Active `term.enabled/label/type` Override
+- Manual Alias
+- Inferred Alias最新Confirm/Reject
+
+Inferred Term Registry自体はCurrent Validity Stateには入れず、Resolver `registry_input_fingerprint` に記録する。
+
+`term-explanation-detector` は `term_registry` StateをCurrent判定に使う。
+
+`style-metrics-semantic` は10のEffective Semantic Stateを別途Fingerprintへ含める。
+
+## 16. Analyzer / Version
 
 ```text
 term-candidate-extractor v1
@@ -290,9 +373,9 @@ term-resolver v1
 term-explanation-detector v1
 ```
 
-Promptには一般語過剰抽出のnegative example。
+Promptには一般語過剰抽出Negative Example。
 
-## 16. AnalysisPolicy
+## 17. AnalysisPolicy
 
 ```text
 term_resolution_auto_merge = 0.90
@@ -302,28 +385,48 @@ term_explanation_effective = 0.85
 
 09が正本。
 
-## 17. Test
+## 18. Review方針
 
-- reference work episode跨ぎTerm統合
-- Term identity再解析で不変
-- novelty/exact-match per-run Annotation
-- alias provenance
-- project scope分離
-- 初出即説明/数Block後/説明先行/説明なし
-- abbreviation一般語衝突
-- refresh/order変更でfirst appearance staleなし
-- current Structureだけから初出算出
-- sufficient explanation override set/clear
-- override annotation lineage validation
-- code point delay
+Unknown/Uncertainだけを理由にReviewItemを作らない。
 
-## 18. Codex禁止事項
+Semantics/Term画面から:
 
-- Term identity rowへnovelty/exact_match_safeを戻さない。
-- occurrence_indexを保存しない。
-- MeCab/Sudachiを勝手に追加しない。
-- NFKC等で表記破壊しない。
-- 頻度だけで一般語をTerm昇格しない。
-- 擬似説明生成しない。
-- project world/canonへ自動登録しない。
-- Term推論属性を再解析でupdateしない。
+- Term Disable
+- Label/Type修正
+- Novelty/Exact Match修正
+- Sufficient Explanation指定
+- Alias Confirm/Reject
+
+をDirect操作可能。
+
+## 19. Test
+
+- Candidate ExtractorがTerm/Entity Registry非依存
+- CandidateはAnnotation、Identity/TermMentionを作らない
+- Resolver `cacheable=false`
+- Registry Input Fingerprint
+- Reference Work Episode跨ぎTerm統合
+- 同名Enabled Term複数で強制選択なし
+- Term Identity再解析Updateなし
+- Disabled Term除外
+- Label/Type Override
+- Novelty/Exact Match Run Annotation
+- Inferred AliasだけではAuto Mergeなし
+- Confirmed/Manual Alias Resolution
+- 初出/説明/説明遅延
+- Refresh/Order変更でOccurrence Index依存なし
+- Current Resolver Runだけから初出算出
+- Work全体解析Episode Order
+
+## 20. Codex禁止事項
+
+- Term Candidate Extractorへ既存Term/Entity Registryを入力
+- Candidate ExtractorからTerm Identityを作成
+- Term ResolverをCache Hitで省略
+- Term Identity Rowを再解析でUpdate
+- Novelty/ExactMatchSafeをIdentity Columnへ戻す
+- Disabled TermをResolver/Metricへ含める
+- Occurrence Indexを保存
+- Inferred AliasだけでAuto Merge
+- MeCab/Sudachiを勝手に追加
+- Project World/Canonへ自動登録

@@ -2,7 +2,9 @@
 
 ## 1. 目的
 
-Document解析Analyzerを依存関係付きDAGとして実行し、入力revision・設定・model・promptをfingerprint化する。前処理、Structure作成、Corpus集約、Profile生成、LintをAnalysisRunへ押し込まず責務を分離する。
+Document解析Analyzerを依存DAGとして実行し、入力Revision・Analyzer/Policy・Model/Prompt・依存Run・人手補正StateをFingerprint化する。前処理、Structure作成、Corpus集約、Profile生成、LintをAnalysisRunへ押し込まない。
+
+Style JobはProject-local `story.db` にpersistし、API Process全体では単一同期Worker Threadで処理する。
 
 上位仕様は `../basic-design.md`。
 
@@ -14,6 +16,7 @@ CORE/src/novel_core/style_analysis/
   analyzer.py
   analyzer_registry.py
   analysis_policy.py
+  analysis_state.py
   analysis_repository.py
   analysis_service.py
   fingerprint.py
@@ -22,12 +25,11 @@ CORE/src/novel_core/style_analysis/
 
 API/src/novel_api/style_analysis/
   runtime.py
+  job_worker.py
   model_client.py
 ```
 
-## 3. Runtime責務
-
-### AnalysisRun対象
+## 3. AnalysisRun対象
 
 ```text
 scene-boundary-detector
@@ -45,14 +47,13 @@ style-metrics-basic
 style-metrics-semantic
 ```
 
-### AnalysisRun対象外
+対象外:
 
-- normalization: 02 TextRevision作成
-- deterministic segmentation: 03 automatic StructureRevision
-- semantic Structure materialization: 03 StructureService
-- Aggregate: 08 AggregateService/job
-- Profile: 08 ProfileService/job
-- Lint: 11 LintRun/job
+- Normalization -> TextRevision
+- Automatic/Semantic/Manual Structure Materialization -> StructureService
+- Aggregate
+- Profile
+- Lint
 
 ## 4. Analyzer契約
 
@@ -64,6 +65,8 @@ class AnalyzerContext:
     structure_revision_id: int
     dependency_run_ids: tuple[int, ...]
     policy_version: int
+    state_fingerprint: str | None
+    registry_input_fingerprint: str | None
     config: Mapping[str, object]
 
 @dataclass(frozen=True)
@@ -77,16 +80,37 @@ class Analyzer(Protocol):
     id: str
     version: int
     deterministic: bool
+    cacheable: bool
     dependencies: tuple[str, ...]
+    state_inputs: tuple[str, ...]
+    registry_input: str | None
     input_scope: str
     def run(self, context: AnalyzerContext) -> AnalyzerResult: ...
 ```
 
-AnalysisServiceがrun state/fingerprint/transactionを管理する。
+## 5. 初期Analyzer Registry
 
-## 5. AnalysisPolicy
+| Analyzer | Cache | Dependency | State Input | Registry Input |
+|---|---|---|---|---|
+| scene-boundary-detector | yes | - | - | - |
+| entity-mention-extractor | yes | - | - | - |
+| entity-resolver | **no** | entity-mention-extractor | entity_registry | entity_registry |
+| speaker-attribution | yes | entity-resolver | entity_registry, mention_resolution | - |
+| entity-relation-extractor | yes | speaker-attribution | entity_registry, mention_resolution | - |
+| term-candidate-extractor | yes | - | - | - |
+| term-resolver | **no** | term-candidate-extractor | term_registry | term_registry |
+| term-explanation-detector | yes | term-resolver | term_registry | - |
+| scene-semantic-classifier | yes | - | - | - |
+| block-semantic-classifier | yes | - | - | - |
+| pov-classifier | yes | entity-resolver | entity_registry, mention_resolution | - |
+| style-metrics-basic | yes | - | - | - |
+| style-metrics-semantic | yes | speaker-attribution, term-resolver, term-explanation-detector, scene-semantic-classifier, block-semantic-classifier | effective_semantics | - |
 
-唯一のthreshold/sample policy正本。
+Resolver 2種だけはWork/DocumentのIncremental Registryを更新するためCache不可。
+
+## 6. AnalysisPolicy
+
+唯一のThreshold/Sample Policy正本。
 
 ```python
 @dataclass(frozen=True)
@@ -109,72 +133,156 @@ class AnalysisPolicy:
     profile_min_term_samples: int = 5
 ```
 
-調整時はversionを上げfingerprintへ含める。
+## 7. Human State Fingerprint
 
-## 6. Effective AnalysisRun選択
+ManualOverride/InferenceReviewがAnalyzer入力を変える場合だけCurrent RunをStaleにする。Raw Inferenceを単にOverrideしただけで無関係AnalyzerまでStaleにしない。
 
-同一target/analyzerに複数runが存在し得るため、repositoryに1つの選択規則を実装する。
+`analysis_state.py` がState KeyごとのCanonical SHA-256を計算する。
 
-候補条件:
+### entity_registry
+
+対象Scopeの:
+
+- Manual Entity Identity
+- Active Effective `entity.enabled/name/type` Override
+- Manual Entity Alias
+- Inferred Entity Aliasの最新Confirmed/Rejected Review
+
+### mention_resolution
+
+指定StructureRevision内のActive Effective `mention.entity_id` Override。
+
+### term_registry
+
+対象Scopeの:
+
+- Manual Term Identity
+- Active Effective `term.enabled/label/type` Override
+- Manual Term Alias
+- Inferred Term Aliasの最新Confirmed/Rejected Review
+
+### effective_semantics
+
+指定Document/Text/StructureでMetricへ影響するEffective Human Decision:
+
+- `block.speaker_entity_id`
+- Entity Enabled
+- Term Enabled
+- `term.novelty`
+- `term.exact_match_safe`
+- `term.sufficient_explanation_annotation_id`
+- Scene Function/Tone/Pace/InformationLoad/Interaction/POV Override
+- Relevant Confirm/Reject Review
+
+Canonical StateはEffective値でHashし、Override履歴Row IDそのものは含めない。同じEffective Stateなら同Hash。
+
+Analyzerの `state_inputs` が空なら `state_fingerprint=NULL`。
+
+複数Keyは:
 
 ```text
-same document_id
-same text_revision_id
-same structure_revision_id
-same analyzer_id
-status in succeeded | partial
+hash({key: key_hash, ...} sorted)
 ```
 
-### succeededを要求するconsumer
+## 8. Registry Input Fingerprint
 
-Basic document Metric等、complete outputが必要なconsumerは最新の `succeeded` runだけを選ぶ。
+`entity-resolver` / `term-resolver` はCurrent Inferred Registryも入力にするため、Run開始時のRegistry全体をCanonical Hash化して `registry_input_fingerprint` に保存する。
 
-### partial subjectを利用可能なconsumer
+含むもの:
 
-Scene単位のSemantics表示や07のcomplete Scene Metricは、最新 `succeeded` がなければ最新 `partial` runの成功subject outputを利用可能。
+- Enabled Inferred/Manual Identity ID + Effective Name/Type/Label
+- Confirmed/Manual Alias
 
-「最新」は `created_at DESC, id DESC`。fingerprint一致の古いrunを新しい異fingerprint runより優先しない。
+これはHistorical Provenance用。
 
-ManualOverrideはrun選択後にEffective Viewとしてoverlayする。
+**Current Run判定では現在のRegistry Hashとの一致を要求しない。** 後続EpisodeでRegistryが成長するたび全過去Episodeを自動Stale化しないためである。
 
-## 7. Orchestration
+ResolverはCache不可なので、ユーザーが再Analysisしたときは必ずCurrent Registryで新Runを作る。
 
-### deterministic preset
+## 9. AnalysisRun Dependency永続化
+
+Dependency IDは12 `style_analysis_run_dependencies` に保存する。
+
+Run開始前:
+
+1. Registry Dependency Analyzer IDを取得
+2. Section 10 Current ResolverでCurrent Dependency Runを解決
+3. 必須Dependencyがない場合、Orchestratorが先にそのAnalyzerを実行
+4. Dependency Run IDsをsort
+5. Run FingerprintへDependency Run Fingerprintsを含める
+
+Final Output TransactionでRun ResultとDependency Linkを一緒にpersistする。
+
+Historical Dependency LinkはUpdateしない。
+
+## 10. Current AnalysisRun Resolver
+
+入力:
 
 ```text
-TextRevision
--> automatic Structure build/reuse
--> style-metrics-basic
+document_id
+text_revision_id
+structure_revision_id
+analyzer_id
+consumer_mode = complete | subject_partial_allowed
 ```
 
-### full preset: structure未指定
+Candidate条件:
+
+### Current Definition
+
+- Analyzer Version = Registry Current
+- Policy Version = Current AnalysisPolicy
+- Config JSON = Current Default Config
+- State Fingerprint = Section 7で現在計算した値
+- Model-basedならCurrent Provider/Model/Prompt ID+Version一致
+- Taxonomy/Metric Version等のFingerprint定義一致
+
+v1 Analyze APIは任意Analyzer Configを受け付けない。ConfigはRegistry Defaultだけ。将来Custom Configを追加する場合はAPI/Current Resolverを同時拡張する。
+
+### Dependency
+
+Registry依存を再帰Resolveし、CandidateのDependency Link集合がCurrent Dependency Run ID集合と完全一致すること。
+
+Dependencyが変わればDependent RunはStale。
+
+### Status
+
+`complete`: Succeededのみ。
+
+`subject_partial_allowed`: Succeeded優先、なければPartial可。
+
+### Selection
+
+Current条件一致が複数なら:
 
 ```text
-TextRevision
--> automatic base Structure build/reuse
--> scene-boundary-detector(base)
--> semantic Structure materialize/reuse
--> final Structure決定
--> Entity/Term/Speaker/Semantics analyzers
--> style-metrics-basic(final)
--> style-metrics-semantic(final)
+created_at DESC, id DESC
 ```
 
-Boundary Detector runのcandidate Annotationから03がsemantic Structureを作る。生成時 `style_structure_analysis_sources` にRun provenanceを記録する。
+該当なしはNone。旧Version/旧Policy/旧DependencyをFallbackしない。
 
-### full preset: structure明示
+Resolve Call内はMemoizeする。
 
-requestのStructureRevisionをfinalとして使用する。`manual` だけでなく `automatic/semantic` も指定可。**明示Structureがある場合はScene Boundary Detectorを再実行しない。** ユーザーがrevisionを固定した意図を優先する。
+### Resolver Analyzer特例
 
-## 8. Dependency DAG
+`entity-resolver` / `term-resolver` はCache不可だが、**表示・Dependent Run Current判定用には最新Current RunをResolve可能**。
 
-final Structure確定後:
+そのCurrent判定では:
+
+- Analyzer/Policy/Model/Prompt/State/Dependency一致を要求
+- Registry Input FingerprintのCurrent一致は要求しない
+
+## 11. Dependency DAG
+
+Final Structure確定後:
 
 ```text
 entity-mention-extractor
   -> entity-resolver
       -> speaker-attribution
-      -> entity-relation-extractor
+          -> entity-relation-extractor
+      -> pov-classifier
 
 term-candidate-extractor
   -> term-resolver
@@ -182,19 +290,94 @@ term-candidate-extractor
 
 scene-semantic-classifier
 block-semantic-classifier
-pov-classifier
 
-final structure -> style-metrics-basic
+final structure
+  -> style-metrics-basic
+
 speaker-attribution
+term-resolver
 term-explanation-detector
 scene-semantic-classifier
 block-semantic-classifier
   -> style-metrics-semantic
 ```
 
-cycleはregistry初期化時error。
+CycleはRegistry初期化時Error。
 
-## 9. AnalysisRun
+## 12. Orchestration: Document
+
+### deterministic
+
+```text
+TextRevision
+-> Automatic Structure build/reuse
+-> style-metrics-basic
+```
+
+### full / Structure omitted
+
+```text
+TextRevision
+-> Automatic Base Structure
+-> scene-boundary-detector
+-> Semantic Structure Materialize/Reuse
+-> Final Structure
+-> Entity Mention -> Entity Resolver -> Speaker/Relation/POV
+-> Term Candidate -> Term Resolver -> Term Explanation
+-> Scene/Block Semantic
+-> Basic Metric
+-> Semantic Metric
+```
+
+### full / Structure explicit
+
+指定StructureをFinalとして使いBoundary Detectorを再実行しない。
+
+## 13. Orchestration: Reference Work
+
+作品全体解析用Job `analyze_reference_work` を用意する。
+
+Job Payload:
+
+```json
+{
+  "reference_work_id": 12,
+  "preset": "full"
+}
+```
+
+Worker実行開始時にCurrent CatalogをSnapshot:
+
+```text
+ReferenceEpisode order_index ASC
++ each current_text_revision_id
+```
+
+`current_text_revision_id=NULL` のEpisodeはそのEpisodeだけFailureとして記録する。
+
+各EpisodeをOrder順にDocument Analysisする。これによりIncremental Entity/Term Registryが本文順に育つ。
+
+ResolverはCache不可なので、Work全体解析を再実行すれば全Episode Resolverが再実行される。
+
+### Work Job Status
+
+- 全Episode成功 -> `succeeded`
+- 1件以上成功 + 1件以上失敗/Cancel対象外Failure -> `partial`
+- 成功0件 -> `failed`
+- Cancel Requested -> 現在のSafe Point後 `cancelled`
+
+成功済みEpisodeのRunはRollbackしない。
+
+`result_json`:
+
+```json
+{
+  "succeeded_episode_ids": [1,2],
+  "failed_episode_ids": [3]
+}
+```
+
+## 14. AnalysisRun
 
 ```text
 id
@@ -207,6 +390,8 @@ status
 fingerprint
 config_json
 policy_version
+state_fingerprint nullable
+registry_input_fingerprint nullable
 model_provider nullable
 model_id nullable
 prompt_id nullable
@@ -219,7 +404,7 @@ warning_json
 created_at
 ```
 
-status:
+Status:
 
 ```text
 queued
@@ -230,157 +415,223 @@ failed
 cancelled
 ```
 
-## 10. Fingerprint
+## 15. Fingerprint
 
-canonical JSON SHA-256。
+Canonical JSON SHA-256:
 
 ```text
-analyzer_id/version
+analyzer id/version
 input text hash
 structure fingerprint
-sorted dependency run fingerprints
+dependency run fingerprints
 config
 policy version
-model provider/id if model-based
-prompt id/version if model-based
-taxonomy version if applicable
-MetricDefinition versions if applicable
+state fingerprint
+registry input fingerprint if Resolver
+model provider/id
+prompt id/version
+taxonomy/metric versions
 ```
 
-serialization: sorted keys, compact separators, UTF-8, ensure_ascii=false。
+Cache Hit:
 
-`succeeded` fingerprint一致のみcache hit。`partial/failed` はreuseしない。
+- `analyzer.cacheable == true`
+- 同Current FingerprintのSucceeded Run
 
-## 11. Scene Boundary provenance
+Resolver 2種はFingerprintをProvenanceとして保存するがCache Hitには使わない。
 
-Boundary Detector自身はbase StructureRevisionを入力に通常のAnalysisRunを作る。
+Partial/FailedはCache Hit不可。
 
-- `AnalysisRun.structure_revision_id` = automatic base。
-- candidateは06/03契約のAnnotation。
-- semantic StructureはRun outputではなく03 StructureServiceのmaterialized projection。
-- semantic Structure作成後 `style_structure_analysis_sources` でRunをlink。
-- semantic Structure fingerprintは03定義を正本。
+## 16. Scene Boundary Provenance
 
-後続Analyzerはsemantic Structureを入力とするため、dependency_run_idsへBoundary Detectorを直接含める必要はない。Structure fingerprintがそのprovenanceを表現する。
+- Boundary Run Structure = Automatic Base
+- Candidate Annotation = 03/06契約
+- Semantic Structure = StructureService Projection
+- `style_structure_analysis_sources` でBoundary Run Link
 
-## 12. Partial policy
+後続AnalyzerはSemantic Structure Fingerprint経由でProvenanceを得る。
 
-任意失敗率thresholdは置かない。
+## 17. Partial Analyzer Policy
 
-Scene/Block単位Analyzer:
+- 全Subject成功 -> succeeded
+- Usable Output >=1 + 一部Failure -> partial
+- Usable Output 0 / Provider・Contract・Storage全体Failure -> failed
 
-- 全subject成功 -> succeeded
-- usable output >=1かつ一部失敗 -> partial
-- usable output 0、またはprovider/contract/storage全体失敗 -> failed
+任意Failure率Thresholdは置かない。
 
-partial成功subject outputは保持。07がscope completenessを判断する。
+## 18. Persisted Job Schema契約
 
-## 13. 変更伝播
-
-| 変更 | stale/recompute |
-|---|---|
-| raw/normalizer | Structure以降全部 |
-| automatic segmenter | Boundary/Semantic/Metric |
-| semantic/manual Structure | Semantic/Metric |
-| Entity analyzer | resolver/speaker/relation、speaker Metric |
-| speaker override | speaker Metric、Aggregate、Lint |
-| Term analyzer/Term attribute | term Metric、Aggregate、Lint |
-| taxonomy/classifier | scene Aggregate、semantic Metric、Lint |
-| MetricDefinition | Aggregate/Profile/Lint |
-| AnalysisPolicy | 影響Analyzer/Structure/Profile以降 |
-| ProfileVersion | Lintのみ |
-
-row deleteでinvalidateしない。
-
-## 14. Persisted job
-
-API process内worker thread 1本、FIFO、同時実行1。
+各Project DBの `style_jobs`:
 
 ```text
-style_jobs
-  id
-  job_type
-  payload_json
-  status
-  cancel_requested
-  created_at
-  started_at
-  finished_at
-  error_code
-  error_message
-  version
+id
+job_type
+payload_json
+status
+cancel_requested
+progress_current nullable
+progress_total nullable
+result_json
+warning_json
+created_at
+started_at
+finished_at
+error_code
+error_message
+version
 ```
 
-job:
+Job Status:
+
+```text
+queued
+running
+succeeded
+partial
+failed
+cancelled
+```
+
+Job Type:
 
 ```text
 source_import
+source_refresh
 analyze_document
+analyze_reference_work
 recompute_aggregate
 build_profile
 run_lint
 ```
 
-## 15. Restart
+Progressは件数ベース。Totalが判明前はNULL可。
 
-起動時 `running` job/runを `failed / WORKER_INTERRUPTED`。queuedは続行。running自動requeueなし。
+## 19. StyleJobWorker
 
-## 16. Transaction
+API Process全体で同期Worker Thread 1本。
+
+State:
+
+```text
+Condition
+ready_project_ids deque
+ready_project_id_set
+stop flag
+ProjectRegistry
+```
+
+Request-bound SQLite ConnectionはWorkerへ渡さない。Worker Thread自身がProject DB ConnectionをOpen/Closeする。
+
+### Notify
+
+Job Commit直後:
+
+```python
+worker.notify(project_id)
+```
+
+In-memory Project Queueへ追加してWakeするだけ。
+
+### Startup Recovery
+
+1. `ProjectRegistry.list(include_archived=False)`
+2. 各Active ProjectをWorker Thread上で`open_database()`
+3. Running Job/AnalysisRun -> `failed / WORKER_INTERRUPTED`
+4. Queued JobがあればProject IDをReady Queue
+5. Close
+
+1 Project FailureでWorker全体を止めない。
+
+Archived ProjectはStartup Scan Skip。
+
+### Claim
+
+Project内:
+
+```text
+status=queued
+ORDER BY created_at ASC,id ASC
+LIMIT 1
+```
+
+を短いTransactionでRunningへClaim。
+
+同Project内FIFO。Project間厳密Global FIFOは不要。
+
+### Execute
+
+Network/Model Call中は長時間DB Transactionを開かない。
+
+1 Job終了後、同ProjectにQueuedが残ればProject IDをReady Queue末尾へ戻す。
+
+## 20. Progress更新
+
+WorkerはJob種別ごとに短いTransactionでProgressを更新する。
+
+### Source Import/Refresh
+
+AdapterはDBを知らない。01のProgress Callbackで:
+
+```text
+progress_current
+progress_total
+```
+
+をWorkerへ通知する。
+
+### Reference Work Analysis
+
+```text
+progress_total = target episode count
+progress_current = completed episode count
+```
+
+### Document Analysis等
+
+Step数を無理にPercent化しない。Totalを自然に定義できなければNULLのままRunning表示でよい。
+
+## 21. Restart / Cancel
+
+RunningをSucceededへ推測しない。Startup RecoveryでFailed。
+
+Running Job自動Requeueなし。Retry APIで新Job。
+
+Queued Cancelは即Cancelled。
+
+Runningは `cancel_requested=1`。
+
+Safe Point:
+
+- Scene/Block間
+- Source Episode取得間
+- Reference Work Episode間
+- Model Call前後
+
+External Request強制Killなし。
+
+## 22. Transaction
 
 AnalysisRun:
 
-1. running commit
-2. compute
-3. output + final statusを1 transaction
-4. persistence失敗rollback + run failed
+1. Running commit
+2. Compute
+3. Output + Dependency Link + Final Statusを1Transaction
+4. Persistence Failure -> Rollback + Run Failed
 
-partial outputも1 transaction。
+Job Progress/Stateは別の短いTransaction。
 
-Source fetch transactionは01。
+## 23. Model Client
 
-## 17. Cancellation
+CORE Protocolは同期 `complete_json()`。
 
-queued即cancel。runningは`cancel_requested=1`。
-
-check point:
-
-- Scene/Block間
-- source episode取得間
-- model call前後
-
-外部request強制killなし。cancelled outputはeffectiveに使わない。
-
-## 18. SemanticModelClient
-
-```python
-@dataclass(frozen=True)
-class ModelRequest:
-    system_prompt: str
-    user_prompt: str
-    response_schema: Mapping[str, object]
-    temperature: float
-
-@dataclass(frozen=True)
-class ModelResponse:
-    parsed: Mapping[str, object]
-    provider: str
-    model_id: str
-    input_tokens: int | None
-    output_tokens: int | None
-    request_id: str | None
-
-class SemanticModelClient(Protocol):
-    def complete_json(self, request: ModelRequest) -> ModelResponse: ...
-```
-
-## 19. API model adapter
-
-v1:
+Provider Mode:
 
 ```text
 disabled
 openai_compatible
 ```
+
+Config:
 
 ```text
 STYLE_ANALYSIS_LLM_PROVIDER
@@ -390,56 +641,107 @@ STYLE_ANALYSIS_LLM_MODEL
 STYLE_ANALYSIS_LLM_TIMEOUT_SECONDS default 60
 ```
 
-API keyはDB/log/AnalysisRunへ保存しない。
+Worker Threadから同期呼出し。別Async Event Loopを作らない。
 
-Full analysis明示実行を送信開始操作とし、追加checkbox/dialogは必須にしない。UIはprovider/model名を表示する。
+API KeyはDB/Logへ保存しない。
 
-## 20. Model call
+Full Analysis明示実行を送信開始操作とし追加確認Dialog不要。
 
-- temperature=0
-- timeout/429/5xx retry最大1回
-- schema invalid repair retry最大1回
-- repair失敗は対象subject失敗
-- raw response全文を通常logへ出さない
+## 24. Model Call
 
-## 21. API
+- Temperature=0
+- Timeout/429/5xx Retry最大1
+- Schema Invalid Repair Retry最大1
+- Repair Failureは対象Subject Failure
+- Raw Response全文を通常Logへ出さない
+
+## 25. API契約
+
+Document Analyze:
 
 ```text
 POST /projects/{project_id}/style-analysis/documents/{document_id}/analyze
-GET  /projects/{project_id}/style-analysis/jobs/{job_id}
-POST /projects/{project_id}/style-analysis/jobs/{job_id}/cancel
-POST /projects/{project_id}/style-analysis/jobs/{job_id}/retry
-GET  /projects/{project_id}/style-analysis/analysis-runs
-GET  /projects/{project_id}/style-analysis/analysis-runs/{run_id}
 ```
 
-analyze:
+- `text_revision_id` required
+- `structure_revision_id` optional
+- `preset=deterministic|full`
 
-- `text_revision_id` required。
-- `structure_revision_id` optional。
-- provided Structureは同document/TextRevision所属を検証。
+Reference Work Analyze:
 
-## 22. Test
+```text
+POST /projects/{project_id}/style-analysis/reference-works/{work_id}/analyze
+```
 
-- DAG/cycle
-- policy fingerprint
-- effective run selection succeeded/partial/latest
-- cache hit/miss
-- omitted StructureでBoundary+semantic materialize
-- explicit StructureでBoundary skip
-- source link provenance
-- partial subject保持
-- basic Metric provider不要
-- restart/FIFO/cancel
-- provider disabled
-- retry/repair
+Request:
 
-## 23. Codex禁止事項
+```json
+{"preset":"full"}
+```
 
-- normalize/segment/Aggregate/Profile/LintをAnalysisRunへ入れない。
-- Celery/Redis/parallel worker追加。
-- partial/failed cache hit。
-- threshold重複hard-code。
-- provider SDKをCOREへ入れる。
-- model/providerをfingerprintから隠す。
-- explicit Structure指定時にScene Boundaryを勝手に再適用。
+Response `202 + job_id`。
+
+Job作成/Retry後は `worker.notify(project_id)`。
+
+## 26. Test
+
+### Runtime
+
+- DAG/Cycle
+- Analyzer Cacheable Flag
+- Resolver Cache不可
+- State Fingerprint Key計算
+- Entity/Term Human State変更で該当Run Stale
+- Scene OverrideでScene Classifier RunはStaleにならずSemantic Metric Stale
+- Registry Input Fingerprint保存
+- Dependency Link Persist
+- Analyzer/Policy/Model/Prompt mismatch -> Current None
+- Dependency変更 -> Dependent Stale
+- Complete vs Partial
+- Current Resolver Memoization
+- Basic Metric Semantic State非依存
+
+### Work Analysis
+
+- Current Text PointerをEpisode Order順にSnapshot
+- Resolver毎Episode再実行
+- Partial Work Job
+- Progress Count
+- Work ReanalysisでResolver再実行
+
+### Worker
+
+- Thread 1本
+- Request Connection非再利用
+- Notify
+- Project内FIFO
+- Project公平再Queue
+- Startup Active Project Scan
+- Running Recovery
+- Queued Recovery
+- 1 Project Failure継続
+- Archived Skip
+- Source Refresh Job
+- Cancel
+
+### Model
+
+- Provider Disabled
+- Retry/Repair
+
+## 27. Codex禁止事項
+
+- Normalize/Segment/Aggregate/Profile/LintをAnalysisRunへ入れる
+- Dependency Link省略
+- Current Runを単純Latest Succeededで選ぶ
+- Stale RunをFallback
+- Entity/Term ResolverをCache Hitで省略
+- Inferred Registry成長だけで全過去Episodeを自動再解析
+- Celery/Redis/Parallel Worker追加
+- ProjectごとWorker Thread追加
+- Request SQLite ConnectionをWorkerへ渡す
+- Project間Global FIFO用中央DB追加
+- Source/ModelのためだけにAsync Event Loop追加
+- Arbitrary Failure率Threshold追加
+- Threshold重複Hard-code
+- Provider SDKをCOREへ入れる

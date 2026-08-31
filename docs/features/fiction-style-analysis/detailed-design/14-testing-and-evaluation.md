@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Style Analysisの決定論的処理、DB整合性、API/WebUI、LLM推論、Source Adapterを再現可能に検証する。CIはlive site/modelへ依存させず、精度評価はCI外のdogfood/evaluationとして扱う。
+Style Analysisの決定論的処理、DB整合性、API/WebUI、Runtime/Job、LLM推論、Source Adapterを再現可能に検証する。CIはLive Site/Modelへ依存させず、Model品質はCI外Evaluation/Dogfoodとして扱う。
 
 上位仕様は `../basic-design.md`。
 
@@ -15,13 +15,13 @@ API/WebUI contract
 manual dogfood/evaluation
 ```
 
-同じ不変条件を全層へ重複配置しない。
+同一Invariantを全層へ重複配置しない。
 
-- DB integrity: migration/integration
-- Analyzer: schema/output/fingerprint
-- API: contract/revision指定
-- WebUI: user flow
-- Model品質: CI外evaluation
+- DB Integrity: Migration/Integration
+- Analyzer: Schema/Output/Fingerprint/Dependency
+- API: Contract/Revision/Job State
+- WebUI: User Flow
+- Model品質: CI外
 
 ## 3. 実装先
 
@@ -55,153 +55,165 @@ WEBUI/frontend/e2e/
   style-analysis.spec.ts
 ```
 
-既存naming conventionが異なる場合は既存へ合わせる。
+既存Naming Conventionが異なる場合は既存へ合わせる。
 
-## 4. Deterministic unit gate
+## 4. Deterministic Unit Gate
 
 ### Normalization
 
-- input/output
-- hash
-- mapping
-- code point span
+- Input/Output
+- Hash
+- Mapping
+- Unicode Code Point Span
 
-### Segmentation
+### Structure
 
-- Scene count/order
-- Block global order/type/span
-- Sentence span/order
-- separator `scene_id=NULL`
-- automatic Structure fingerprint
-- Semantic Structure materialization
-- Semantic Structure source AnalysisRun link
+- Scene/Block/Sentence Order/Span
+- Block Global Order
+- Separator `scene_id=NULL`
+- Automatic Fingerprint
+- Boundary Candidate Contract
+- Semantic Structure Materialization
+- Semantic Structure Source AnalysisRun Link
 
 ### Metrics
 
-- Metric name/version
-- scalar/percentile
-- sample_count
-- Basic/Semantic Metric分離
-- speaker streak定義
-- Term effective novelty/explanation入力
+- Metric Name/Version
+- Scalar/Percentile/Sample Count
+- Basic/Semantic Group分離
+- Basic MetricがSpeaker/Term/Semantic Annotation非依存
+- 40 chars Bridge Rule
+- Speaker Streak
+- Term Effective State
 
 Floatは `pytest.approx(..., abs=1e-9)`。
 
 ## 5. Fixture方針
 
-巨大snapshot frameworkは導入しない。短い自作日本語fixtureを使い、必要fieldだけ明示assertする。
+巨大Snapshot Frameworkは導入しない。短い自作日本語Fixtureを使い必要FieldだけAssertする。
 
-Source Adapter HTML fixtureはDOM構造だけ残し、本文をテスト用自作文へ置換する。外部作品本文を長くrepositoryへ入れない。
+Source Adapter HTML FixtureはDOM構造だけ残し、本文は自作文へ置換する。外部作品本文を長くRepositoryへ保存しない。
 
-## 6. Source Adapter
+## 6. Source Adapter Test
 
-`httpx.MockTransport` 等でnetworkをmockする。
+`httpx.MockTransport` 等でNetworkをMockする。
 
-必須case:
+必須:
 
 ```text
-Narou index + episode success
-Narou parse fail
-Kakuyomu success
-Kakuyomu restricted page
+Narou index/episode success
+Narou parse failure
+Kakuyomu success/restricted
 redirect allowed/disallowed host
 429 retry success/failure
 response size limit
 multi-episode fetch途中失敗 -> catalog未更新
 EPUB binary snapshot hash
-refresh reorder
-refreshで消えたEpisode -> Document削除、SourceSnapshot保持
+Adapter sync API
+Refresh reorder
+Refresh削除Episode -> Document削除 + Snapshot保持
 Reference Work purge -> 専用Source/Snapshot削除
 ```
 
-Selector変更はadapter_version変更対象。
+Selector変更はAdapter Version変更対象。
 
-## 7. DB / Migration gate
+## 7. DB / Migration Gate
 
-CORE CIで以下を確認する。
+CORE CIで:
 
-- fresh 001→008
-- 005 DB→006→008
-- migration checksum
+- Fresh 001→008
+- Existing 005→006→008
+- Migration Checksum
 - `PRAGMA foreign_key_check` empty
 - `PRAGMA integrity_check` = ok
-- JSON/enum/CHECK
-- Mapping片側zero/両側zero
-- Block global order
-- Entity/Term exactly-one scope
-- Entity/Term identity rowの推論属性分離
-- Semantic Structure source Run link
-- Profile identity/Version分離
-- Active Profile version所属validation
-- immutable Snapshot/TextRevision/ProfileVersion UPDATE拒否
-- Reference Work purge transaction
-- Project Episode cascade
+- JSON/Enum/CHECK
+- Mapping片側Zero/両側Zero
+- Block Global Order
+- ReferenceEpisode Current Text Pointer Service Validation
+- Job Type/Status/Progress/Partial Persistence
+- Entity/Term Exactly-one Scope
+- Mention RowにEntity IDなし
+- Term IdentityにNovelty/ExactMatchSafeなし
+- AnalysisRun State/Registry Fingerprint
+- AnalysisRun Dependency Link
+- Semantic Structure Source Run Link
+- ManualOverride Set/Clear/Revert
+- Profile Identity/Version/Active Version
+- Immutable Snapshot/TextRevision/ProfileVersion UPDATE拒否
+- Reference Work Purge Transaction
+- Project Episode Cascade
 
-各integration scenarioの末尾へ同じintegrity checkを重複追加しない。
+各Integration Scenario末尾へ同じIntegrity Checkを重複追加しない。
 
-## 8. Analyzer mocked test
+## 8. Analyzer Mocked Test
 
 Fake `SemanticModelClient` で固定JSONを返す。
 
 検証:
 
-- required context
-- schema/version
-- output validation
-- invalid JSON/schema
-- invalid offset
-- timeout/429
-- partial subject handling
-- AnalysisPolicy threshold/fingerprint
-- Effective AnalysisRun selection
-- Boundary candidate Annotation contract
-- Term novelty/exact-match Annotation per Run
+- Required Context
+- Response Schema/Version
+- Invalid JSON/Schema/Offset
+- Timeout/429/Repair
+- Partial Subject
+- AnalysisPolicy
+- Dependency Link
+- State Fingerprint
+- Registry Input Fingerprint
+- Current Run Resolver
 
-Prompt全文の完全一致testは作らない。
+Prompt全文完全一致Testは作らない。
 
-## 9. Gold dataset
+## 9. Entity / Term Regression
 
-`CORE/tests/style_analysis/gold/` に自作短文を置く。
+### Entity
 
-固定件数ノルマは設けない。初期実装では各カテゴリを最低1件含む小さなcurated setを作り、実バグ修正ごとにregression fixtureを追加する。
-
-### Speaker
-
-```text
-explicit speech tag
-adjacent action
-two-person turn taking
-three-person ambiguous
-unknown
-```
-
-### Scene/Block semantics
-
-```text
-daily
-exposition
-meeting
-introspection
-action
-conflict
-unclear
-```
+- Mention ExtractorがEntity Registry非依存
+- Mention RowはEntity IDなし
+- Entity Resolver AnnotationでMapping
+- Resolver Cache不可
+- Work Episode跨ぎResolution
+- 同名候補複数で強制選択なし
+- Disabled Entity除外
+- Inferred AliasだけではAuto Mergeなし
+- Confirmed/Manual Alias Resolution
+- Speaker Explicit Tag / Ambiguous Unknown
 
 ### Term
 
+- Candidate ExtractorがTerm/Entity Registry非依存
+- Candidate ExtractorはIdentity/TermMentionを作らない
+- Resolver Cache不可
+- Work Episode跨ぎTerm統合
+- Disabled Term除外
+- Novelty/Exact Match Run Annotation
+- Occurrence Index非依存
+- Explanation/Delay
+
+## 10. Scene / Semantic Regression
+
+- Daily/Exposition/Meeting/Introspection/Action/Conflict
+- `other` / `unclear` 区別
+- Scene ClassifierがEntity/Term/Speaker非依存
+- Block ClassifierがEntity/Term非依存
+- POVはEntity Resolver依存
+- Boundary Block Membership
+- Auto Apply / Proposal / Low Candidate Drop
+- Scene OverrideでClassifier Raw RunはStaleにならずSemantic Metricだけ更新
+
+## 11. Gold Dataset / Model Evaluation
+
+`CORE/tests/style_analysis/gold/` に自作短文を置く。固定件数ノルマや小規模Datasetに対する固定Precision/F1 Release Gateは設けない。
+
+最低カテゴリ:
+
 ```text
-work-specific
-common word
-alias
-explanation before/after name
-no explanation
+speaker: explicit / adjacent action / 2-person / 3-person ambiguous / unknown
+scene: daily / exposition / meeting / introspection / action / conflict / unclear
+term: work-specific / common / alias / explanation before-after / no explanation
 ```
 
-Dataset量そのものを完了条件にしない。
-
-## 10. Model evaluation
-
-CI外script:
+CI外Script:
 
 ```text
 API/scripts/evaluate_style_analysis.py
@@ -219,167 +231,203 @@ schema failure rate
 latency summary
 ```
 
-結果はgitignored領域。
+結果はGitignored領域。
 
-## 11. 品質指標の扱い
+## 12. Runtime Integration
 
-初期v1では固定precision/F1値をrelease gateにしない。小規模gold setで統計的に意味の薄い数値gateも置かない。
-
-重視順:
-
-1. schema/offset/DB invariantが壊れない
-2. 明示Speaker等の簡単なcaseを正しく処理
-3. unknownを許容し誤った自動merge/話者確定を増やさない
-4. model/prompt変更前後の相対比較を記録
-
-評価結果はChatGPTレビュー時の判断材料。
-
-## 12. Runtime integration
-
-Temp SQLite + Fake Modelで代表flowを通す。
+Temp SQLite + Fake Modelで:
 
 ```text
-Reference import
--> TextRevision
--> automatic Structure
--> Boundary AnalysisRun
--> Semantic Structure materialization + source link
--> Semantic Analyzers
--> Basic/Semantic Metrics
+Reference Import
+-> Current TextRevision Pointer
+-> Automatic Structure
+-> Boundary Run
+-> Semantic Structure
+-> Entity Mention/Resolver/Speaker/POV
+-> Term Candidate/Resolver/Explanation
+-> Scene/Block Semantic
+-> Basic/Semantic Metric
 -> Corpus Aggregate
--> Profile Version
--> Activate selected Version
--> Project Draft capture
--> Lint explicit Profile Version
+-> Profile Version + Activate
+-> Project Draft Capture
+-> Lint explicit Version
 ```
 
-追加case:
+追加:
 
-```text
-second run cache hit
-policy version change
-manual Structure指定 -> Boundary skip
-speaker override -> Metric recompute
-Term novelty/explanation override -> Metric recompute
-worker interrupted recovery
-cancel
-partial Scene analyzer
-```
+- Cacheable Analyzer Cache Hit
+- Entity/Term Resolverは再実行
+- Policy Version変更
+- Dependency Run変更 -> Dependent Stale
+- State Fingerprint変更 -> 対応Analyzer Stale
+- Registry成長だけでは過去Resolver Current判定を全Stale化しない
+- Manual Structure -> Boundary Skip
+- Override -> 必要Metric/Reanalysis
+- Partial Analyzer
 
-## 13. API contract
+## 13. Reference Work Analysis Job
 
-- Project A/B isolation
-- 404/409/413/422
-- Job 202 lifecycle
-- Text取得はexplicit text_revision_id
-- Structure取得はexplicit structure_revision_id
-- Semantics/Metric responseにselected AnalysisRun ID
-- Historical Run outputs/measurements endpoint
-- Analyzeはtext_revision required / structure optional
-- Profile identity/version/active Version contract
-- New Version作成だけではactive Version不変
-- Activateはversion_no required
-- LintはProfile Version explicit
-- Direct OverrideはReviewItem不要
+必須:
+
+- Episode `order_index` 順
+- Job開始時Current Episode/TextRevision Snapshot固定
+- Resolverは各Episodeで再実行
+- Succeeded/Failed Episodeを `result_json` へ保存
+- 全成功 `succeeded`
+- 一部成功 `partial`
+- 成功0 `failed`
+- Cancel `cancelled`
+- `progress_current/progress_total`
+- Work再解析でResolver再実行
+- 後続Episode Registry成長で前Episodeを自動再解析しない
+
+## 14. StyleJobWorker Integration
+
+- API Process全体でWorker Thread 1本
+- ProjectごとにThreadを増やさない
+- Request-bound SQLite ConnectionをWorkerで再利用しない
+- `notify(project_id)` でQueued Job回収
+- 同Project FIFO
+- Job完了後同Projectを末尾再Queue
+- 複数Projectを順番に処理
+- StartupでActive ProjectをRegistry列挙
+- Running Job/Run -> `WORKER_INTERRUPTED` Failed
+- Queued Job回収
+- 1 Project DB FailureでもWorker継続
+- Archived Project Startup Skip
+- Source Refresh Job
+- Retryは新Job Row
+- Job Progress Persist
+- Polling再取得でProgress復元
+- Cancel Queued/Running
+
+Global FIFOや中央Queue DBはTest要件にしない。
+
+## 15. Review / Override
+
+- Manual > Confirmed > Inferred
+- Rejected非Effective
+- Direct Override without ReviewItem
+- Set/Clear/Revert差
+- Speaker Clear = Explicit Unknown
+- Revert = InferenceへFallback
+- Non-null Field Clear拒否
+- Entity/Term Enabled/Name/Type Correction
+- Alias Confirm/Reject
+- Stale Structure Override
+- Explanation Annotation Lineage
+- Low ConfidenceだけではReviewItem生成なし
+- Note Optional
+
+## 16. Profile / Lint
+
+- Corpus Equal-weight Measurement Aggregate
+- Sample不足時Auto Ruleなし / Manual Rule可
+- Profile Identity/Version分離
+- Active Version同Profile所属
+- New Version作成でActive Version不変
+- ExportはVersion明示/本文なし
+- Rule Range/Zero-width Tolerance
+- Missing MetricはCoverageへ反映しLint Failにしない
+- Coverage 0でもSucceeded
+- Stale Lint
+
+## 17. API Contract
+
+- Project A/B Isolation
+- Import/Refresh/Work Analyze/Document Analyze 202
+- Job `queued/running/succeeded/partial/failed/cancelled`
+- Job Progress/Result/Warning
+- Retry Creates New Job
+- Text取得 explicit TextRevision
+- Structure取得 explicit StructureRevision
+- Semantics/Metric Response Selected Run ID
+- Historical Run Output/Measurement
+- Analyze TextRevision required / Structure optional
+- Work Analyze deterministic/full
+- Profile Version/Activation
+- Direct Override Set/Clear/Revert
 - ReviewItem CAS
-- Override note optional
-- Reference Work purgeでSource/Snapshot削除
-- Raw Source payloadが通常list/detailへ出ない
+- Lint explicit Profile Version
+- Purge
 
-API key値そのものをserializeしないことはModel Config test 1箇所で確認し、各routeへ重複しない。
+API Key非露出はModel Config Test 1箇所で確認し各Routeへ重複しない。
 
-## 14. WebUI
+## 18. WebUI
 
-Testing Library既存pattern。
+Testing Library既存Pattern。
 
-- async描画を `findBy...` / `waitFor`
-- disabled elementへuser-eventしない
-- route後に古いDOM referenceを使わない
-- polling fake timerは必要なtestだけ
-
-必須flow:
+必須Flow:
 
 ```text
-Source import
+Source Import
+Refresh/Purge
 Job progress/retry
-Reference browse/refresh/purge
-Project Draft capture
+Reference Work Analyze progress/partial
 TextRevision selector
 StructureRevision selector
-Analysis basic/full
-Semantic Boundary表示/manual split
+Document deterministic/full analysis
+Boundary/manual split
+Entity/Term direct correction
 Corpus membership
-Profile Version edit
-Save と Save+Activate の差
-Direct Speaker/Term Override
+Profile Save vs Save+Activate
 Review conflict
 Lint coverage/stale
 Finding ignore
 ```
 
-## 15. E2E
+Pollingは `partial` を含む終了Statusで停止する。
 
-External site/modelはmock/fake server。
+## 19. E2E
 
-代表flow 1本:
+External Site/ModelはMock/Fake Server。
+
+代表Flow:
 
 ```text
 Project open
 -> Local Text import
 -> Deterministic Analysis
 -> Corpus create
--> Profile build
--> Activate Version
--> Project fixture capture
+-> Profile build/activate
+-> Project Draft capture
 -> Lint
 -> Finding display
 ```
 
-Semantic flowはFake Providerで別1本。
+Semantic FlowはFake Providerで別1本。全細部をE2Eへ重複させない。
 
-全細部をE2Eへ重複させない。
-
-## 16. Live dogfood
+## 20. Live Dogfood
 
 CI外・明示実行。
 
-### Source
+Source:
 
-- Narou/Kakuyomuからユーザー指定作品を少数episodeで開始
-- title/order/本文抽出を目視
-- 問題なければ作品全体へ拡張
+- Narou/Kakuyomuのユーザー指定作品を少数Episodeから確認
+- Title/Order/本文抽出を目視
+- 問題なければWork全体解析へ拡張
+
+Model:
+
+- Configured Provider/Model確認
+- Representative Episode/WorkでFull Analysis
+- Boundary/Speaker/Term/Semanticsを目視
+- 明確な誤りはRegression Fixtureへ追加
 
 毎回のrights checkbox等は不要。Login/有料壁回避はしない。
 
-### Model
-
-- configured provider/modelを確認
-- representative EpisodeでFull Analysis
-- Scene境界、Speaker、Term、Semantic分類を目視
-- 明確な誤りをGold Regressionへ追加
-
-## 17. CI commands
+## 21. CI Commands
 
 既存CIを正本とする。
 
-CORE:
+CORE/API:
 
 ```text
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv run pytest -W error
-uv run pytest -W error --cov=src/novel_core --cov-report=term-missing
-```
-
-API:
-
-```text
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest -W error
-uv run pytest -W error --cov=src/novel_api --cov-report=term-missing
+uv run pytest -W error --cov=src/... --cov-report=term-missing
 ```
 
 WEBUI:
@@ -392,34 +440,34 @@ npm run build
 npm run test:e2e
 ```
 
-MCPは変更しないが既存CI regressionとしてPASSを要求する。pre-commitもPASS。
+MCPは変更しないが既存RegressionとしてPASS。Pre-commitもPASS。
 
-## 18. Coverage
+## 22. Coverage / Completion
 
-既存80% gate維持。Coverageのためだけの低価値testを大量追加しない。失敗・境界・versioning・idempotencyを優先する。
-
-## 19. Completion criteria
+既存80% Gate維持。Coverageのためだけの低価値Testを大量追加しない。
 
 各SA Phase:
 
 1. 対応詳細設計の必須要件
-2. 必要なunit/integration
-3. static checks
-4. migration変更Phaseはmigration gate
-5. existing CI
-6. 実行できない検証は未実施理由を報告
-7. commit/push
-8. ChatGPT側レビュー
+2. 必要なUnit/Integration
+3. Static Checks
+4. Migration変更PhaseはMigration Gate
+5. Existing CI
+6. 未実施検証は理由を報告
+7. Commit/Push
+8. ChatGPT Review
 
-全Phaseで無関係なdogfoodや全品質評価を毎回要求しない。該当Phaseに必要な検証だけ実行する。
+無関係なDogfood/全品質評価を毎Phase要求しない。
 
-## 20. Codex実装時の禁止事項
+## 23. Codex禁止事項
 
-- CIから実サイト/有料LLMへ接続しない。
-- 外部作品本文をfixture/goldへコピーしない。
-- flaky testをskipして完了扱いしない。
-- coverage thresholdを下げない。
-- 小規模gold datasetへ根拠のない精度gateを置かない。
-- 全integration caseへ同じintegrity/safety assertionを重複追加しない。
-- Revision/Version選択のcontract testを省略しない。
-- unrelated test refactorを広げない。
+- CIから実Site/有料LLMへ接続
+- 外部作品本文をFixture/Goldへ長くコピー
+- Flaky Test Skipで完了扱い
+- Coverage Threshold低下
+- 小規模Goldへ根拠のない精度Gate
+- 全Integration Caseへ同じIntegrity/Safety Assertion重複
+- Resolver Cache不可/State Dependency Test省略
+- Job Partial/Progress Test省略
+- Revision/Version Contract Test省略
+- Unrelated Test Refactor拡大

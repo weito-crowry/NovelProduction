@@ -26,30 +26,31 @@ docs/features/fiction-style-analysis/
    └─ 14-testing-and-evaluation.md
 ```
 
-- [basic-design.md](basic-design.md): 本機能全体の上位設計。
-- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、SA-A〜SA-H実装順、Codex実装運用。
+- [basic-design.md](basic-design.md): 上位の責務・データフロー・Runtime方針。
+- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、SA-A〜SA-H、Codex実装運用。
 
 ## 設計方針
 
-- Source/Revision/Run/Versionを追跡可能にする。
-- Stable identityと推論結果を分離する。
+- Source/Revision/Run/Version/Dependencyを追跡可能にする。
+- Stable IdentityとRunごとの推論を分離する。
+- Reference WorkではEntity/Term RegistryをEpisode横断で管理する。
+- Analyzer入力へ影響するHuman DecisionはState Fingerprintで追跡する。
 - 再解析で人手修正を破壊しない。
-- Analyzer/Policy/Metricをversion管理する。
-- Low-confidenceを正常状態として扱え、全件ReviewQueueへ送らない。
-- 安全確認・競合確認・停止条件は必要な箇所だけに置き、通常操作を過剰に阻害しない。
-- 実装判断をCodexへ残さないため、詳細設計側でデータ契約・失敗時挙動・API/UI・test条件まで具体化する。
+- Unknown/Low-confidenceを正常状態として扱い、Reviewを必須化しない。
+- JobはProject-local DBへ永続化し、単一Workerで処理する。
+- 実装判断をCodexへ残さないため、DB/API/UI/Testの契約を詳細設計で具体化する。
 
 ## 実装境界
 
-- CORE: domain、SQLite、Normalization、Structure、Analyzer、Metric、Profile、Lint
-- API: Source HTTP Adapter、LLM Provider Adapter、Job Worker、FastAPI routes
-- WEBUI: Collection、Analysis、Corpus/Profile、Review/Override、Lint
-- MCP: v1 scope外。既存59 tool contractを維持
+- CORE: Domain、SQLite、Normalization、Structure、Analyzer、Metric、Profile、Lint
+- API: Source Adapter、Model Adapter、StyleJobWorker、FastAPI Routes
+- WEBUI: Collection、Reference Work Analysis、Document Analysis、Corpus/Profile、Override/Review、Lint
+- MCP: v1 Scope外。既存59 Tool Contractを維持
 
 ## ステータス
 
-- 基本設計: v0.2 Draft
-- 詳細設計: v0.2 review反映版
+- 基本設計: v0.3 Draft
+- 詳細設計: v0.3 Self-review反映版
 - 実装: 未着手
 
-実装開始時は `detailed-design/README.md` のSA-A〜SA-Hを基準に、各PhaseごとにChatGPTでscopeを確定しCodex Lunaへ具体的に指示する。
+実装開始時は `detailed-design/README.md` のSA-A〜SA-Hを基準に、ChatGPT側でPhase Scopeを確定してCodex Lunaへ具体的に指示する。
