@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-LLM推論の不確実性をユーザーが確認・修正できるReviewQueueとManualOverrideを定義する。AI再解析で人手修正を消さず、raw inferenceとeffective valueを常に分離する。
+LLM推論を必要に応じて確認・修正できるReview/ManualOverrideを定義する。人手修正は再解析で消さない。一方、低confidence結果をすべてReviewQueueへ積むような運用は避ける。
 
 上位仕様は `../basic-design.md`。
 
@@ -16,24 +16,22 @@ CORE/src/novel_core/style_analysis/
   effective_view.py
 ```
 
-WEBUIは13で定義する。
-
-## 3. 基本優先順位
-
-Effective Viewの優先順位を固定する。
+## 3. Effective View
 
 ```text
 manual override
   > confirmed inference
-  > inferred value above effective threshold
-  > unknown / null
+  > inferred value above AnalysisPolicy threshold
+  > unknown/null
 ```
 
-`rejected` inferenceはeffective値にならない。
+rejected inferenceはeffectiveにならない。
 
-confirmed inferenceは元AnalysisRunの値を保持したままstatusだけ確認済みとして扱う。raw rowをupdateせず確認recordをoverlayする。
+raw inference rowは編集せずoverlayで解決する。
 
-## 4. ReviewItem
+## 4. ReviewItemの役割
+
+ReviewItemは「ユーザー操作を促す価値がある曖昧さ」だけをpersistする。unknown/低confidenceという理由だけでは必ずしも作らない。
 
 ```text
 id
@@ -45,6 +43,7 @@ priority
 status
 reason_code
 evidence_json
+version
 created_at
 resolved_at nullable
 ```
@@ -64,31 +63,33 @@ priority:
 low
 normal
 high
-critical
 ```
 
-v1でcriticalは構造invariant/本文mapping不整合だけ。単なる低confidence speakerはnormal。
+structure invariantやmapping破損はReviewではなくerrorとして扱うため`critical` priorityは設けない。
 
-## 5. Review対象
-
-初期item_type:
+## 5. 初期ReviewItem
 
 ```text
-speaker
-entity_resolution
-term_novelty
-term_explanation
-scene_semantics
-pov
-scene_boundary_candidate
+speaker_conflict
+entity_resolution_conflict
+scene_boundary_proposal
 structure_warning
+stale_override
 ```
 
-ReviewQueue作成条件は各詳細設計のthresholdを正本とし、ReviewServiceに重複thresholdを持たせない。Analyzerがreview recommendationを返し、ReviewServiceが永続化する。
+Term novelty、Scene semantics、POV等の低confidence結果はSemantics画面のfilterで確認できるため、自動ReviewItemは原則作らない。将来ユーザーがreview workflowを望む項目だけ追加する。
 
-## 6. ManualOverride
+## 6. ReviewItem生成条件
 
-汎用overlay tableを使用する。
+- speaker候補が複数あり、有力候補差が小さい
+- Entity resolverが複数候補conflictを返した
+- Scene boundary candidateが `candidate_min` 以上 `auto_apply` 未満で、ユーザーが「境界候補をReviewに追加」を実行した
+- automatic structure warningのうちユーザー操作で修正可能なもの
+- ManualOverride対象が新StructureRevisionで消え、移行候補がある
+
+Scene boundary proposalはデフォルトではStructure画面に表示するだけで、ReviewQueueへ全件自動追加しない。
+
+## 7. ManualOverride
 
 ```text
 id
@@ -98,7 +99,7 @@ field_path
 operation
 value_json nullable
 base_analysis_run_id nullable
-reason
+note nullable
 created_at
 superseded_by_id nullable
 ```
@@ -110,7 +111,7 @@ set
 clear
 ```
 
-`field_path` は任意JSONPathを許可しない。コードregistryに定義したpathのみ。
+`field_path` はregistry定義だけ許可する。
 
 初期path:
 
@@ -130,17 +131,17 @@ entity.status
 entity.canonical_name
 ```
 
-## 7. Override不変性
+`note` は任意。理由入力を毎回必須にしない。
 
-ManualOverride rowはupdate/deleteしない。修正時は新rowを作り、旧rowの `superseded_by_id` のみ更新可能とする。
+## 8. Override履歴
 
-この例外updateは監査pointerのみで、旧value/reasonは変更しない。
+Override valueをupdate/deleteしない。修正時は新rowをinsertし旧rowの `superseded_by_id` だけ更新する。
 
-Effective Viewはsupersededされていない最新overrideを採用する。
+Effective Viewはactive最新overrideを採用する。
 
-## 8. Confirm/Reject
+## 9. Confirm/Reject
 
-推論確認用に `style_inference_reviews` を別tableで持つ。
+`style_inference_reviews`:
 
 ```text
 subject_type
@@ -148,23 +149,15 @@ subject_id
 field_path
 analysis_run_id
 review_status = confirmed | rejected
-note
+note nullable
 created_at
 ```
 
-Manual valueを入れない確認はManualOverrideを作らない。
+- AI=A、正しい=A -> confirmed
+- AI=A、正しい=B -> rejected + ManualOverride B
+- 判断不能 -> rejectまたはManualOverride clear。noteは任意
 
-例:
-
-- AI speaker=A、ユーザーもAと確認 → confirmed
-- AI speaker=A、正解はB → rejected + ManualOverride set B
-- AI speaker=A、分からない → ManualOverride clear でもよい
-
-## 9. Effective resolver
-
-`effective_view.py` に対象ごとのtyped resolverを実装する。汎用dict mergeだけで済ませない。
-
-例:
+## 10. Typed resolver
 
 ```python
 def resolve_speaker(block_id: int) -> EffectiveValue[int | None]: ...
@@ -172,7 +165,7 @@ def resolve_scene_semantics(scene_id: int) -> EffectiveSceneSemantics: ...
 def resolve_term_novelty(term_id: int) -> EffectiveValue[str]: ...
 ```
 
-返却共通情報:
+共通返却:
 
 ```text
 value
@@ -182,127 +175,92 @@ analysis_run_id nullable
 override_id nullable
 ```
 
-## 10. 再解析との関係
+## 11. 再解析とstale override
 
-新AnalysisRunが作成されてもManualOverrideは自動supersedeしない。
+新AnalysisRunだけではManualOverrideをsupersedeしない。
 
-ただしoverrideが古いstructure revisionのsubjectを参照し、新StructureRevisionでsubject IDが消滅した場合:
+StructureRevision変更でsubject IDが消えた場合:
 
-1. span一致する新subjectを自動候補化
-2. 完全一致で1件ならoverride migration proposalをReviewQueueへ作る
+1. canonical span + subject typeが完全一致する新subjectを検索
+2. 1件だけならmigration proposalを作る
 3. 自動移行しない
 4. 旧overrideは保持
 
-## 11. Scene split/merge review
+span完全一致がなければstaleとして表示するだけでよい。複雑な類似度migrationはv1で実装しない。
 
-03のmanual StructureRevision生成をReview UIから行う。
+## 12. Scene split/merge
 
-`scene_boundary_candidate` accept:
+Scene boundary proposal accept:
 
-- candidate `after_block_id` でmanual split
-- 新StructureRevision作成
-- 旧semantic/metricsをinvalidate
-- 新しいanalyze jobを自動queueしてよい
+- `after_block_id` でmanual split
+- 新StructureRevision
+- 後続Semantic/Metricをstale化
+- analyze jobを自動queueしてよい
 
-reject:
+rejectはproposalを閉じるだけ。
 
-- candidate ReviewItemをresolved/rejected相当として閉じる
-- structure変更なし
+Mergeは隣接Sceneの明示操作。
 
-Scene mergeはユーザーが隣接sceneを2つ選択した明示操作だけ。
+## 13. Override後再計算
 
-## 12. Cascading影響
-
-Override確定後、必要な再計算jobを自動queueする。
-
-| override | 再計算 |
+| override | recompute |
 |---|---|
-| speaker | speaker/character metrics → aggregate → lint |
-| scene semantics | semantic metrics/scene-filter aggregate → lint |
-| term novelty/explanation | term metrics → aggregate → lint |
-| entity canonical name | 原則表示のみ。metric再計算なし |
-| mention entity | speaker候補依存runをstale化。自動full re-analysisはしない |
-| POV | profile/lintでPOV filterを使う場合のみaggregate/lint |
+| speaker | speaker metric -> Aggregate -> Lint |
+| scene semantics | semantic metric/scene Aggregate -> Lint |
+| term novelty/explanation | term metric -> Aggregate -> Lint |
+| entity canonical name | 表示のみ |
+| mention entity | speaker analyzer stale化。自動full analysisはしない |
+| POV | POV selectorを使うAggregate/Lintのみ |
 
-再計算はAnalysis Runtime jobを使う。UI request内で同期実行しない。
+job queueを使いHTTP request内で同期再計算しない。
 
-## 13. Review Queue sort
+## 14. Concurrency
 
-固定sort:
+ローカル単一user前提なので二重の競合tokenは導入しない。
 
-```text
-priority DESC
-created_at ASC
-id ASC
-```
+- ReviewItem resolve/ignore: `expected_version` を使い既存VERSION_CONFLICT contractを再利用。
+- ManualOverride作成: 対象 `subject_id` と、Structure依存subjectでは `structure_revision_id` を送る。別のeffective revision tokenは要求しない。
+- Scene split/merge: `expected_structure_revision_id`。
 
-filter:
+これで古い画面からの構造変更は防ぎつつ、通常Override操作の入力を増やさない。
 
-```text
-item_type
-status
-document_id
-analysis_run_id
-```
+## 15. Evidence
 
-全文検索はv1不要。
-
-## 14. Evidence
-
-ReviewItem evidenceにはraw本文全文を複製しない。
+ReviewItemへ本文全文を複製しない。
 
 ```json
 {
   "text_revision_id": 10,
-  "spans": [
-    {"start_cp": 120, "end_cp": 152}
-  ],
+  "spans": [{"start_cp": 120, "end_cp": 152}],
   "block_ids": [5, 6]
 }
 ```
 
-APIが表示時にTextRevisionからexcerptを切り出す。excerpt最大1000 code points。
-
-## 15. UI操作の競合
-
-Review/overrideにCAS versionを導入する。
-
-ReviewItem responseに `version` integerを返す。resolve/ignore時は `expected_version` 必須。競合時は既存NovelProductionの `VERSION_CONFLICT` error contractを再利用する。
-
-ManualOverride作成時もsubject effective revision tokenを要求し、古い画面からの上書きを防ぐ。
+表示時にTextRevisionからexcerptを取得。最大1000 code points。
 
 ## 16. Bulk action
 
-v1で許可:
-
-- 複数ReviewItemを `ignored` にする
-
-禁止:
-
-- 複数speakerを一括自動accept
-- 複数Entity merge
-- 複数Scene split
-
-高影響操作は1件ずつ確認する。
+v1は複数ReviewItemのignoreのみ用意する。他のbulk処理は必要性が出てから追加する。
 
 ## 17. テスト
 
 - manual > confirmed > inferred
-- rejected inferenceがeffectiveにならない
+- rejected非effective
 - override supersede
-- re-analysis後manual維持
-- stale structure override移行を自動実行しない
-- speaker overrideでmetric job queue
-- Review CAS conflict
-- evidence excerpt最大長
-- scene boundary acceptで新StructureRevision
-- mergeは隣接sceneのみ
+- reanalysis後manual維持
+- stale subject exact-span proposal
+- speaker override recompute
+- ReviewItem CAS
+- Scene proposal accept
+- low-confidenceだけではReviewItem大量生成なし
+- optional note
 
 ## 18. Codex実装時の禁止事項
 
-- AI rowを直接編集して人手修正を表現しない。
+- inference rowを直接編集しない。
 - 再解析でManualOverrideを削除しない。
-- field_pathに任意JSONPathを許可しない。
-- scene splitを同じStructureRevision上でupdateしない。
-- low-confidence推論を一括acceptする機能を追加しない。
-- override reasonを空文字許可しない。最低1文字、最大1000文字とする。
+- 任意JSONPathをfield_pathに許可しない。
+- Scene splitを同じStructureRevision上でupdateしない。
+- 低confidence結果ごとにReviewItemを自動生成しない。
+- Override note/reasonを必須入力にしない。
+- ManualOverrideへReviewItemとは別の汎用CAS tokenを追加しない。

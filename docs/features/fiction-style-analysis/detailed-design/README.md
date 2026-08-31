@@ -6,73 +6,99 @@
 
 | # | ファイル | 対象 | 状態 |
 |---:|---|---|---|
-| 01 | [01-source-ingestion.md](01-source-ingestion.md) | なろう・カクヨム・TXT・EPUB・HTML、Source Adapter、Snapshot | v0.1 |
+| 01 | [01-source-ingestion.md](01-source-ingestion.md) | なろう・カクヨム・TXT・EPUB・HTML、Source Adapter、Snapshot | v0.2 |
 | 02 | [02-normalization.md](02-normalization.md) | Raw/Canonical Text、TextMapping、offset | v0.1 |
-| 03 | [03-structure-segmentation.md](03-structure-segmentation.md) | Scene/Block/Sentence、StructureRevision | v0.1 |
-| 04 | [04-entity-and-speaker.md](04-entity-and-speaker.md) | Entity/Mention、人物統合、話者推定 | v0.1 |
-| 05 | [05-term-analysis.md](05-term-analysis.md) | 用語、初出、説明、説明遅延 | v0.1 |
-| 06 | [06-scene-semantics.md](06-scene-semantics.md) | Scene taxonomy、POV、Block semantic | v0.1 |
-| 07 | [07-style-metrics.md](07-style-metrics.md) | MetricDefinition、Measurement、算出式 | v0.1 |
-| 08 | [08-corpus-and-profile.md](08-corpus-and-profile.md) | Aggregate、Corpus、StyleProfile、StyleRule | v0.1 |
-| 09 | [09-analysis-runtime.md](09-analysis-runtime.md) | Analyzer DAG、job、fingerprint、LLM provider境界 | v0.1 |
-| 10 | [10-review-and-overrides.md](10-review-and-overrides.md) | Confidence、ReviewQueue、ManualOverride | v0.1 |
-| 11 | [11-style-lint.md](11-style-lint.md) | 自作品比較、Finding、Evidence、severity | v0.1 |
-| 12 | [12-storage-schema.md](12-storage-schema.md) | SQLite schema、006〜008 migrations、index/FK | v0.1 |
-| 13 | [13-api-and-webui.md](13-api-and-webui.md) | FastAPI契約、React UI、query invalidation | v0.1 |
-| 14 | [14-testing-and-evaluation.md](14-testing-and-evaluation.md) | fixture、gold dataset、CI、dogfood | v0.1 |
+| 03 | [03-structure-segmentation.md](03-structure-segmentation.md) | automatic/semantic/manual Scene、Block、Sentence | v0.2 |
+| 04 | [04-entity-and-speaker.md](04-entity-and-speaker.md) | Entity/Mention、作品跨ぎ人物統合、話者推定 | v0.2 |
+| 05 | [05-term-analysis.md](05-term-analysis.md) | 用語、作品跨ぎTerm、初出、説明遅延 | v0.2 |
+| 06 | [06-scene-semantics.md](06-scene-semantics.md) | Scene taxonomy、POV、Block semantic、Scene境界 | v0.2 |
+| 07 | [07-style-metrics.md](07-style-metrics.md) | basic/semantic Metric、Measurement、算出式 | v0.2 |
+| 08 | [08-corpus-and-profile.md](08-corpus-and-profile.md) | Aggregate、Corpus、Profile identity/version、Rule | v0.2 |
+| 09 | [09-analysis-runtime.md](09-analysis-runtime.md) | Document Analyzer DAG、AnalysisPolicy、job、LLM境界 | v0.2 |
+| 10 | [10-review-and-overrides.md](10-review-and-overrides.md) | ReviewItem、ManualOverride、Effective View | v0.2 |
+| 11 | [11-style-lint.md](11-style-lint.md) | Finding、Evidence、coverage、severity | v0.2 |
+| 12 | [12-storage-schema.md](12-storage-schema.md) | SQLite schema、006〜008 migration、index/FK | v0.2 |
+| 13 | [13-api-and-webui.md](13-api-and-webui.md) | FastAPI契約、React UI、job/query | v0.2 |
+| 14 | [14-testing-and-evaluation.md](14-testing-and-evaluation.md) | fixture、evaluation、CI、dogfood | v0.2 |
 
 ファイル番号は読解順であり、実装Phaseと一対一ではない。
 
 ## Codex向け実装順
 
-実装時は以下の順序を標準とする。ChatGPT側で各Phaseのscopeを切ってCodexへ渡し、Codexに全体再設計をさせない。
-
 | Phase | 実装scope | 主に読む設計 |
 |---|---|---|
-| SA-A | DB foundation、models/repositories、job基盤 | 02, 03, 09, 12, 14 |
+| SA-A | DB foundation、models/repositories、job/AnalysisPolicy基盤 | 02, 03, 09, 12, 14 |
 | SA-B | Source import、Reference Work/Episode | 01, 02, 12, 13, 14 |
-| SA-C | Normalization、Structure、deterministic metrics | 02, 03, 07, 09, 14 |
-| SA-D | SemanticModelClient、Entity/Speaker/Term/Scene semantics | 04, 05, 06, 09, 10, 14 |
-| SA-E | Corpus、Aggregate、StyleProfile | 07, 08, 12, 13, 14 |
+| SA-C | Normalization、automatic Structure、basic metrics | 02, 03, 07, 09, 14 |
+| SA-D | SemanticModelClient、Scene boundary、Entity/Speaker/Term/Semantics | 03, 04, 05, 06, 09, 10, 14 |
+| SA-E | Corpus、Aggregate、Profile identity/version | 07, 08, 12, 13, 14 |
 | SA-F | Review/Override、再計算 | 09, 10, 12, 13, 14 |
 | SA-G | Project draft capture、Style Lint | 07, 08, 11, 13, 14 |
-| SA-H | WebUI integration、E2E、dogfood | 01, 10, 11, 13, 14 |
+| SA-H | WebUI integration、E2E、dogfood | 01, 03, 10, 11, 13, 14 |
 
-SA-A〜Hは実装管理用の推奨分割であり、既存NovelProduction Phase A〜Eとは別系列とする。
+SA-A〜Hは既存NovelProduction Phase A〜Eとは別系列。
 
 ## 実装上の確定事項
 
-以下はCodexが再判断しない。
+Codexは以下を再設計しない。
 
-- Style Analysisは既存projectの `story.db` 内に `style_` prefix tableとして実装する。
-- 既存migration `001`〜`005` は変更しない。
-- 新migrationは `006_style_analysis_foundation.sql`、`007_style_analysis_semantics.sql`、`008_style_analysis_analytics.sql`。
-- COREはnetwork/LLM provider非依存。外部HTTP通信はAPI側。
+- Style Analysisはproject-local `story.db` に `style_` prefix tableとして実装する。
+- 既存migration001〜005は変更しない。
+- 新migrationは006/007/008の3本。
+- Source raw payloadはBLOB、Canonical/Raw textはTEXT。
+- COREはnetwork/LLM provider非依存。外部HTTPはAPI側。
 - ORM、Redis、Celery、WebSocket/SSEは追加しない。
-- Analyzerはversion/fingerprint付きDAG。
-- semantic推論はManualOverrideを上書きしない。
-- 自動Scene構造は保守的・決定論的。曖昧な境界はReview候補。
-- v1ではMCP toolを追加せず、既存tool count 59を維持する。
-- 外部作品本文はMCPへ露出しない。
-- CIでは実サイト・実LLM providerへ接続しない。
+- Normalization/Structure作成、Document Analyzer、Aggregate/Profile/Lintのruntime責務を分離する。
+- Analyzer confidence/sample thresholdは09 `AnalysisPolicy` を正本にし、各Analyzerへ重複hard-codeしない。
+- automatic Structureは決定論的base。Full analysisでは高confidence Scene boundaryを新semantic StructureRevisionへ自動materializeする。
+- manual/semantic StructureRevisionはparentを変更せず新revisionとして作る。
+- reference Entity/Termはreference work scopeでepisodeを跨いで統合する。
+- Profileはstable identityとimmutable ProfileVersionを分離する。
+- low-confidence結果をすべてReviewQueueへ自動投入しない。
+- ManualOverrideは再解析で消さない。
+- v1ではMCP toolを追加せずtool count 59維持。
+- CIでは実サイト/実LLM providerへ接続しない。
+- 取得時のrights_basis必須入力や毎回の同意checkboxは設けない。
+
+## 過剰チェックを避ける方針
+
+本機能はローカル単一ユーザー用途を前提とするため、安全性・整合性のためのチェックは「壊れるとデータを誤るもの」へ限定する。
+
+維持する代表例:
+
+- revision/span/FK/JSON等のデータ不変条件
+- source host allowlistとログイン/有料壁回避禁止
+- ReviewItemの既存VERSION_CONFLICT再利用
+- API keyをDBへ保存しない
+
+追加しない代表例:
+
+- rights basisの法的判定・同意record
+- Overrideごとの二重CAS token
+- low-confidence全件ReviewItem
+- missing metric割合によるLint失敗
+- 小規模gold datasetへの硬い精度gate
+- 各テスト層への同一integrity assertion重複
 
 ## 詳細設計の変更ルール
 
-- `basic-design.md` と矛盾する変更は、まず基本設計を更新する。
-- 計算式・taxonomy・prompt・normalizer等、結果互換性が変わる変更は必ずversionを上げる。
-- 実装中に設計不足が判明しても、Codexが独断で大規模設計変更しない。作業を止める必要がない軽微な実装詳細は既存パターンに合わせ、設計判断が必要な事項は最終報告へ明示してChatGPT側レビューへ戻す。
-- unrelated refactorは行わない。
-- 人手修正、既存未commit変更、既存authoringデータを破壊しない。
+- `basic-design.md` と矛盾する変更は基本設計も更新する。
+- 結果互換性が変わるnormalizer/segmenter/taxonomy/prompt/Metric/AnalysisPolicyはversionを上げる。
+- Codexは提示設計を承認済み仕様として扱い、brainstorming/planning由来の再承認待ちで停止しない。
+- 実装中に不足が判明した場合、軽微な実装詳細は既存パターンへ合わせる。新しいdomain判断が必要ならscopeを広げず最終報告へ記載する。
+- unrelated refactor禁止。
+- 既存未commit変更をreset/stash/checkoutで消さない。
 
 ## レビュー前提
 
-Codex実装完了は最終完了ではない。
-
 ```text
 ChatGPTでPhase scope確定
-→ Codexへ詳細な実装指示
-→ Codexが実装・テスト・commit・push
-→ ChatGPTがGitHub差分レビュー
-→ 必要ならCodexへ限定修正
-→ CI/レビュー完了
+-> Codexへ詳細指示
+-> Codexが単一agentで実装/テスト
+-> commit/push
+-> ChatGPTがGitHubレビュー
+-> 必要なら限定修正
+-> CI/レビュー完了
 ```
+
+Codex側のサブエージェント、multi-agent/delegation、model escalation、別agent reviewは使用しない。

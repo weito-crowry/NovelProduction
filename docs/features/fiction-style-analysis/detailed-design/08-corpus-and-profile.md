@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-複数作品・episode・SceneのMeasurementを集約し、比較可能なCorpus統計と、執筆時に参照するStyleProfile/StyleRuleへ変換する。実測値と目標値を混同しない。
+複数作品・episode・SceneのMeasurementを集約し、比較可能なCorpus統計と執筆時のStyleProfileへ変換する。実測値・集約値・目標ruleを分離する。
 
 上位仕様は `../basic-design.md`。
 
@@ -20,8 +20,6 @@ CORE/src/novel_core/style_analysis/
 
 ## 3. Corpus
 
-Corpusはreference work/episodeの集合。
-
 ```text
 id
 name
@@ -30,34 +28,22 @@ created_at
 updated_at
 ```
 
-membership:
+work membership:
 
 ```text
 corpus_id
 reference_work_id
-include_all_episodes boolean
+include_all_episodes
 created_at
 ```
 
-episode単位除外/追加が必要な場合は `style_corpus_episode_memberships` を使う。
+episode単位overrideは `style_corpus_episode_memberships`。
 
-1作品は複数Corpusへ所属可。同一Corpusへの重複membershipは禁止。
+1 reference workは複数Corpusへ所属可。
 
-## 4. Corpusの用途
+## 4. Aggregate
 
-初期UIで以下のような任意Corpusを作れる。
-
-```text
-読みやすい現代SF
-日常会話が好みの作品
-説明が上手い作品
-```
-
-ジャンル等を自動Corpus化しない。ユーザーが比較意図を明示して作る。
-
-## 5. Aggregate
-
-Measurementを直接profileへ流さず、まずAggregateを生成する。
+Measurementを直接StyleRuleへ変換しない。
 
 ```text
 id
@@ -70,6 +56,7 @@ statistic
 value_real
 sample_count
 source_measurement_count
+work_count
 fingerprint
 created_at
 ```
@@ -88,7 +75,19 @@ min
 max
 ```
 
-## 6. Aggregate scope
+## 5. Aggregate単位
+
+Aggregateは**Measurement rowを観測単位として等重み**で集約する。
+
+- episode scope: episode Measurementを1観測
+- scene filter: Scene Measurementを1観測
+- character scope: character Measurementを1観測
+
+raw sentence等へ遡って再poolしない。これにより長い作品だけが自動的に重くならない。
+
+将来work weightを導入する場合はAggregate policy versionを変える。
+
+## 6. Aggregate scope/filter
 
 ```text
 reference_work
@@ -97,9 +96,7 @@ scene_label
 character
 ```
 
-`scene_label` は独立IDを持たないため `scope_id` は親work/corpus ID、`filter_json` にtaxonomy条件を入れる。
-
-例:
+`scene_label` は `scope_id` に親work/corpus ID、`filter_json` にtaxonomy条件。
 
 ```json
 {
@@ -108,66 +105,84 @@ character
 }
 ```
 
-filter key/valueはtaxonomy registryでvalidationする。任意SQL条件を保存しない。
+任意SQLは保存しない。
 
 ## 7. Aggregate input
 
-対象Measurementは次を満たすものだけ。
-
-- 最新effective StructureRevisionに対するsucceeded analysis
+- current effective StructureRevisionのMeasurement
 - metric version一致
-- reference episodeがCorpus membership内
-- confidence thresholdを満たしたsemantic input
-- rejected source/documentではない
+- Corpus membership内
+- semantic metricは07でcompleteと判定されたscopeのみ
+- rejected source/documentを除外
+- 同一target/metric/versionで複数runがある場合はcurrent effective succeeded run 1件
 
-同じTextRevisionに対する再解析Measurementが複数ある場合、effective analysis run 1件だけを採用する。
+partial semantic runのうち成功Sceneから生成されたScene Measurementは利用可能。document全体の不完全metricは07でそもそも生成しない。
 
 ## 8. 統計式
 
-mean/stddevはPython標準 `statistics` 相当のpopulation統計で実装する。
+- mean/pstdev: Python `statistics` 相当
+- percentile: 07共通utility
+- sample 1件のpstdev = 0
+- sample 0件はAggregate rowなし
 
-- stddevはpopulation standard deviation (`pstdev`)
-- percentileは07と同じlinear interpolation utilityを共用
-- sample 1件のstddevは0.0
-- sample 0件はAggregate rowを作らない
+## 9. Profile生成のsample policy
 
-## 9. 最小sample条件
+固定値を各serviceへ散在させず、09 `AnalysisPolicy` を正本にする。
 
-StyleProfile生成に使用する最低sample数を固定する。
+初期default:
 
-| profile scope | 最低sample |
-|---|---:|
-| global metric | 5 episode |
-| scene label metric | 20 scene |
-| character metric | 20 utterance |
-| term metric | 10 eligible term occurrence |
+```text
+profile_min_episode_measurements = 5
+profile_min_scene_measurements = 10
+profile_min_character_utterances = 10
+profile_min_term_samples = 5
+```
 
-不足時はprofile ruleを自動生成しない。UIには `insufficient_samples` と表示する。
+不足時はRuleを自動生成しない。これは品質保証の停止条件ではなく、単に「統計的参考範囲を作るには少なすぎる」という生成条件である。UIからmanual Ruleは作成可能。
 
-## 10. StyleProfile
+## 10. Profile identity/version
 
-Profileは不変versioned snapshot。
+旧案の「Profile row自体をversion snapshotにする」方式は採用しない。stable identityとimmutable versionを分離する。
+
+### StyleProfile
+
+mutable identity/meta:
 
 ```text
 id
 name
 description
 source_corpus_id nullable
-version
-parent_profile_id nullable
 status = draft | active | archived
+created_at
+updated_at
+```
+
+### StyleProfileVersion
+
+immutable snapshot:
+
+```text
+id
+profile_id
+version_no
+parent_version_id nullable
 created_at
 ```
 
-active profileをupdateせず、編集保存時はversion+1の新Profileを作る。
+UNIQUE `(profile_id, version_no)`。
 
-1projectでactive profileは複数可。ただしDraft Lint実行時に1つ明示選択する。
+### StyleRule
+
+`profile_version_id` に所属する。
+
+これによりprofile名/statusを変えても過去Rule snapshotを変更しない。
 
 ## 11. StyleRule
 
 ```text
 id
-profile_id
+profile_version_id
 scope_selector_json
 metric_name
 metric_version
@@ -175,6 +190,7 @@ preferred_value nullable
 min_value nullable
 max_value nullable
 weight
+enabled
 severity_policy
 source_kind
 created_at
@@ -187,11 +203,9 @@ corpus_generated
 manual
 ```
 
-`weight` 初期範囲0.0〜5.0、default 1.0。
+weight 0.0〜5.0、default 1.0。
 
-## 12. 自動Rule生成
-
-Corpusからのdefault生成式を固定する。
+## 12. Corpusからのdefault Rule
 
 ```text
 preferred = median
@@ -199,15 +213,13 @@ min = p25
 max = p75
 ```
 
-ただし値域が本質的に0〜1のratio metricはmin/maxを0〜1へclampする。
+ratioは0〜1へclamp。
 
-p25=p75の場合でもrangeを勝手に広げない。Lint側でzero-width range用の絶対toleranceを適用する。
-
-mean±stddevはdefault ruleに使わない。外れ値に引っ張られやすいため。
+p25=p75でもrangeを勝手に広げない。11がMetricDefinitionのzero-width toleranceを使う。
 
 ## 13. scope selector
 
-Ruleのscope selectorは宣言的JSONとし、以下だけ許可する。
+許可key:
 
 ```text
 global
@@ -219,29 +231,15 @@ scene.interaction
 character_id
 ```
 
-例:
+複数条件AND、配列内OR。
 
-```json
-{
-  "scene.function": ["daily", "dialogue"]
-}
-```
+外部reference characterをproject characterへ名前一致で自動対応しない。
 
-複数条件はAND。配列内はOR。
+## 14. Corpus比較
 
-外部reference character IDをproject characterへ自動対応させない。character scope ruleは同一document/work内、またはユーザーが明示構築したproject character profileに限定する。
+2〜5 Corpus。
 
-## 14. 複数作品の重み
-
-Corpus Aggregateはepisode/scene Measurementをそのままpoolし、作品ごとの手動weightはv1で実装しない。
-
-作品長の違いで1作品が過剰支配する可能性はUIでsample countとwork countを併記して把握する。将来weight導入時はAggregate versionを変更する。
-
-## 15. Corpus比較
-
-2〜5 Corpusを比較可能とする。
-
-APIはmetricごとに次を返す。
+返却:
 
 ```text
 median
@@ -251,62 +249,76 @@ sample_count
 work_count
 ```
 
-UIの初期visualizationはtableと単独chart。レーダーチャートは単位が異なるmetricを混ぜやすいため実装しない。
+異なるunitを同一chart axisへ混ぜない。
 
-## 16. Profile編集
+## 15. Profile編集
 
-ユーザーは生成ruleを以下だけ編集できる。
+Profile Editorは現在versionのrulesをcopyして新versionを作る。
+
+編集可能:
 
 - preferred
 - min/max
 - weight
-- severity policy
-- enabled/disabled
+- enabled
+- severity_policy
 
-metric name/versionやscopeを同じrule上で変更しない。別ruleとして作成する。
+metric name/version/scopeを変更したい場合は旧Ruleをdisabledにして新Ruleを追加する。
 
-## 17. Profile export/import
+Profile `status` のactivate/archiveはversion contentを変更しない。
 
-version付きJSONとしてexport可能。
+## 16. Export/import
 
 ```json
 {
   "schema": "novelproduction.style-profile",
   "schema_version": 1,
-  "profile": {...},
-  "rules": [...]
+  "profile": {
+    "name": "...",
+    "description": "..."
+  },
+  "version": 3,
+  "rules": []
 }
 ```
 
-Raw source text、作品本文、Entity/Mentionは含めない。Profileだけを共有可能にする設計とする。
+Raw text、Entity/Mentionは含めない。
 
-import時はunknown metric/versionを拒否せず `unsupported_rules` として表示し、activeにはできない。
+unknown metric/versionは `unsupported_rules` としてimport結果へ返し、そのRuleをdisabledで保存してよい。Profile全体を拒否しない。
 
-## 18. Aggregate再計算
+## 17. Aggregate再計算
 
-Corpus membership、effective analysis、manual override、Metric versionのいずれかが変わればfingerprintが変化する。
+fingerprint入力:
 
-Aggregateはappend-onlyで新規作成し、`style_aggregate_heads` のようなmutable pointer tableは作らず、repository queryで最新fingerprint一致rowを取得する。古いAggregateは監査用に保持する。
+- Corpus membership
+- input Measurement IDs/fingerprints
+- metric version
+- filter
+- aggregate policy version
 
-## 19. テスト
+Aggregateはappend-only。head tableは作らずfingerprint一致rowをreuseする。
 
-- corpus membership重複禁止
+## 18. テスト
+
+- membership重複禁止
 - episode include/exclude
+- equal-weight Measurement aggregate
 - p25/median/p75
-- sample不足時rule生成なし
-- ratio clamp
-- profile versioning
-- active profile不変
-- scope selector validation
-- exportにraw textが入らない
-- unsupported metric import
-- effective analysisの重複排除
+- sample不足時auto Ruleなし
+- manual Ruleはsample不足でも作成可
+- Profile identityとVersion分離
+- version_no uniqueness
+- status変更でVersion不変
+- scope validation
+- exportに本文なし
+- unsupported Rule import disabled
+- effective Measurement重複排除
 
-## 20. Codex実装時の禁止事項
+## 19. Codex実装時の禁止事項
 
 - Measurementを直接StyleRuleとして保存しない。
-- 平均だけでtarget rangeを生成しない。
-- sample不足を0値としてrule化しない。
-- cross-work characterを名前一致で自動統合しない。
-- raw小説本文をprofile exportへ含めない。
-- radar chartを初期scopeへ追加しない。
+- raw観測を勝手に再poolして長編作品へ重みを付けない。
+- sample不足を0値Ruleにしない。
+- cross-work characterを名前一致で統合しない。
+- Profile version contentをupdateしない。
+- raw本文をProfile exportへ含めない。

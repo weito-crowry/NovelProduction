@@ -2,21 +2,15 @@
 
 ## 1. 目的
 
-Style AnalysisのCORE機能を既存FastAPI/React WebUIへ統合するAPI契約、画面構成、query invalidation、非同期job表示を確定する。既存NovelProductionのauthoring導線を壊さず、独立featureとして追加する。
+Style AnalysisのCORE機能を既存FastAPI/React WebUIへ統合するAPI契約、画面構成、job表示、query invalidationを確定する。authoring導線を壊さず独立featureとして追加する。
 
 上位仕様は `../basic-design.md`。
 
-## 2. 重要な境界
+## 2. 境界
 
-v1では **MCPへStyle Analysis toolを追加しない**。
+v1ではMCPへStyle Analysis toolを追加しない。`MCP/` はscope外、既存tool count 59を維持する。
 
-理由:
-
-- 既存MCP tool count/契約を変更しない
-- 外部作品本文をConnector経由で意図せず露出しない
-- まずWebUI/APIでlocal workflowを確立する
-
-したがって `MCP/` は本開発scope外。既存59 tool contractを維持する。将来MCP公開する場合は別設計・別Phaseとする。
+Style Analysis推論から既存character/world/canonを自動更新しない。
 
 ## 3. API実装先
 
@@ -42,24 +36,21 @@ API/src/novel_api/
     style_analysis.py
 ```
 
-`routes/__init__.py` で各routerを既存appへ登録する。
-
-`service_container.py` にStyle Analysis用CORE repositories/servicesとAPI ingestion/runtimeを追加する。既存serviceのconstructor signatureを不要に変更しない。
+既存 `service_container.py` へStyle Analysis servicesを追加する。既存service constructorを不要に変更しない。
 
 ## 4. URL prefix
-
-全endpointを以下でproject scopeにする。
 
 ```text
 /projects/{project_id}/style-analysis
 ```
 
-`project_id` 解決・404/error contractは既存APIのproject scoped routeと同じ実装を再利用する。
+project解決/error contractは既存project scoped routeを再利用する。
 
-## 5. Source/Reference API
+## 5. Source / Reference API
 
 ```text
 POST   /imports
+POST   /imports/file
 GET    /imports/{import_id}
 GET    /reference-works
 GET    /reference-works/{work_id}
@@ -69,25 +60,23 @@ GET    /reference-works/{work_id}/episodes
 GET    /reference-episodes/{episode_id}
 ```
 
-### POST /imports
-
-network source JSON:
+Network import:
 
 ```json
 {
   "source_type": "narou",
-  "locator": "https://ncode.syosetu.com/.../",
-  "rights_basis": "private_personal_use"
+  "locator": "https://ncode.syosetu.com/.../"
 }
 ```
 
-file uploadはmultipart endpointを同URLでoverloadせず、明示的に分ける。
+`rights_basis` や同意flagはAPI contractへ入れない。
+
+File importはmultipart:
 
 ```text
-POST /imports/file
+source_type = text | html_file | epub
+file
 ```
-
-fields: `source_type=text|html_file|epub`, `rights_basis`, `file`。
 
 response `202`:
 
@@ -95,11 +84,9 @@ response `202`:
 {"import_id": 12, "job_id": 44, "status": "queued"}
 ```
 
-### DELETE reference work
+DELETE reference workは明示Purge、成功204。
 
-body不要。purgeは明示操作。成功 `204`。存在しない場合既存404 contract。
-
-## 6. Document/Structure API
+## 6. Document / Structure API
 
 ```text
 POST /project-episodes/{episode_id}/capture
@@ -107,21 +94,28 @@ GET  /documents
 GET  /documents/{document_id}
 GET  /documents/{document_id}/text
 GET  /documents/{document_id}/structure
+GET  /documents/{document_id}/structure/boundary-proposals
 POST /documents/{document_id}/scenes/{scene_id}/split
 POST /documents/{document_id}/scenes/merge
 ```
 
 ### capture
 
-request:
-
 ```json
 {"draft_id": 123}
 ```
 
-`draft_id` omitted時にlatestへ暗黙解決しない。UIが現在のlatest draftを先に取得し、そのIDを明示送信する。
+latestへ暗黙解決しない。response:
 
-responseにtext_revision_id、canonical_sha256を返す。
+```json
+{
+  "document_id": 5,
+  "text_revision_id": 10,
+  "canonical_sha256": "..."
+}
+```
+
+Structureはcapture時に必須生成しない。`analyze` deterministic/fullが指定TextRevisionからbuild/reuseする。
 
 ### split
 
@@ -129,9 +123,11 @@ responseにtext_revision_id、canonical_sha256を返す。
 {
   "after_block_id": 55,
   "expected_structure_revision_id": 9,
-  "reason": "時間が切り替わっているため"
+  "note": "時間の切替"
 }
 ```
+
+`note` optional。
 
 ### merge
 
@@ -140,11 +136,11 @@ responseにtext_revision_id、canonical_sha256を返す。
   "left_scene_id": 4,
   "right_scene_id": 5,
   "expected_structure_revision_id": 9,
-  "reason": "同一シーンとして扱うため"
+  "note": "同一Scene"
 }
 ```
 
-## 7. Analysis/Job API
+## 7. Analysis / Job API
 
 ```text
 POST /documents/{document_id}/analyze
@@ -157,17 +153,22 @@ GET  /documents/{document_id}/metrics
 GET  /documents/{document_id}/scenes/{scene_id}/metrics
 ```
 
-analyze:
+request:
 
 ```json
 {
   "text_revision_id": 10,
-  "structure_revision_id": 9,
+  "structure_revision_id": null,
   "preset": "full"
 }
 ```
 
-`preset=full` でprovider未設定なら `409 ANALYZER_PROVIDER_UNAVAILABLE` をjob作成前に返す。`deterministic` はprovider不要。
+- `text_revision_id` required。
+- `structure_revision_id` optional。
+- omitted: automatic Structure build/reuse、fullならsemantic boundaryをmaterialize。
+- provided: exact Structureを使用。manual Structureではboundary auto applyを再実行しない。
+
+`preset=full` でprovider未設定ならjob作成前に `409 ANALYZER_PROVIDER_UNAVAILABLE`。
 
 ## 8. Corpus API
 
@@ -186,28 +187,30 @@ GET    /corpora/{corpus_id}/metrics
 GET    /corpora/compare
 ```
 
-compare query:
-
-```text
-?corpus_id=1&corpus_id=2&metric=dialogue.char_ratio&metric=sentence.len.p50
-```
-
-corpus最大5件、metric最大20件。超過は422。
+Compareは2〜5 Corpus、metric最大20。
 
 ## 9. Profile API
+
+Profile identityとVersionを分離する。
 
 ```text
 GET    /profiles
 POST   /profiles/from-corpus
 GET    /profiles/{profile_id}
+PATCH  /profiles/{profile_id}
+GET    /profiles/{profile_id}/versions
+GET    /profiles/{profile_id}/versions/{version_no}
 POST   /profiles/{profile_id}/versions
 POST   /profiles/{profile_id}/activate
 POST   /profiles/{profile_id}/archive
-GET    /profiles/{profile_id}/export
+GET    /profiles/{profile_id}/versions/{version_no}/export
 POST   /profiles/import
 ```
 
-active/archiveはimmutable profile contentを変更せずstatus管理recordだけを更新する。Rule編集はnew version作成endpointで全rules snapshotを送る。
+- PATCHはname/descriptionだけ。
+- version作成endpointでrules snapshotを全送信。
+- active/archiveはProfile identity statusだけ変更。
+- ProfileVersion/Ruleはupdateしない。
 
 ## 10. Review API
 
@@ -220,9 +223,21 @@ POST /review-items/{item_id}/override
 POST /review-items/{item_id}/ignore
 ```
 
-全writeに `expected_version` とreason/noteを必要に応じて要求する。
+ReviewItem writeは `expected_version`。
 
-ReviewItem detail responseにexcerptを含めるがraw source payloadは返さない。
+Override body:
+
+```json
+{
+  "value": 3,
+  "structure_revision_id": 9,
+  "note": null
+}
+```
+
+`note` optional。別の汎用effective tokenは要求しない。
+
+低confidence推論一覧はReviewItem化せず、Document Semantics API/filterから参照可能にする。
 
 ## 11. Lint API
 
@@ -234,52 +249,57 @@ GET  /lint-runs/{lint_run_id}/findings
 POST /findings/{finding_id}/review
 ```
 
-lint request:
+request:
 
 ```json
 {
   "text_revision_id": 10,
   "structure_revision_id": 9,
   "profile_id": 3,
-  "profile_version": 2
+  "profile_version_no": 2
 }
 ```
 
-response `202` + job_id。
+response `202` + job ID。
+
+LintRun detailは:
+
+```text
+enabled_rule_count
+applicable_rule_count
+missing_rule_count
+coverage_ratio
+stale
+```
+
+を返す。
 
 ## 12. Pagination
 
-list endpointは既存API patternに合わせ、初期default 50、max 200。
-
-query:
+list endpointは既存pattern:
 
 ```text
-limit
-offset
+limit default 50, max 200
+offset default 0
 ```
 
-新規cursor paginationは導入しない。
-
-metrics/finding等大量listも同じ方式。
+cursor paginationはv1で導入しない。
 
 ## 13. Error contract
 
-既存NovelProduction API error envelopeを再利用する。Style Analysis用codeは各詳細設計に定義したものを追加する。
-
-HTTP mapping:
+既存API envelopeを再利用。
 
 ```text
 400 invalid source/operation
-404 project/document/entity not found
+404 not found
 409 version conflict/provider unavailable/stale structure
 413 upload/source too large
 422 schema validation
-429 source site rate-limitを直接転送せず、job failureとしてSOURCE_RATE_LIMITED
 500 invariant/internal
-502 external model/source upstream failure
+502 external source/model upstream failure
 ```
 
-job内外部失敗はHTTP request自体を後から500にできないためJob status/errorとして返す。
+network import/model job中の失敗はJob errorとして返す。
 
 ## 14. WebUI実装先
 
@@ -302,9 +322,7 @@ WEBUI/frontend/src/features/styleAnalysis/
   components/
 ```
 
-共通API clientは既存 `src/api/client.ts` を使用。独自fetch wrapperを作らない。
-
-query keyは既存 `src/api/queryKeys.ts` に `styleAnalysis` familyを追加する。
+既存 `src/api/client.ts` とquery cacheを使う。
 
 ## 15. Route
 
@@ -321,11 +339,9 @@ query keyは既存 `src/api/queryKeys.ts` に `styleAnalysis` familyを追加す
 /projects/:projectId/style-analysis/lint
 ```
 
-既存Project shell/sidebar配下に `文体分析` navigationを1件追加する。
+Project sidebarに `文体分析` 1件追加。
 
-## 16. Home画面
-
-Dashboard card:
+## 16. Home
 
 ```text
 Reference Works count
@@ -335,36 +351,22 @@ Active Profiles count
 Latest Lint summary
 ```
 
-ここからSources/Corpus/Profile/Review/Lintへ移動する。
-
-## 17. Sources画面
-
-機能:
+## 17. Sources
 
 - Narou/Kakuyomu URL入力
-- source type
-- rights_basis select
+- file upload
 - import開始
-- text/html/epub upload
 - job progress
-- reference work list
+- Reference Work list
 - refresh
 - purge
 
-初回network import前に次の確認checkboxを表示する。
+画面上部に短い利用注意文を表示してよいが、blocking checkboxやrights selectは置かない。
+
+## 18. Document Analysis
 
 ```text
-この取得は、自分が利用権限を持つ、または私的利用として扱う作品をローカル分析する目的で行います。
-```
-
-checkboxはUI convenienceであり、APIでもrights_basis validationする。
-
-## 18. Document Analysis画面
-
-レイアウト:
-
-```text
-Header: work / episode / revision / analysis status
+Header: work / episode / text revision / structure revision / analysis status
 Tabs:
   Text
   Structure
@@ -372,20 +374,28 @@ Tabs:
   Metrics
 ```
 
-Text: canonical text read-only。
-Structure: Scene list + Block type + manual split/merge。
-Semantics: Entity/Term/Speaker/Scene tags overview。
-Metrics: table + metric単位ごとのchart。
+### Structure
 
-1画面で全raw inference編集を可能にせず、修正はReviewへ遷移する。
+- automatic/semantic/manual revision種別表示
+- Scene list
+- boundary proposal overlay on/off
+- manual split/merge
 
-## 19. Corpus/Compare画面
+semantic boundaryのauto apply済み箇所も元base structureとの差として表示可能にする。
 
-Corpus editはwork membershipをcheckbox/listで操作。
+### Semantics
 
-Compareはmetric tableを正本。chartはmetricごとに1 chartとし、異なるunitを同一axisに重ねない。
+- Entity/Term/Speaker/Scene tags
+- unresolved/unclear filter
+- raw/effective切替
 
-表示:
+低confidence結果を修正したい場合だけOverride/Reviewへ進む。
+
+## 19. Corpus / Compare
+
+Corpus membership編集。
+
+Compareはtableを正本。chartはmetricごとに1 chart、異unit混在なし。
 
 ```text
 median
@@ -396,7 +406,15 @@ work count
 
 ## 20. Profile Editor
 
-Rule table columns:
+Profile identity fields:
+
+```text
+name
+description
+status
+```
+
+Version rule table:
 
 ```text
 enabled
@@ -410,103 +428,99 @@ severity policy
 source
 ```
 
-saveはnew profile versionを作る。dirty navigation guardは既存componentを再利用する。
+Saveはnew ProfileVersion。dirty guardは既存component再利用。
 
-## 21. Review画面
+## 21. Review
 
-左: ReviewQueue list。
-右: evidence excerpt + raw inference + effective value +操作。
+左ReviewItem、右evidence/raw/effective/actions。
 
-speaker overrideではScene participant Entityからselect。自由文字入力で新Entityをその場作成しない。Entity作成/統合は別review action。
+Queueにないlow-confidence結果はDocument Semanticsから直接Override可能にしてよい。
 
-Scene boundary候補acceptはsplit操作を実行する旨を明示し、structure revisionが変わることを表示する。
+Scene boundary proposalはStructure画面を主導線とし、Review画面はユーザーがQueueへ追加した候補だけ扱う。
 
-## 22. Lint画面
+## 22. Lint
 
-上部:
+表示:
 
 ```text
-対象episode/draft
-TextRevision
+対象draft/TextRevision
 Profile/version
+coverage
 stale indicator
+Finding list
 ```
 
-Findingをseverity→sort score順。
-
-各Finding:
+Finding:
 
 ```text
 metric
 observed
 reference range
 short explanation
-evidence excerpts
+evidence
 acknowledge/ignore
 ```
 
-「AIで修正」buttonはv1で置かない。
+coverage 0でもerror画面にせず「比較可能なMetricなし」。
 
 ## 23. Job polling
 
-WebSocket/SSEを追加しない。
+WebSocket/SSEは追加しない。
 
-TanStack Queryで `queued|running` の間だけ2秒polling。completed/failed/cancelledで停止。
-
-画面を離れてもjobはserver側で継続。再訪時はGET jobで状態復元する。
+TanStack Queryで `queued|running` の間2秒poll。終了statusで停止。
 
 ## 24. Query invalidation
 
-成功時に最低限以下をinvalidate。
-
-- import complete → imports, referenceWorks
-- analysis complete → document, structure, analysisRuns, metrics, reviewItems
-- override → reviewItems, effective semantics, metrics/jobs
-- aggregate → corpus metrics
-- profile version → profiles
-- lint → lintRuns/findings
+- import -> imports/referenceWorks
+- analysis -> document/structure/runs/metrics/semantics
+- override -> semantics/metrics/jobs
+- aggregate -> corpus metrics
+- profile version -> profiles/profile versions
+- lint -> lint runs/findings
 
 全project queryを無差別invalidateしない。
 
-## 25. Accessibility/操作
+## 25. 操作性
 
-- form inputはlabel必須
-- progressはtextでも状態表示
-- colorだけでseverity/statusを示さない
-- table操作はkeyboard可能
-- confirm dialogは既存UI patternを使う
+- input label
+- progress text
+- status/severityを色だけで示さない
+- table keyboard操作
+- confirm dialogは既存pattern
+
+新規の独自安全確認modalは作らない。
 
 ## 26. Testing
 
 API:
 
 - project isolation
-- endpoint schema
 - 202 job
-- version conflict
+- optional structure revision
+- manual structureではboundary auto apply skip
+- Profile identity/version API
+- ReviewItem CAS
+- optional override note
 - purge
 - provider unavailable
-- no raw payload leakage
 
 WEBUI:
 
-- import form validation
-- rights checkbox
-- polling stop
-- project A/B query isolation
-- profile dirty guard
-- review CAS conflict
-- lint stale表示
-- source purge confirm
-
-既存WebUI flakeをStyle Analysisテストへコピーしない。user-event操作対象はdisabled/focusable状態を明示waitしてから操作する。
+- import form
+- job polling stop
+- project A/B isolation
+- Structure boundary proposal表示
+- Profile version dirty guard
+- Review conflict
+- Lint coverage/stale
+- purge confirm
 
 ## 27. Codex実装時の禁止事項
 
-- MCP toolを追加・変更しない。
-- tool count 59を変更しない。
-- 新WebSocket/SSE infrastructureを追加しない。
+- MCP tool/countを変更しない。
+- WebSocket/SSEを追加しない。
 - 独自API client/query cacheを作らない。
-- authoring character/world/canonをStyle Analysis推論で自動更新しない。
-- reference本文全文をMCP/connectorへ返さない。
-- Style Analysis都合で既存route URLを変更しない。
+- authoring DBを推論で自動更新しない。
+- source importにrights_basis/同意checkboxを再追加しない。
+- full analysisに毎回確認dialogを追加しない。
+- Profile identityとVersion endpointを混同しない。

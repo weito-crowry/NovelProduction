@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-SceneとBlockへ意味的なラベルを付与し、日常会話・説明・内省・緊張・アクション等の局面別に文体統計を比較できるようにする。Scene分類は単一ラベルではなく、相互に独立したaxisのmulti-labelを正本とする。
+Scene/Blockへ意味ラベルを付与し、局面別に文体統計を比較できるようにする。Scene分類はmulti-axisを正本とし、判断不能を無理に既知labelへ押し込まない。
 
 上位仕様は `../basic-design.md`。
 
@@ -16,12 +16,12 @@ CORE/src/novel_core/style_analysis/
     scene_classifier.py
     block_semantics.py
     pov_classifier.py
-    scene_boundary_candidates.py
+    scene_boundary.py
 ```
 
 ## 3. Scene taxonomy
 
-taxonomy versionを `scene-taxonomy-v1` として固定する。
+`scene-taxonomy-v1`。
 
 ### function: multi-select
 
@@ -40,9 +40,8 @@ transition
 reveal
 payoff
 other
+unclear
 ```
-
-0件は禁止。判断不能なら `other`。
 
 ### tone: multi-select
 
@@ -57,9 +56,8 @@ ominous
 sad
 excited
 other
+unclear
 ```
-
-最低1件。極端に混在するsceneは複数可。
 
 ### pace: single-select
 
@@ -67,6 +65,7 @@ other
 slow
 medium
 fast
+unclear
 ```
 
 ### information_load: single-select
@@ -75,6 +74,7 @@ fast
 low
 medium
 high
+unclear
 ```
 
 ### interaction: single-select
@@ -85,25 +85,16 @@ dialogue
 group_dialogue
 crowd
 mixed
+unclear
 ```
 
-## 4. Scene classification出力
+`unclear` は他labelと同時指定しない。`other` は「判定できるがtaxonomy外」、`unclear` は「判定不能」。
 
-`style_annotations` にaxisごとに保存する。1つの巨大JSONへまとめない。
+## 4. Annotation形式
 
-例:
+axisごとに `style_annotations` へ保存する。
 
-```text
-annotation_type = scene.function
-value_json = ["daily", "dialogue"]
-
-annotation_type = scene.pace
-value_json = "medium"
-```
-
-各annotationにconfidenceとanalysis_run_idを持たせる。
-
-function/tone複数値のconfidenceはlabelごとに持ちたいため、valueは次の形式とする。
+multi-select:
 
 ```json
 [
@@ -112,61 +103,64 @@ function/tone複数値のconfidenceはlabelごとに持ちたいため、value�
 ]
 ```
 
+single-select:
+
+```json
+{"label": "medium", "confidence": 0.84}
+```
+
+巨大なScene JSONへまとめない。
+
 ## 5. Scene classifier入力
 
 - Scene全文
 - Block ID/type/text
-- speaker effective viewが存在すればspeaker名
-- Term一覧は名称だけ
-- 前後sceneの本文は渡さない
+- effective speakerがあればspeaker名
+- Term名称一覧
 
-分類はScene単体の読み味を測るため、作品あらすじ・ジャンル等をpromptへ混ぜない。
+前後Scene全文、作品あらすじ、ジャンルは渡さない。対象Scene自体の読み味を分類する。
 
-## 6. function判定基準
-
-曖昧さを減らすため定義を固定する。
+## 6. function定義
 
 | label | 判定基準 |
 |---|---|
-| daily | 日常行動・雑談・通常生活が主 |
-| setup | 後続展開の前提・準備を配置 |
-| dialogue | 会話そのものがscene推進の中心 |
-| exposition | 設定・制度・背景・知識の伝達が中心 |
-| meeting | 会議・協議・正式な打合せ |
+| daily | 日常行動・雑談・通常生活が中心 |
+| setup | 後続展開の前提・準備 |
+| dialogue | 会話そのものがScene推進の中心 |
+| exposition | 設定・背景・知識伝達が中心 |
+| meeting | 会議・協議・正式打合せ |
 | investigation | 情報収集・推理・検証 |
-| travel | 移動そのものがsceneの主要活動 |
+| travel | 移動そのものが主要活動 |
 | introspection | 内面思考・自己評価が中心 |
-| conflict | 対立・口論・交渉上の衝突 |
-| action | 身体的行動・戦闘・追跡等が中心 |
-| transition | 時間/場所/章の橋渡しが主 |
-| reveal | 読者/人物に重要情報が明示される |
-| payoff | 以前の伏線・準備の成果がscene中心 |
+| conflict | 対立・交渉・口論 |
+| action | 身体的行動・戦闘・追跡等 |
+| transition | 時間/場所/章の橋渡し |
+| reveal | 重要情報の明示 |
+| payoff | 前段準備/伏線の成果が中心 |
+| other | 上記以外の明確な機能 |
+| unclear | 十分な判定材料がない |
 
-`dialogue` は会話率だけで自動付与しない。内容機能をmodelで判断する。
+会話率等の数値だけでfunctionを決めない。
 
-## 7. pace基準
+## 7. pace / information_load
 
-モデルpromptに以下を明示する。
+pace:
 
-- slow: 内省・詳細描写・長い説明が多く、出来事の進行量が少ない
-- medium: 標準的
-- fast: 短いやり取りや行動が連続し、状態変化が多い
+- slow: 内省・詳細描写・長い説明が多く状態変化が少ない
+- medium: 中間
+- fast: 短いやり取り/行動/状態変化が連続
+- unclear: 混在し単一判定が不安定
 
-文長だけで決定しない。
+information_load:
 
-## 8. information_load基準
+- low: 既知前提の会話/行動中心
+- medium: 数個の新情報
+- high: 複数の固有概念・因果説明が集中
+- unclear: 判定不能
 
-新規情報量で判定する。
+Term情報は補助signal。Term analyzerを必須依存にしない。
 
-- low: 既知前提の会話・行動中心
-- medium: 数個の新情報が自然に入る
-- high: 複数の固有概念・設定・因果説明を短い範囲に集中投入
-
-05 Term分析が完了していればterm情報を補助signalとして渡すが、Scene classifierはTerm analyzerに必須依存しない。
-
-## 9. POV
-
-Sceneごとに以下を保存する。
+## 8. POV
 
 ```text
 pov_mode = first_person | third_limited | omniscient | objective | unclear
@@ -174,13 +168,11 @@ pov_entity_id nullable
 confidence
 ```
 
-`pov_entity_id` はperson Entity解決済みの場合のみ設定。名前不明でもmodeは判定可能。
+Entity未解決でもmodeは保存可能。Scene内POV shiftはannotationとして残す。
 
-POVがscene内で変化した疑いがある場合は `pov_shift_candidate=true` annotationを付け、ReviewQueueへ送る。automatic Scene再分割はしない。
+## 9. Block semantics
 
-## 10. Block semantics
-
-narration/monologue blockを次のexclusive primary categoryに分類する。
+narration/monologueのprimary category:
 
 ```text
 action
@@ -189,9 +181,10 @@ exposition
 psychology
 transition
 other
+unclear
 ```
 
-さらにsecondary tagsを0件以上持てる。
+secondary tags:
 
 ```text
 sensory
@@ -203,13 +196,9 @@ summary
 foreshadowing
 ```
 
-文体構成比に使用するのはprimary categoryのみ。secondary tagは探索・可視化用。
+構成比はprimaryだけを使う。`unclear` はsemantic ratioのカテゴリ分子へ入れない。
 
-dialogue blockにはprimary semantic categoryを付けず、必要なら `dialogue_function` を別annotationで持つ。
-
-## 11. dialogue function
-
-初期enum:
+dialogueは別 `dialogue_function` annotation:
 
 ```text
 casual
@@ -220,21 +209,26 @@ conflict
 command
 emotional
 other
+unclear
 ```
 
-multi-label可。v1の必須metricには使用しないが、人物別分析用に保存する。
+multi-label可。v1必須metricにはしない。
 
-## 12. Scene boundary candidate
+## 10. Scene Boundary Analyzer
 
-03 automatic sceneより細かい境界が疑われる場合、semantic analyzerはBlock境界に候補を出せる。
+03 automatic base structure内のBlock境界を評価する。Analyzer IDは `scene-boundary-detector`。
 
 出力:
 
 ```json
 {
-  "after_block_id": 55,
-  "reasons": ["time_shift", "location_shift"],
-  "confidence": 0.88
+  "boundaries": [
+    {
+      "after_block_id": 55,
+      "reasons": ["time_shift", "location_shift"],
+      "confidence": 0.88
+    }
+  ]
 }
 ```
 
@@ -248,68 +242,75 @@ participant_reset
 context_reset
 ```
 
-confidence >=0.80のみReviewQueueへ表示。自動splitしない。
+09 `AnalysisPolicy.scene_boundary_auto_apply` 以上は03がsemantic StructureRevisionへ自動materializeする。初期default 0.85。
 
-## 13. Confidence policy
+`scene_boundary_candidate_min` 以上/auto_apply未満はproposalとして保存する。初期default 0.60。proposalをReviewItemへ自動投入する必要はなく、Structure画面で「候補表示」を選択した場合に表示する。
 
-Scene axis:
+## 11. Confidence policy
 
-- >=0.80: effective inferredとして集計可
-- 0.60〜0.799: 保存するがprofile集計から除外しreview対象
-- <0.60: `uncertain` 相当として保存、集計しない
+正本は09 AnalysisPolicy。
 
-Block primary:
+初期default:
 
-- >=0.75: metric利用
-- <0.75: `other` effective扱い、元推論値はraw annotationとして保持
+```text
+scene_label_effective = 0.80
+block_semantic_effective = 0.75
+scene_boundary_auto_apply = 0.85
+scene_boundary_candidate_min = 0.60
+```
 
-## 14. Prompt/version
+threshold未満の判定はraw inferenceとして保持する。threshold未満を強制的に`other`へ置換しない。effective viewでは`unclear`を返す。
+
+## 12. Chunking
+
+Sceneが30,000 code pointsを超える場合:
+
+- Block境界で最大15,000 code pointsのchunk
+- 各chunk分類
+- function/toneはconfidence付き候補を統合
+- pace/information_load/interactionはchunk summaryからreduce call
+- POV矛盾は`unclear`
+
+provider tokenizerへ依存せずcode pointで分割する。
+
+Scene Boundary Analyzerはbase Sceneごとに処理し、30,000超では隣接chunk境界周辺Blockも重複contextとして含める。
+
+## 13. Version
 
 ```text
 scene-semantic-classifier v1
 block-semantic-classifier v1
 pov-classifier v1
-scene-boundary-candidate v1
+scene-boundary-detector v1
 scene-taxonomy-v1
 ```
 
-taxonomy label追加/定義変更はtaxonomy versionを上げる。既存Aggregateと混在させない。
+taxonomy変更はtaxonomy versionを上げる。
 
-## 15. Chunking
-
-1 Sceneが30,000 code pointsを超える場合、モデルへ全文を1回で投げない。
-
-- Block境界で最大15,000 code pointsのchunkへ分割
-- 各chunkを分類
-- function/toneはconfidence加重union
-- pace/information_load/interactionは最終reduce callでchunk summaryだけを入力して決定
-- POVは矛盾があればunclear + review
-
-モデル固有tokenizerで分割しない。code point長でprovider非依存にする。
-
-## 16. テスト
-
-mocked output schema validationに加え、gold Sceneを最低30件用意する。
-
-含めるscene:
+## 14. テスト
 
 - 日常会話
 - 設定説明
 - 会議
 - 内省
-- 戦闘
-- 移動
+- action
+- travel
 - reveal
 - dialogueだがexposition主体
-- 会話率低いがconflict
-- POV shift疑い
+- conflictだが会話率低
+- unclear分類
+- POV shift
+- boundary high-confidence自動適用
+- boundary middle-confidence proposal
+- boundary low-confidence破棄
 
-初期評価はlabelごとのprecision/recallを記録するが、CI gateはschema/invariant regressionとする。モデル精度値そのものを外部API非決定性のあるCI gateにしない。
+Model精度は14のevaluationで追跡し、CIではschema/invariantをgateする。
 
-## 17. Codex実装時の禁止事項
+## 15. Codex実装時の禁止事項
 
-- Sceneを1つのscene_type enumへ縮約しない。
-- functionを会話率等の数値だけで決めない。
-- semantic classifierがautomatic Scene構造を書き換えない。
-- block semantic複数labelを構成比で二重カウントしない。
-- confidence不足結果をprofile統計へ混ぜない。
+- Sceneを単一scene_typeへ縮約しない。
+- functionを数値heuristicだけで決めない。
+- LLMがStructureRevision rowを直接編集しない。
+- block secondary tagを構成比で二重カウントしない。
+- 判断不能結果を無理に`other`へ確定しない。
+- boundary proposalごとにReviewItemを自動生成しない。

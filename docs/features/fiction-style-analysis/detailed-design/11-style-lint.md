@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-自作品のMeasurementを選択したStyleProfileと比較し、差分を `Finding` として提示する。Lintは文章の優劣を断定せず、「参照基準からどの程度外れているか」と根拠spanを示す。
+自作品Measurementを選択したStyleProfileと比較し、差分を `Finding` として提示する。Lintは文章の優劣を断定せず、参照範囲との差・根拠・解析coverageを示す。
 
 上位仕様は `../basic-design.md`。
 
@@ -16,86 +16,62 @@ CORE/src/novel_core/style_analysis/
   evidence_service.py
 ```
 
-文章自動修正機能は実装しない。
+自動書き換えはv1 scope外。
 
 ## 3. Lint入力
-
-必須:
 
 ```text
 project document_id
 text_revision_id
 structure_revision_id
-profile_id/profile_version
-metric analysis run
+profile_id
+profile_version_no
+basic/semantic metric run IDs
 ```
 
-project draftが解析後に更新されていても、Lintは指定TextRevisionに対して実行する。最新draftへ自動読み替えしない。
+指定revisionを正本としlatest draftへ暗黙読み替えしない。
 
-## 4. StyleRule適用
-
-Ruleは08のscope selectorで対象scopeを選ぶ。
-
-適用順:
-
-1. global rule
-2. Scene label rule
-3. character rule
-
-同一metricへ複数ruleが適用される場合、よりspecificなruleを優先する。
+## 4. Rule適用
 
 specificity:
 
 ```text
-character > multi-axis scene selector > single-axis scene selector > global
+character
+> multi-axis scene selector
+> single-axis scene selector
+> global
 ```
 
-同specificityで競合するRuleはprofile validation errorとし、Lintを開始しない。
+同metric/同specificityで複数enabled Ruleが競合する場合はProfile version作成時のvalidation errorとする。Lint開始時に初めて発見しない。
 
 ## 5. Range判定
-
-Ruleにmin/maxがある場合:
 
 - `min <= observed <= max`: Findingなし
 - 下回る: lower deviation
 - 上回る: upper deviation
+- preferredだけから外れてもFindingなし
+- min/max片側のみ可
 
-preferredは表示用であり、preferredから外れただけではFindingを作らない。
-
-片側rangeも許可する。
-
-## 6. Deviation score
-
-severity計算用のnormalized deviationを以下で定義する。
+## 6. Deviation
 
 通常range幅 > 0:
 
 ```text
-upper: (observed - max) / (max - min)
-lower: (min - observed) / (max - min)
+upper = (observed - max) / (max - min)
+lower = (min - observed) / (max - min)
 ```
 
-zero-width range `min == max`:
-
-metric unitごとのabsolute toleranceを使う。
+`min == max` は07 `MetricDefinition.zero_width_tolerance` を使う。
 
 ```text
-ratio: 0.02
-chars: 5.0
-count: 1.0
-per_1000_chars: 0.2
-other float: max(abs(preferred)*0.05, 0.01)
+deviation = abs(observed - boundary) / tolerance
 ```
 
-```text
-deviation = excess / tolerance
-```
+MetricDefinitionにtoleranceがないzero-width RuleはProfile validation errorとする。Lint側でunitから値を推測しない。
 
 ## 7. Severity
 
-rule `severity_policy` default=`standard`。
-
-standard:
+`severity_policy=standard`:
 
 | deviation | severity |
 |---:|---|
@@ -104,13 +80,13 @@ standard:
 | >0.25〜0.75 | warning |
 | >0.75 | strong_warning |
 
-weightはseverity thresholdへ掛けない。Findingのsort scoreに使用する。
+weightはsortだけに使う。
 
 ```text
-sort_score = deviation * rule.weight
+sort_score = deviation * weight
 ```
 
-UIで `strong_warning` を「重大な文章欠陥」等と表示しない。「参照範囲から大きく外れています」とする。
+UI文言は「参照範囲との差」として表示する。
 
 ## 8. Finding
 
@@ -133,7 +109,7 @@ evidence_json
 created_at
 ```
 
-explanation_code例:
+初期explanation code:
 
 ```text
 above_reference_range
@@ -145,98 +121,68 @@ high_new_term_density
 long_term_explanation_delay
 ```
 
-explanation textはUI側でcodeから定型生成し、LLMへ再説明させない。
+定型説明はCORE/APIでcode + metric dataから生成し、LLM callは不要。
 
-## 9. Evidence span
+## 9. Evidence
 
-Findingごとに最大5span。
+最大5span。
 
-### 長いnarration run
+- narration run: run span
+- exposition ratio: 長いexposition Block上位5
+- new term density: eligible初出Term Mention上位5
+- explanation delay: 初出 + sufficient explanation
+- scope ratio: 一意spanがなければ `evidence_kind=scope_metric`
 
-該当runのstart/end span。
+Finding rowへ本文excerptを複製しない。
 
-### exposition ratio
-
-長いexposition blockをchar数降順で最大5件。
-
-### new term density
-
-該当Scene内のeligible初出Term mention span最大5件。
-
-### explanation delay
-
-Term初出spanとfirst sufficient explanation span。
-
-### dialogue ratio
-
-作品/Scene全体の率だけでは局所evidenceが一意でないため、spanなしでもよい。その場合 `evidence_kind=scope_metric`。
-
-## 10. Lint scope
-
-実行単位:
+## 10. Scope
 
 ```text
 document whole
 specific scene
 ```
 
-複数episode一括Lintはv1でUIから順次job作成する。1runに複数documentを入れない。
+複数episodeは1documentずつjob作成。
 
-## 11. Missing metric
+## 11. Missing metric / coverage
 
-Rule対象Metricが存在しない場合:
+Rule対象Metricがない場合はFindingを作らずwarningへ追加する。
 
-- Findingを作らない
-- lint run warningへ `METRIC_UNAVAILABLE:{metric}` を追加
-- Lint全体はpartialではなくsucceeded with warnings
+```text
+METRIC_UNAVAILABLE:{metric}
+```
 
-profile rule全体の50%以上がmissingの場合は `LINT_INSUFFICIENT_ANALYSIS` でfailed。
+「50%以上missingならfail」のような割合thresholdは設けない。LintRunは最後まで処理し、次を返す。
+
+```text
+enabled_rule_count
+applicable_rule_count
+missing_rule_count
+coverage_ratio
+```
+
+`applicable_rule_count=0` でもrun自体は `succeeded`。UIは「比較可能なMetricがありません」と表示する。分析不足とシステム障害を混同しない。
 
 ## 12. Staleness
 
-Lint結果にはinputのTextRevision/Draft IDを表示する。
+LintRunはinput TextRevision/Draft IDを保持する。latest draftが異なればAPI `stale=true`。
 
-現在のlatest draft IDが異なる場合APIは `stale=true` を返すが、旧Findingを削除しない。
+旧Findingは削除しない。UIから最新本文capture/analyze/lintへ進める。
 
-UIはstale Lintを明示し、「最新本文を解析して再Lint」操作を提供する。
-
-## 13. 推奨文言
-
-初期Lintは数値的な指摘だけにする。生成的な書き換え提案はしない。
-
-許可例:
-
-```text
-このSceneの説明文比率は42%で、参照範囲18〜31%を上回っています。
-最長の説明Blockは286文字です。
-```
-
-禁止例:
-
-```text
-この段落を以下のように書き換えてください: ...
-```
-
-将来Writing Guidanceを追加する場合は別詳細設計を作る。
-
-## 14. Finding抑制
-
-ユーザーはFindingを `acknowledged` または `ignored` にできる。元Findingは不変。
+## 13. Finding review
 
 `style_finding_reviews`:
 
 ```text
 finding_id
 status = acknowledged | ignored
-note
+note nullable
 created_at
 ```
 
-同一TextRevision/Profileで再Lintした際、同じrule+target+evidence fingerprintならignored状態を表示継承してよい。別revisionへ自動継承しない。
+同一TextRevision/ProfileVersionかつ同rule+target+evidence fingerprintならreview状態を表示継承してよい。別revisionへ継承しない。
 
-## 15. Sort
-
-default:
+## 14. Sort
 
 ```text
 strong_warning
@@ -244,40 +190,54 @@ warning
 info
 ```
 
-同severity内は `sort_score DESC, target order ASC, id ASC`。
+同severityは `sort_score DESC, target order ASC, id ASC`。
 
-## 16. API返却
+## 15. API返却
 
-Finding listには全文を含めない。
+Finding list:
 
 ```text
 finding metadata
 metric values
-up to 5 excerpt objects
+最大5 excerpt
 ```
 
-excerptはEvidenceServiceが最大400 code points/件で切り出す。
+excerpt最大400 code points/件。
+
+## 16. 推奨文言
+
+v1は数値的な指摘だけ。
+
+例:
+
+```text
+このSceneの説明文比率は42%で、参照範囲18〜31%を上回っています。
+最長の説明Blockは286文字です。
+```
+
+文章生成・書き換え提案は別設計。
 
 ## 17. テスト
 
 - range内Findingなし
 - min/max上下
-- zero-width tolerance
-- boundaryちょうどはFindingなし
-- specificity優先
-- 同specificity競合error
-- weightはseverityを変えない
+- zero-width MetricDefinition tolerance
+- tolerance未定義Profile validation error
+- specificity
+- weightはseverity非影響
 - evidence最大5
 - missing metric warning
-- missing 50%以上failed
+- missingが多くてもrun成功 + coverage
+- applicable 0表示
 - stale detection
-- ignored継承は同revisionのみ
+- ignored継承同revisionのみ
 
 ## 18. Codex実装時の禁止事項
 
-- 総合「文章品質スコア」を追加しない。
-- Lint結果を自動修正へ接続しない。
+- 総合文章品質scoreを追加しない。
+- Lintを自動修正へ接続しない。
 - preferredとの差だけでwarningにしない。
-- profile外の独自heuristic警告を勝手に追加しない。
-- stale結果をlatestとして表示しない。
-- 作品本文の長い引用をFinding recordへ複製しない。
+- Profile外heuristicを勝手に追加しない。
+- missing割合だけでLintRunをfailさせない。
+- zero-width toleranceをunitから推測しない。
+- 本文の長い引用をFinding rowへ複製しない。

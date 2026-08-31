@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-人物・組織・場所等のEntity、本文中のMention、人物同一性、会話blockの話者を抽出する。推論結果は必ずevidence spanとconfidenceを持ち、判断不能時に無理に確定しない。
+人物・組織・場所等のEntity、本文中Mention、作品内同一性、会話Blockの話者を抽出する。reference作品ではepisodeを跨いで同じ人物を追跡できることを必須とする。
 
 上位仕様は `../basic-design.md`。
 
@@ -20,11 +20,22 @@ CORE/src/novel_core/style_analysis/
     relations.py
 ```
 
-LLM通信そのものは09の `SemanticModelClient` Protocol経由とする。COREから特定provider SDKをimportしない。
+LLM通信は09の `SemanticModelClient` 経由。COREからprovider SDKをimportしない。
 
-## 3. Entity種別
+## 3. Entity scope
 
-初期 `entity_type` を固定する。
+Entityの所属scopeは次のどちらか一方。
+
+```text
+reference_work_id  # reference作品。全episode共通
+ document_id       # project draft等、単独document
+```
+
+両方NULL、両方非NULLは禁止する。
+
+reference作品では人物・組織・場所をepisode単位に分断しない。project draft解析では既存NovelProduction `characters` へ自動mergeせず、Style Analysis document内Entityとして扱う。
+
+## 4. Entity種別
 
 ```text
 person
@@ -37,15 +48,16 @@ event
 other
 ```
 
-`term` はEntity typeにしない。05のTermモデルで別管理し、必要ならEntityを参照する。
+Termは05で別管理する。
 
-## 4. EntityとMention
+## 5. Entity / Mention
 
-### Entity
+Entity:
 
 ```text
 id
-reference_work_id
+reference_work_id nullable
+document_id nullable
 entity_type
 canonical_name
 description nullable
@@ -54,9 +66,7 @@ created_by_run_id nullable
 created_at
 ```
 
-外部reference workのEntityはwork単位。project draft解析では `document_id` を所属scopeとして保持し、既存NovelProductionのcharacter tableと自動mergeしない。
-
-### Mention
+Mention:
 
 ```text
 id
@@ -72,8 +82,6 @@ confidence
 analysis_run_id
 ```
 
-`entity_id=NULL` を許可し、未解決Mentionを保持する。
-
 `mention_type`:
 
 ```text
@@ -84,38 +92,32 @@ role_title
 implicit
 ```
 
-implicit mentionはゼロ幅spanを禁止する。明示文字列がない主語省略等はMentionにせずannotationとして扱う。
+明示文字列のない省略主語はMentionを作らずannotationで扱う。Mention spanは必ず非ゼロ幅。
 
-## 5. 解析パイプライン
-
-順序を固定する。
+## 6. 解析順
 
 ```text
 Scene input
-  ↓
-Mention extraction
-  ↓
-work-level Entity resolution
-  ↓
-Speaker attribution
-  ↓
-Relation extraction
+  -> Mention extraction
+  -> scope-level Entity resolution
+  -> Speaker attribution
+  -> Relation extraction
 ```
 
-speaker attributionはEntity resolution成功後に実行する。未解決人物を話者候補にする場合はtemporary candidate IDを使わず、`speaker_entity_id=NULL` と候補名をevidence metadataへ残す。
+reference作品のEntity resolution候補は同 `reference_work_id`。project documentは同 `document_id`。
 
-## 6. Mention extraction
+## 7. Mention extraction
 
-Scene単位でモデルへ入力する。
+Scene単位でモデルへ渡す。
 
 入力:
 
-- Scene canonical text
-- Block一覧とblock_id/type/span
-- 既に確定済みEntity一覧（同work）
-- 直前scene末尾最大3blockの人物名context
+- Scene text
+- Block ID/type/span
+- 同scopeの既存Entity一覧
+- 直前Scene末尾最大3Blockの人物名context
 
-モデル出力JSON schema:
+出力例:
 
 ```json
 {
@@ -134,30 +136,36 @@ Scene単位でモデルへ入力する。
 }
 ```
 
-LLMのoffsetを信用し切らない。`surface` がblock内指定位置と一致することを検証し、不一致時は同block内の一意な完全一致を検索する。0件または複数件ならそのMentionをrejectしReviewQueueへ送る。
+offset validation:
 
-## 7. Entity resolution
+1. 指定位置とsurfaceが一致すれば採用。
+2. 不一致なら同Block内の一意な完全一致を1回だけ検索。
+3. 0件/複数件ならそのMentionだけ破棄しwarningを残す。
 
-同work内でのみ自動統合する。
+単一Mentionのspan不整合でrun全体をfailさせない。
+
+## 8. Entity resolution
 
 自動統合条件:
 
 1. canonical name完全一致
-2. 既存confirmed alias完全一致
-3. modelが同一人物と判定しconfidence >= 0.90、かつ conflicting evidenceなし
+2. confirmed/manual alias完全一致
+3. model同一判定が09 `AnalysisPolicy.entity_resolution_auto_merge` 以上
 
-以下は自動統合しない。
+初期defaultは `0.90`。
 
-- 同じ姓だけ
-- 「彼」「彼女」だけ
-- 同じ役職名だけ
-- 同名人物が複数存在し得るケース
+次は自動統合しない。
 
-model-based resolutionは候補Entityを最大20件に絞って渡す。候補0なら新Entity、候補複数で0.90未満なら未解決Mentionとして残す。
+- 姓だけ一致
+- pronounだけ
+- 役職だけ
+- 同名人物候補が複数
 
-## 8. Alias
+候補は最大20件。threshold未満は未解決Mentionとして保持する。未解決は正常状態であり、ReviewItemを必ず作る必要はない。
 
-Entity aliasは別table `style_entity_aliases` で保持する。
+## 9. Alias
+
+`style_entity_aliases`:
 
 ```text
 entity_id
@@ -167,7 +175,7 @@ status
 source_mention_id nullable
 ```
 
-alias_kind:
+alias kind:
 
 ```text
 name
@@ -178,22 +186,20 @@ title
 role
 ```
 
-modelが提案したaliasは `inferred`。Human confirmed後は再解析でも維持する。
+confirmed/manual aliasは再解析で維持する。
 
-## 9. Speaker attribution
+## 10. Speaker attribution
 
-対象は `block_type=dialogue` のみ。
+対象は `block_type=dialogue`。
 
-各dialogue blockについて候補を以下の順で作る。
+候補生成:
 
-1. 同Sceneのperson Entity
-2. 直前/直後2blockにMentionがあるperson
-3. 直前dialogueのspeaker
-4. Scene participants annotation
+1. 同Scene person Entity
+2. 前後2BlockにMentionがあるperson
+3. 直前dialogue speaker
+4. Scene participant
 
-モデル入力には対象dialogue前後最大4blockずつを渡す。
-
-出力:
+モデルへ対象前後最大4Blockを渡す。
 
 ```json
 {
@@ -205,7 +211,7 @@ modelが提案したaliasは `inferred`。Human confirmed後は再解析でも�
 }
 ```
 
-reason_code初期値:
+reason:
 
 ```text
 explicit_speech_tag
@@ -216,19 +222,22 @@ scene_context
 unknown
 ```
 
-confidence threshold:
+thresholdは09 AnalysisPolicyを正本とする。
 
-| confidence | Effective扱い |
-|---|---|
-| >= 0.85 | inferred speakerとして利用可 |
-| 0.60〜0.849 | speaker候補として保存しreview対象 |
-| < 0.60 | `speaker_entity_id=NULL` として保存 |
+```text
+speaker_effective = 0.85
+speaker_candidate = 0.60
+```
 
-Turn-takingだけを根拠にconfidence 0.85以上を付けない。最大0.79とする。
+- >= effective: inferred speakerとして利用。
+- candidate以上/effective未満: 候補として保存、effectiveはunknown。
+- candidate未満: entity_idをeffectiveにしない。
 
-## 10. Speaker Annotation
+Turn-takingだけを根拠にeffective thresholdを超えない。
 
-話者はBlock自体の列として直接上書きせず、`style_annotations` に保存する。
+## 11. Speaker Annotation
+
+Block rowへspeaker列を追加せず `style_annotations` に保存する。
 
 ```text
 annotation_type = speaker
@@ -239,23 +248,23 @@ confidence
 analysis_run_id
 ```
 
-ManualOverrideは10のEffective Viewで上書きする。
+ManualOverrideは10のEffective Viewでoverlayする。
 
-## 11. Person participation
+## 12. Scene participant
 
-Scene participantは次のどれかを満たすperson Entityとする。
+person Entityが以下のいずれかを満たせばparticipant。
 
-- Scene内に明示Mentionあり
-- speaker attributionあり
-- modelが非発話参加者として明示しconfidence >= 0.80
+- Scene内Mentionあり
+- effective speaker
+- modelが非発話参加者として09 policy threshold以上
 
-単に過去文脈で名前が言及された人物はparticipantにしない。
+初期 `participant_effective=0.80`。
 
-## 12. Relation extraction
+過去について名前が言及されただけの人物はparticipantにしない。
 
-v1では文体分析に必要な最小限だけ保存する。
+## 13. Relation
 
-relation types:
+v1は文体探索に使える最小限。
 
 ```text
 speaks_to
@@ -269,15 +278,11 @@ subordinate
 other
 ```
 
-`family/friend/...` の恒常関係はmodel confidence >=0.90でも `inferred` のまま。文体指標の必須入力にはしない。
+`co_present` はparticipantsから決定論的生成可能。恒常関係はinferredのままでよく、文体metricの必須入力にしない。
 
-`co_present` はScene participantsから決定論的に作成可能。
+## 14. Project character link
 
-## 13. Project側characterとの対応
-
-自作品 `project_episode_draft` を解析した場合でも、Style Analysis Entityを既存 `characters` rowへ自動mergeしない。
-
-必要なら `style_entity_links` で明示linkする。
+既存characterとの対応が必要な場合だけ `style_entity_links` を使う。
 
 ```text
 style_entity_id
@@ -286,11 +291,9 @@ status = inferred | confirmed | manual
 confidence nullable
 ```
 
-confirmed/manual linkのみ、人物別StyleProfile比較で既存character IDとして利用する。
+confirmed/manual linkだけ人物別StyleProfile比較へ使用する。名前一致で自動リンクしない。
 
-## 14. Prompt/version
-
-Analyzer IDs:
+## 15. Prompt/version
 
 ```text
 entity-mention-extractor v1
@@ -299,48 +302,42 @@ speaker-attribution v1
 entity-relation-extractor v1
 ```
 
-prompt textはコード埋め込みではなく `CORE/src/novel_core/style_analysis/prompts/` にversion付きUTF-8 text/jsonとして置く。prompt変更時はAnalyzer versionまたはprompt versionを必ず更新する。
+promptは `CORE/src/novel_core/style_analysis/prompts/` にversion付きresourceとして置く。
 
-## 15. Fail closed
+## 16. Review方針
 
-以下は推測で補完しない。
+低confidence結果を無差別にReviewQueueへ積まない。
 
-- 誰が喋ったか分からない
-- 「先生」等が複数人物を指し得る
-- 同姓同名
-- pronounの先行詞が曖昧
-- model outputのspan不整合
+ReviewItemを自動作成するのは初期状態では次だけ。
 
-不明値をNULLで保持できることを正常系とする。
+- modelが複数Entity候補の明示conflictを返した
+- user-visible speaker解析で候補が複数かつconfidence差が小さい
+- manual operationの対象Entityが解決不能
 
-## 16. テスト
+その他のunknown/未解決結果はSemantics画面のfilterで確認可能にする。
 
-### deterministic
+## 17. テスト
 
+- reference work内episode跨ぎEntity resolution
+- project document scope分離
 - surface offset validation
 - exact alias resolution
-- ambiguous aliasをmergeしない
+- ambiguous alias非merge
 - candidate filtering
-- confidence threshold
-- project character link優先順位
+- policy threshold
+- explicit speech tag attribution
+- turn-takingだけではeffectiveにしない
+- 3人会話unknown
+- 同姓人物誤統合なし
 
-### mocked model
+Gold datasetの精度値は14の評価方針に従い、CI hard gateにしない。
 
-- 明示「Aが言った」でA attribution
-- A/B交互会話だがturn-takingだけなら0.85未満
-- 3人会話でunknown維持
-- pronoun解決成功/失敗
-- 同姓人物2名を誤統合しない
+## 18. Codex実装時の禁止事項
 
-### gold dataset
-
-最低20 Sceneを手動annotationし、speaker accuracyを計測する。初期acceptanceは「明示speaker tag付きdialogueのprecision >= 0.95」。全dialogue recallを無理に目標化しない。
-
-## 17. Codex実装時の禁止事項
-
-- 全てのdialogueへ必ずspeakerを割り当てない。
+- 全dialogueへspeakerを強制割当しない。
 - surname一致だけでEntity mergeしない。
 - existing character tableへ推論結果を書き込まない。
-- modelのoffsetを検証なしで永続化しない。
-- relation extractionを世界観DB自動更新へ接続しない。
-- LLM provider固有SDKをCOREへ追加しない。
+- model offsetを検証なしで保存しない。
+- relation抽出をworld/canon自動更新へ接続しない。
+- provider SDKをCOREへ追加しない。
+- unknown結果ごとにReviewItemを大量生成しない。

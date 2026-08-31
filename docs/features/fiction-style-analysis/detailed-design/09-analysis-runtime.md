@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Analyzerを依存関係付きDAGとして実行し、入力revision・設定・model・promptをfingerprint化して再利用可能にする。解析失敗やAPI再起動が既存結果を壊さず、必要範囲だけ再実行できるruntimeを定義する。
+Document解析Analyzerを依存関係付きDAGとして実行し、入力revision・設定・model・promptをfingerprint化する。前処理・Corpus集約・Profile生成・LintをAnalysisRunへ無理に押し込まず、責務を分離する。
 
 上位仕様は `../basic-design.md`。
 
@@ -13,6 +13,7 @@ CORE/src/novel_core/style_analysis/
   runtime_models.py
   analyzer.py
   analyzer_registry.py
+  analysis_policy.py
   analysis_repository.py
   analysis_service.py
   fingerprint.py
@@ -24,44 +25,14 @@ API/src/novel_api/style_analysis/
   model_client.py
 ```
 
-COREはprovider非依存。APIが外部LLM通信を担当する。
+## 3. Runtime責務の分離
 
-## 3. Analyzer契約
+### AnalysisRunで管理するもの
 
-```python
-@dataclass(frozen=True)
-class AnalyzerContext:
-    document_id: int
-    text_revision_id: int
-    structure_revision_id: int | None
-    dependency_run_ids: tuple[int, ...]
-    config: Mapping[str, object]
-
-@dataclass(frozen=True)
-class AnalyzerResult:
-    status: Literal["succeeded", "partial"]
-    output_counts: Mapping[str, int]
-    warnings: tuple[str, ...]
-
-class Analyzer(Protocol):
-    id: str
-    version: int
-    deterministic: bool
-    dependencies: tuple[str, ...]
-    input_scope: str
-    def config_schema(self) -> Mapping[str, object]: ...
-    def run(self, context: AnalyzerContext) -> AnalyzerResult: ...
-```
-
-Analyzerはtransaction境界を自前で作らず、AnalysisServiceがrun単位transactionを管理する。
-
-## 4. 初期Analyzer Registry
-
-IDを固定する。
+既存 `TextRevision` / `StructureRevision` を入力としてDocument内に派生データを作るAnalyzer。
 
 ```text
-normalize-text
-segment-structure
+scene-boundary-detector
 entity-mention-extractor
 entity-resolver
 speaker-attribution
@@ -72,52 +43,139 @@ term-explanation-detector
 scene-semantic-classifier
 block-semantic-classifier
 pov-classifier
-scene-boundary-candidate
-style-metrics
-aggregate-builder
-profile-generator
-style-lint
+style-metrics-basic
+style-metrics-semantic
 ```
 
-`normalize-text` と `segment-structure` は厳密には前処理だが、runtime上はversion/fingerprintを統一管理する。
+### AnalysisRunに入れないもの
 
-## 5. 依存DAG
+- normalization: TextRevision作成処理。02のversion/hashで再利用。
+- deterministic segmentation: StructureRevision作成処理。03のversion/fingerprintで再利用。
+- semantic Structure materialization: 03 StructureService。
+- Aggregate: 08 AggregateService/job。
+- Profile生成: 08 ProfileService/job。
+- Lint: 11 LintRun/job。
 
-初期依存を以下で固定する。
+これにより `AnalysisRun` が「自分のinputを自分で生成する」循環を作らない。
+
+## 4. Analyzer契約
+
+```python
+@dataclass(frozen=True)
+class AnalyzerContext:
+    document_id: int
+    text_revision_id: int
+    structure_revision_id: int
+    dependency_run_ids: tuple[int, ...]
+    policy_version: int
+    config: Mapping[str, object]
+
+@dataclass(frozen=True)
+class AnalyzerResult:
+    status: Literal["succeeded", "partial"]
+    output_counts: Mapping[str, int]
+    warnings: tuple[str, ...]
+    failed_subject_ids: tuple[int, ...] = ()
+
+class Analyzer(Protocol):
+    id: str
+    version: int
+    deterministic: bool
+    dependencies: tuple[str, ...]
+    input_scope: str
+    def run(self, context: AnalyzerContext) -> AnalyzerResult: ...
+```
+
+AnalysisServiceがtransaction/fingerprintを管理する。
+
+## 5. AnalysisPolicy
+
+confidence thresholdやsample最小値を各Analyzerへ散在させない。
+
+`analysis_policy.py` にversioned dataclassを置く。
+
+```python
+@dataclass(frozen=True)
+class AnalysisPolicy:
+    version: int = 1
+    entity_resolution_auto_merge: float = 0.90
+    speaker_effective: float = 0.85
+    speaker_candidate: float = 0.60
+    participant_effective: float = 0.80
+    term_resolution_auto_merge: float = 0.90
+    term_entity_auto_link: float = 0.90
+    term_explanation_effective: float = 0.85
+    scene_label_effective: float = 0.80
+    block_semantic_effective: float = 0.75
+    scene_boundary_auto_apply: float = 0.85
+    scene_boundary_candidate_min: float = 0.60
+    profile_min_episode_measurements: int = 5
+    profile_min_scene_measurements: int = 10
+    profile_min_character_utterances: int = 10
+    profile_min_term_samples: int = 5
+```
+
+初期値は実装判断ではなく本設計で確定。将来調整時はpolicy versionを上げ、fingerprintへ含める。
+
+## 6. Orchestration
+
+### deterministic preset
 
 ```text
-normalize-text
-  -> segment-structure
-      -> entity-mention-extractor
-          -> entity-resolver
-              -> speaker-attribution
-              -> entity-relation-extractor
-      -> term-candidate-extractor
-          -> term-resolver
-              -> term-explanation-detector
-      -> scene-semantic-classifier
-      -> block-semantic-classifier
-      -> pov-classifier
-      -> scene-boundary-candidate
+指定TextRevision
+-> automatic StructureRevisionを作成/reuse
+-> style-metrics-basic
+```
 
+### full preset
+
+```text
+指定TextRevision
+-> automatic StructureRevisionを作成/reuse
+-> scene-boundary-detector(base structure)
+-> semantic StructureRevisionをmaterialize/reuse
+-> entity mention/resolution
+-> term candidate/resolution
+-> speaker/relation
+-> term explanation
+-> scene/block/POV semantics
+-> style-metrics-basic(final structure)
+-> style-metrics-semantic
+```
+
+Boundary Detectorがcandidateを1件も自動適用しなければbase structureをfinalとしてreuseする。
+
+manual StructureRevisionをrequestで明示した場合、Scene Boundary Detectorを再適用せず、そのmanual revisionをfinal structureとして後続解析する。
+
+## 7. Dependency DAG
+
+final StructureRevision確定後:
+
+```text
+entity-mention-extractor
+  -> entity-resolver
+      -> speaker-attribution
+      -> entity-relation-extractor
+
+term-candidate-extractor
+  -> term-resolver
+      -> term-explanation-detector
+
+scene-semantic-classifier
+block-semantic-classifier
+pov-classifier
+
+final structure -> style-metrics-basic
 speaker-attribution
 term-explanation-detector
 scene-semantic-classifier
 block-semantic-classifier
-pov-classifier
-  -> style-metrics
-
-style-metrics
-  -> aggregate-builder
-      -> profile-generator
-
-style-metrics + selected profile
-  -> style-lint
+  -> style-metrics-semantic
 ```
 
-DAG cycleはregistry初期化時に検出し、起動失敗とする。
+cycleはregistry初期化時に検出し起動error。
 
-## 6. AnalysisRun
+## 8. AnalysisRun
 
 ```text
 id
@@ -125,10 +183,11 @@ document_id
 analyzer_id
 analyzer_version
 text_revision_id
-structure_revision_id nullable
+structure_revision_id
 status
 fingerprint
 config_json
+policy_version
 model_provider nullable
 model_id nullable
 prompt_id nullable
@@ -152,54 +211,61 @@ failed
 cancelled
 ```
 
-`running` を再起動後にsucceededへ推測しない。
+## 9. Fingerprint
 
-## 7. Fingerprint
-
-SHA-256 canonical JSONで作る。
+canonical JSON SHA-256。
 
 ```text
-hash(
-  analyzer_id,
-  analyzer_version,
-  input_text_sha256,
-  structure_revision fingerprint if required,
-  sorted dependency fingerprints,
-  canonical analyzer config,
-  model provider/id if model-based,
-  prompt id/version if model-based,
-  taxonomy version if applicable,
-  metric version set if applicable
-)
+analyzer_id/version
+input text hash
+structure fingerprint
+sorted dependency fingerprints
+config
+policy version
+model provider/id if model-based
+prompt id/version if model-based
+taxonomy version if applicable
+metric definition versions if applicable
 ```
 
-JSON serializationは `sort_keys=True`, separators `(',', ':')`, UTF-8, `ensure_ascii=False` 相当で固定する。
+serialization: sorted keys、compact separators、UTF-8、ensure_ascii=false。
 
-fingerprint一致かつstatus=`succeeded` のrunがあれば再利用する。`partial` は自動cache hitに使わない。
+`succeeded` fingerprint一致をcache hit。`partial/failed` は自動reuseしない。
 
-## 8. 変更伝播
+## 10. Partial policy
 
-再解析範囲を固定する。
+「失敗率10%」のような任意閾値は設けない。
 
-| 変更 | invalidate |
+Scene/Block単位Analyzer:
+
+- 1件以上usable outputがあり、一部subjectだけ失敗: `partial`
+- usable outputが0件、provider/contract/storage等の全体失敗: `failed`
+- 全subject成功: `succeeded`
+
+`partial` の成功subject出力は保持する。07がcoverageを見て、complete scopeだけMeasurementを生成する。
+
+これにより1 Scene失敗だけで全episode解析を捨てない。
+
+## 11. 変更伝播
+
+| 変更 | stale/recompute |
 |---|---|
-| Source raw text | normalization以降全部 |
-| normalizer version | structure以降全部 |
-| segmenter version/manual structure | semantic/metric以降 |
-| entity extractor | entity resolver/speaker/relation、依存metric |
-| speaker override | character/speaker metric、aggregate、lint |
-| term analyzer | term metric、aggregate、lint |
-| scene taxonomy/classifier | scene filter aggregate、semantic metric、lint |
-| metric version | aggregate/profile/lint |
-| profile edit | lintのみ |
+| raw text/normalizer | Structure以降全部 |
+| automatic segmenter | Boundary/Semantic/Metric |
+| semantic/manual Structure | Semantic/Metric |
+| entity extractor | resolver/speaker/relation、speaker metric |
+| speaker override | speaker metric、Aggregate、Lint |
+| term analyzer | term metric、Aggregate、Lint |
+| taxonomy/classifier | scene Aggregate、semantic metric、Lint |
+| MetricDefinition | Aggregate/Profile/Lint |
+| AnalysisPolicy | 影響するAnalyzer/Structure/Profile以降 |
+| Profile version | Lintのみ |
 
-DB rowをdeleteしてinvalidateしない。新run/fingerprintを作る。
+row deleteでinvalidateしない。
 
-## 9. Job実行方式
+## 12. Persisted job
 
-NovelProductionはローカル単一ユーザー・単一API processを前提とし、v1でRedis/Celery等を導入しない。
-
-APIでpersisted job queueを実装する。
+v1はRedis/Celery不要。API process内worker thread 1本。
 
 ```text
 style_jobs
@@ -207,16 +273,16 @@ style_jobs
   job_type
   payload_json
   status
+  cancel_requested
   created_at
   started_at
   finished_at
   error_code
   error_message
+  version
 ```
 
-API起動時にworker threadを1本だけ起動する。`queued` をFIFOで処理する。同時解析数は1。
-
-job type:
+job:
 
 ```text
 source_import
@@ -226,49 +292,38 @@ build_profile
 run_lint
 ```
 
-## 10. 再起動復旧
+FIFO、同時実行1。
 
-API起動時:
+## 13. 再起動
 
-1. `style_jobs.status=running` を `failed` へ変更
-2. error_code=`WORKER_INTERRUPTED`
-3. 対応する `AnalysisRun.running` もfailedへ変更
-4. queued jobはそのまま処理再開
+API起動時、`running` job/runを `failed / WORKER_INTERRUPTED` にする。queuedは処理再開。runningを自動再queueしない。
 
-running jobを自動再queueしない。ユーザーがRetryする。
+## 14. Transaction
 
-## 11. Transaction
+AnalysisRun:
 
-Analyzer出力はrun単位でatomic。
+1. running状態commit
+2. Analyzer計算
+3. output + final run statusを1 transactionでpersist
+4. persistence失敗時rollback、run failed
 
-- run開始: status runningをcommit
-- Analyzerは一時的なPython objectとして結果を組み立てる
-- persistence transactionで結果一式をinsert
-- 成功commit後にrunをsucceeded
-- persistence失敗時rollbackしrun failed
+partial出力も同じ1 transactionで保存する。
 
-大量outputでも途中commitしない。1episode上限は02で制御済み。
+network fetch中はtransactionを開かない（01）。
 
-Source importはepisodeごとのsnapshot保存を許すが、Reference Workを「import complete」にするtransactionは全episode取得後に行う。
+## 15. Cancellation
 
-## 12. Cancellation
+queuedは即cancel。runningは`cancel_requested=1`。
 
-queued jobは即cancel可能。
-running jobは`cancel_requested=1`を設定し、Analyzerの安全な境界で確認する。
+確認境界:
 
-安全境界:
+- Scene/Block処理の間
+- source episode取得の間
+- model call前後
 
-- Scene処理の間
-- HTTP episode取得の間
-- model callの前後
+requestを強制killしない。cancelled outputはeffectiveに使わない。
 
-外部HTTP request自体を強制killしない。
-
-cancelled runの部分出力はeffective viewへ採用しない。
-
-## 13. SemanticModelClient
-
-CORE Protocol:
+## 16. SemanticModelClient
 
 ```python
 @dataclass(frozen=True)
@@ -291,11 +346,9 @@ class SemanticModelClient(Protocol):
     def complete_json(self, request: ModelRequest) -> ModelResponse: ...
 ```
 
-Analyzerはraw HTTP responseを扱わない。
+## 17. API model adapter
 
-## 14. API側model adapter
-
-v1は以下2modeのみ。
+v1:
 
 ```text
 disabled
@@ -312,35 +365,21 @@ STYLE_ANALYSIS_LLM_MODEL
 STYLE_ANALYSIS_LLM_TIMEOUT_SECONDS default 60
 ```
 
-`disabled` でsemantic analyzer要求が来たら `ANALYZER_PROVIDER_UNAVAILABLE`。deterministic analyzerは実行可能。
+API keyはDB/log/AnalysisRunへ保存しない。
 
-`openai_compatible` はAPI側 `httpx` でJSON応答を取得する。provider差異は `model_client.py` 内へ隔離し、Analyzerへ持ち込まない。
+`disabled` ならfull presetを開始できず `ANALYZER_PROVIDER_UNAVAILABLE`。deterministicは利用可能。
 
-API keyをDB・log・AnalysisRunへ保存しない。
+UIは現在のprovider/model名を表示する。ユーザーが明示的に「Full analysis」を実行する操作自体を送信同意とみなし、追加checkboxや毎回の確認dialogは設けない。
 
-## 15. Model call policy
+## 18. Model call
 
-- temperature=0固定
-- max retry=1
-- retry対象はtimeout/429/5xx
-- schema validation失敗時は同promptで1回だけrepair retry
-- repair後も不正ならrun partialまたはfailed
-- raw model response全文を通常logへ出さない
+- temperature=0
+- timeout/429/5xx retry最大1回
+- schema invalidはrepair retry最大1回
+- repair失敗は対象subject失敗としてpartial/failed判定
+- raw response全文を通常logへ出さない
 
-入力本文を第三者providerへ送信することになるため、UIでsemantic analysis開始前にprovider名を明示する。local/private corpusでも外部provider送信を自動で行わない。
-
-## 16. Partial
-
-Scene単位Analyzerで一部Scene失敗時:
-
-- 失敗率 <=10%: run `partial`
-- >10%: run `failed`
-
-partial結果は表示可能だがAggregate/Profileへ使用しない。
-
-失敗Scene IDsをwarning_jsonへ保存する。
-
-## 17. Analysis orchestration API
+## 19. API
 
 ```text
 POST /projects/{project_id}/style-analysis/documents/{document_id}/analyze
@@ -351,36 +390,34 @@ GET  /projects/{project_id}/style-analysis/analysis-runs
 GET  /projects/{project_id}/style-analysis/analysis-runs/{run_id}
 ```
 
-`analyze` requestは `preset=deterministic|full`。
+`analyze`:
 
-- deterministic: normalization/structure/basic metrics
-- full: semantic + metricsまで
+- `text_revision_id` 必須。
+- `structure_revision_id` optional。
+- omittedなら指定TextRevisionからautomatic/semantic structureをbuild/reuse。
+- providedならそのStructureRevisionがTextRevision所属であることを検証し、manual/semantic/automaticいずれも使用可。
 
-Profile/aggregate/lintは別job。
+## 20. テスト
 
-## 18. テスト
-
-- DAG order
-- cycle detection
-- fingerprint canonicalization
-- cache hit/cache miss
-- version change invalidation
-- failed runがcacheにならない
-- running job restart recovery
-- queued FIFO
-- cancellation
-- partial threshold 10%
+- DAG order/cycle
+- policy version fingerprint
+- cache hit/miss
+- manual StructureでBoundary Detector skip
+- semantic Structure materialization
+- partial subject保持
+- failed no output
+- basic metric provider不要
+- restart recovery
+- FIFO/cancel
 - provider disabled
-- model retry 1回
-- schema repair retry
-- API keyがlog/DBへ入らない
+- model retry/repair
 
-## 19. Codex実装時の禁止事項
+## 21. Codex実装時の禁止事項
 
-- Celery/Redis/外部queueを導入しない。
-- parallel analyzer実行を追加しない。
-- fingerprint不一致結果を再利用しない。
-- failed/partial runをeffective aggregateへ入れない。
+- normalize/segment/Aggregate/Profile/Lintを無理にAnalysisRunへ入れない。
+- Celery/Redis/parallel workerを追加しない。
+- partial/failedをcache hitにしない。
+- confidence thresholdをAnalyzerごとに重複hard-codeしない。
 - provider SDKをCOREへ入れない。
-- API keyをAnalysisRunへ保存しない。
-- model変更をanalyzer version変更なしで隠蔽しない。
+- model/provider変更をfingerprintから隠さない。
+- full analysis開始時に不要な確認dialogを追加しない。
