@@ -65,7 +65,7 @@ SA-A〜Hは既存NovelProduction Phase系列とは別系列。
 - Semantic Model Contractは15を正本とする。
 - API Model通信は`httpx` Runtime Dependency、OpenAI-compatible Chat Completions。
 - OpenAI SDKなし。
-- Prompt ID/Version、Input/Output JSON、Resolver候補選択、Repair規則を15から変更しない。
+- Prompt ID/Version、Input/Output JSON、Resolver候補選択、本文Context Window、Repair規則を15から変更しない。
 
 ### Entity / Term / Semantic
 
@@ -74,6 +74,7 @@ SA-A〜Hは既存NovelProduction Phase系列とは別系列。
 - Entity/Term ResolverはCache不可。
 - Registry自然成長だけで過去Episodeを自動Stale化しない。
 - Manual Registry CorrectionはStateでStale化。
+- Resolver Model Payloadの`aliases`には **Manual Alias + Confirmed Inferred Aliasだけ**を含める。未確認・Rejected Inferred AliasをPromptへ渡さない。
 - Term Explanationは1 Run×1 TermMention最大1 Persistence Row。
 - Scene `unknown`とTaxonomy`unclear`を分離。
 - Scene AxisはMetricではなくAggregate/Lint Selector用途。
