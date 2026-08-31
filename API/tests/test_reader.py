@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -162,26 +163,58 @@ def test_reader_episode_uses_rendered_body_and_cross_chapter_draft_navigation(
     )
 
     assert first.status_code == third.status_code == fourth.status_code == 200
-    assert "<h1>話1 &quot;第一&quot;</h1>" in first.text
-    assert '<article id="novel-body">' in first.text
+    assert '<h1 id="reader-title">話1 &quot;第一&quot;</h1>' in first.text
+    assert first.text.count('<article id="novel-body">') == 1
     assert "本文1" in first.text
     assert "制作メモ" not in fourth.text
     assert 'data-np-type="note"' not in fourth.text
     assert "data-ann-" not in fourth.text
     assert first.text.count('aria-label="Episode navigation"') == 2
-    assert first.text.count('rel="contents"') == 2
+    assert first.text.count('id="reader-title"') == 1
+    assert first.text.count('id="reader-chapter-title"') == 1
+    assert first.text.count('id="reader-contents"') == 1
+    assert first.text.count('rel="contents"') == 1
     assert first.text.count('rel="prev"') == 0
     third_href = f"/read/projects/reader-project/episodes/{episode_ids['third']}/"
-    assert f'rel="next" href="{third_href}"' in first.text
+    assert first.text.count(f'href="{third_href}"') == 2
     assert "1 / 3" in first.text
     first_href = f"/read/projects/reader-project/episodes/{episode_ids['first']}/"
-    assert f'rel="prev" href="{first_href}"' in third.text
+    contents_href = "/read/projects/reader-project/"
+    assert third.text.count('id="reader-title"') == 1
+    assert third.text.count('id="reader-chapter-title"') == 1
+    assert third.text.count('id="reader-contents"') == 1
+    assert third.text.count('id="reader-prev"') == 1
+    assert third.text.count('id="reader-next"') == 1
+    assert third.text.count('rel="prev"') == 1
+    assert third.text.count('rel="contents"') == 1
+    assert third.text.count('rel="next"') == 1
+    assert third.text.count('aria-label="Episode navigation"') == 2
+    assert third.text.count(f'href="{first_href}"') == 2
+    assert third.text.count(f'href="{contents_href}"') == 2
     fourth_href = f"/read/projects/reader-project/episodes/{episode_ids['fourth']}/"
-    assert f'rel="next" href="{fourth_href}"' in third.text
+    assert third.text.count(f'href="{fourth_href}"') == 2
+    navigation = re.findall(
+        r'<nav class="reader-navigation" aria-label="Episode navigation">'
+        r"(.*?)</nav>",
+        third.text,
+    )
+    assert len(navigation) == 2
+    assert 'id="reader-prev"' in navigation[0]
+    assert 'rel="prev"' in navigation[0]
+    assert 'id="reader-next"' in navigation[0]
+    assert 'rel="next"' in navigation[0]
+    assert 'id="reader-' not in navigation[1]
+    assert " rel=" not in navigation[1]
     assert "2 / 3" in third.text
     third_prev_href = f"/read/projects/reader-project/episodes/{episode_ids['third']}/"
-    assert f'rel="prev" href="{third_prev_href}"' in fourth.text
+    assert fourth.text.count('id="reader-title"') == 1
+    assert fourth.text.count('id="reader-chapter-title"') == 1
+    assert fourth.text.count('id="reader-contents"') == 1
+    assert fourth.text.count('id="reader-prev"') == 1
+    assert fourth.text.count('rel="prev"') == 1
+    assert fourth.text.count(f'href="{third_prev_href}"') == 2
     assert fourth.text.count('rel="next"') == 0
+    assert fourth.text.count('id="reader-next"') == 0
     assert "3 / 3" in fourth.text
     assert "<script" not in first.text.lower()
 

@@ -222,15 +222,24 @@ def _render_episode(
     header = (
         '<header class="reader-header">'
         f'<p class="reader-eyebrow">{_escape(work.working_title)}</p>'
-        f'<p class="reader-chapter-title">{_escape(current.chapter_title)}</p>'
-        f"<h1>{_escape(current.episode.title)}</h1>"
+        f'<p id="reader-chapter-title" class="reader-chapter-title">'
+        f"{_escape(current.chapter_title)}</p>"
+        f'<h1 id="reader-title">{_escape(current.episode.title)}</h1>'
         f'<p class="reader-position">{position} / {total}</p>'
         "</header>"
     )
-    navigation = _render_navigation(project_id, previous, following)
+    canonical_navigation = _render_navigation(
+        project_id, previous, following, canonical=True
+    )
+    display_navigation = _render_navigation(
+        project_id, previous, following, canonical=False
+    )
     return _render_document(
         f"{work.working_title} - {current.episode.title}",
-        header + navigation + f'<article id="novel-body">{body}</article>' + navigation,
+        header
+        + canonical_navigation
+        + f'<article id="novel-body">{body}</article>'
+        + display_navigation,
     )
 
 
@@ -238,20 +247,25 @@ def _render_navigation(
     project_id: str,
     previous: _ReaderEpisode | None,
     following: _ReaderEpisode | None,
+    *,
+    canonical: bool,
 ) -> str:
+    previous_attributes = ' id="reader-prev" rel="prev"' if canonical else ""
+    contents_attributes = ' id="reader-contents" rel="contents"' if canonical else ""
+    following_attributes = ' id="reader-next" rel="next"' if canonical else ""
     previous_link = (
-        f'<a rel="prev" href="'
+        f'<a{previous_attributes} href="'
         f'{_episode_url(project_id, previous.episode.id)}">前の話</a>'
         if previous is not None
         else '<span class="reader-nav-disabled">前の話</span>'
     )
     following_link = (
-        f'<a rel="next" href="'
+        f'<a{following_attributes} href="'
         f'{_episode_url(project_id, following.episode.id)}">次の話</a>'
         if following is not None
         else '<span class="reader-nav-disabled">次の話</span>'
     )
-    contents = f'<a rel="contents" href="{_project_url(project_id)}">目次</a>'
+    contents = f'<a{contents_attributes} href="{_project_url(project_id)}">目次</a>'
     return (
         '<nav class="reader-navigation" aria-label="Episode navigation">'
         + previous_link
