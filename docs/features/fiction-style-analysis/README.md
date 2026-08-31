@@ -26,16 +26,18 @@ docs/features/fiction-style-analysis/
    └─ 14-testing-and-evaluation.md
 ```
 
-- [basic-design.md](basic-design.md): アーキテクチャ、責務分離、データモデル、パイプラインを定める基本設計。
-- [detailed-design/README.md](detailed-design/README.md): 詳細設計14文書の索引、確定事項、Codex向け推奨実装順。
+- [basic-design.md](basic-design.md): 長期的な責務境界とデータフローを定める基本設計。
+- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、Codex向けSA-A〜SA-H実装順。
 
 ## 設計方針
 
-基本設計を上位仕様とし、詳細設計はその責務境界・データレイヤー・再解析可能性を具体化する。
-
-分析器、分類体系、Metric、LLM promptなど結果互換性に影響する要素にはversionを持たせる。Raw inferenceとHuman Overrideを分離し、再解析で人手修正を破壊しない。
-
-外部作品の収集はユーザーが明示指定したローカル・私的分析用途を前提とし、汎用crawlerやアクセス制限回避を実装しない。
+- Raw / Canonical / Structure / Semantic / Measurement / Aggregate / Profileを分離する。
+- reference Entity/Termはepisodeを跨ぐwork scopeで扱う。
+- Automatic / Semantic / Manual StructureRevisionを分離し、原文を変更せずScene境界を改善する。
+- confidence/sample thresholdはversioned AnalysisPolicyへ集約する。
+- low-confidence結果を全件ReviewQueueへ送らず、unknownを正常状態として扱う。
+- Profileはstable identityとimmutable versionを分離する。
+- Lintは参照Profileとの差とcoverageを示し、文章品質の断定や自動修正はしない。
 
 ## 実装境界
 
@@ -44,10 +46,14 @@ docs/features/fiction-style-analysis/
 - WEBUI: collection、analysis、review、corpus/profile、lint
 - MCP: v1 scope外。既存59 tool contractを維持
 
+## 過剰チェックを避ける
+
+ローカル単一user用途を前提とし、データ破損や誤ったrevision参照を防ぐためのvalidationは維持する。一方、rights_basis必須入力、毎回の同意dialog、Overrideの二重CAS、low-confidence全件Review、missing Metric割合によるLint失敗等は実装しない。
+
 ## ステータス
 
-- 基本設計: v0.1 Draft
-- 詳細設計: v0.1 一式作成済み
+- 基本設計: v0.2 Draft
+- 詳細設計: v0.2 自己レビュー第1巡修正版（02のみv0.1維持）
 - 実装: 未着手
 
-実装開始時は `detailed-design/README.md` の SA-A〜SA-H 分割を基準に、各PhaseごとにChatGPTでscopeを確定してCodexへ指示する。
+実装開始時は `detailed-design/README.md` のSA-A〜SA-H分割を基準に、各PhaseごとにChatGPTでscopeを確定してCodexへ指示する。
