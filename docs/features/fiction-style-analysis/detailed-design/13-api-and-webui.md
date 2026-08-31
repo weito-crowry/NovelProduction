@@ -63,9 +63,7 @@ file
 同期処理。Job Rowを作らない。
 
 New:`201` + `reused_existing=false/reference_work_id/source_id`。
-
 Duplicate:`200` + `reused_existing=true/reference_work_id/source_id`。
-
 Upload超過:`413`。
 
 Unsupported Type/Parse/Encoding/Normalization Errorは既存Error EnvelopeでCodeを返す。
@@ -219,14 +217,7 @@ Public preset:`deterministic|full`のみ。09 `metrics`は内部Correction Job�
 
 Full Provider未設定はJob作成前409 `ANALYZER_PROVIDER_UNAVAILABLE`。
 
-Job Response:
-
-```text
-job_id/job_type/status
-progress_current/progress_total
-result/warnings
-error_code/error_message
-```
+Job Response:`job_id/job_type/status/progress/result/warnings/error`。
 
 Pollingは`queued|running`中だけ。
 
@@ -245,15 +236,11 @@ Manual Entity/TermはReference WorkまたはDocument Scope exactly one。Same Na
 
 Alias再送Idempotent。
 
-Character Link PUT:
-
-```json
-{"style_entity_id":77}
-```
+Character Link PUT:`{"style_entity_id":77}`。
 
 Style Entityは指定Project DocumentのEnabled Person。Authoring Character/World/Canonを作成/更新しない。
 
-## 11. Semantics / Correction API
+## 11. Semantics / Direct Correction API
 
 ```text
 GET  /documents/{document_id}/semantics?structure_revision_id={id}
@@ -273,9 +260,37 @@ Semantics Response:
 
 Override Operation:`set|clear|revert`。Note optional。Generic二重CASなし。
 
+Inference Review Requestは対象Run/Subject/Field + `confirmed|rejected`。ReviewItemを経由しない。
+
 Correction後のJob/Stateは10を正本とする。
 
-## 12. Corpus API
+## 12. ReviewItem API
+
+ReviewItemは10どおり「後で確認したい項目」の管理であり、Inference Reviewと別責務にする。
+
+```text
+GET  /review-items
+GET  /review-items/{id}
+POST /review-items/{id}/resolve
+POST /review-items/{id}/ignore
+```
+
+`resolve` Request:
+
+```json
+{
+  "expected_version":3,
+  "note":null
+}
+```
+
+`ignore`も`expected_version`必須、note optional。
+
+ReviewItem Resolve自体はInference Confirm/Reject、Override、Structure Split等のDomain変更を暗黙実行しない。必要なDomain操作を先に各専用APIで行い、その後Itemをresolveする。
+
+Generic `/review-items/{id}/confirm` / `reject` Endpointは作らない。
+
+## 13. Corpus API
 
 ```text
 GET/POST /corpora
@@ -289,7 +304,7 @@ GET    /corpora/compare
 
 Membership解決は08 CORE Resolverを共用する。
 
-## 13. Aggregate API
+## 14. Aggregate API
 
 Corpus:
 
@@ -305,26 +320,7 @@ POST /reference-works/{work_id}/aggregates/recompute
 GET  /reference-works/{work_id}/aggregates
 ```
 
-Recompute Request:
-
-```json
-{
-  "specs":[
-    {
-      "measurement_target_type":"document",
-      "filter":{},
-      "metric_names":["dialogue.char_ratio"]
-    },
-    {
-      "measurement_target_type":"scene",
-      "filter":{"scene":{"function":["daily"]}},
-      "metric_names":["dialogue.char_ratio"]
-    }
-  ]
-}
-```
-
-ContainerはURL、Metric VersionはRegistry Current Version。
+Recompute RequestはTarget/Scene Filter/Metric Namesを指定。ContainerはURL、Metric VersionはRegistry Current Version。
 
 Response:`202 + recompute_aggregate job_id`。
 
@@ -332,7 +328,7 @@ Job ResultはSpec/MetricごとにStatistic→Aggregate IDを返す。
 
 GETはHistorical Aggregateに`stale/warnings/aggregate_policy_version/count4種`を返す。
 
-## 14. Profile APIは同期
+## 15. Profile APIは同期
 
 ```text
 GET    /profiles
@@ -361,21 +357,7 @@ New Version Requestは`parent_version_no + full rules snapshot`。New Versionだ
 
 Import/Export Endpointはv1で作らない。
 
-## 15. Review / Lint API
-
-ReviewItem:
-
-```text
-GET  /review-items
-GET  /review-items/{id}
-POST /review-items/{id}/confirm
-POST /review-items/{id}/reject
-POST /review-items/{id}/ignore
-```
-
-ReviewItem Writeだけ`expected_version`。
-
-Lint:
+## 16. Lint API
 
 ```text
 POST /documents/{id}/lint
@@ -401,7 +383,7 @@ POST lintは`202 + run_lint job_id`。ClientはMetric Run IDを指定しない�
 
 Job Resultへ`lint_run_id`。Selector unavailable/Metric missingはCoverage WarningでありJob Failureではない。
 
-## 16. WebUI Routes
+## 17. WebUI Routes
 
 ```text
 /projects/:projectId/style-analysis
@@ -418,7 +400,7 @@ Job Resultへ`lint_run_id`。Selector unavailable/Metric missingはCoverage Warn
 
 Project Sidebarに`文体分析`。
 
-## 17. Sources / Reference UI
+## 18. Sources / Reference UI
 
 Sources:
 
@@ -441,17 +423,9 @@ Reference Work:
 
 Blocking rights checkboxなし。
 
-## 18. Document Analysis UI
+## 19. Document Analysis UI
 
-Header:
-
-```text
-TextRevision selector
-StructureRevision selector
-Current Structure kind/badge
-Basic analysis state
-Semantic analysis state
-```
+Header:`TextRevision selector / StructureRevision selector / Current Structure badge / Basic state / Semantic state`。
 
 Selector変更だけでCurrent Pointer変更なし。
 
@@ -467,18 +441,13 @@ SemanticsではManual Entity/Term/Alias、Character Link、Mention Resolution/Sp
 
 `not_analyzed`, `stale`, `partial`を同じエラー表示にしない。
 
-## 19. Corpus / Aggregate / Profile UI
+Review画面はReviewItemのopen/resolved/ignored管理だけを行い、Confirm/Reject操作は対象InferenceのSemantics UIから`/inference-reviews`を呼ぶ。
+
+## 20. Corpus / Aggregate / Profile UI
 
 Corpus Membershipは08規則をそのまま表示する。
 
-Aggregate Builder:
-
-- Target Type document|scene。
-- SceneだけFilter Editor。
-- Metric選択。
-- Recompute Job Progress。
-- Statistic/Count/Stale/Warning/Provenance表示。
-- Axis未解析SceneはSkipped表示。
+Aggregate BuilderはTarget/Filter/Metricを選択しRecompute Job、Statistic/Count/Stale/Warning/Provenanceを表示する。
 
 Profile from CorpusではAggregate Groupを選択しUIがmedian/p25/p75 Exact IDsを送る。
 
@@ -494,7 +463,7 @@ Enabled Ruleはmin/max両方必須。
 
 `保存`と`保存して有効化`を分離する。
 
-## 20. Lint UI
+## 21. Lint UI
 
 - Text/Structure/Profile Version。
 - Document/Specific Scene Scope。
@@ -504,7 +473,7 @@ Enabled Ruleはmin/max両方必須。
 - Selector unavailable Warning。
 - Coverage0も通常結果。
 
-## 21. Query Invalidation
+## 22. Query Invalidation
 
 - Local Import/Purge ->Reference系。
 - Capture ->Document/Revisions。
@@ -515,6 +484,8 @@ Enabled Ruleはmin/max両方必須。
 - Metric-only Override ->Semantics/Metric/Job/Aggregate/Lint。
 - Semantic Reanalysis Required Correction ->Semantics/Analysis Status。
 - Scene Axis Override ->Semantics/Aggregate/Lint。
+- ReviewItem Resolve/Ignore ->ReviewItemのみ。
+- Inference Review ->10分類に従う。
 - Corpus Membership ->Corpus/Aggregate Staleness。
 - Aggregate Recompute ->Aggregate。
 - Profile Sync Write ->Profile。
@@ -522,7 +493,7 @@ Enabled Ruleはmin/max両方必須。
 
 全Project Queryを無差別Invalidateしない。
 
-## 22. Test
+## 23. Test
 
 API:
 
@@ -537,7 +508,9 @@ API:
 - Current Manual/Semantic Full保持、Automatic Full昇格。
 - rebuild/Explicit validation。
 - Job Progress/Partial/Retry。
-- Manual Identity/Link/Override。
+- Manual Identity/Link/Override/Inference Review。
+- ReviewItemはresolve/ignoreのみ、generic confirm/reject不存在。
+- ReviewItem resolveでDomain Correctionを暗黙実行しない。
 - Aggregate Recompute202/Stale/Policy Version。
 - Profile from-corpus/manual/new-version同期、Jobなし。
 - Profile min/max/preferred Validation。
@@ -549,13 +522,13 @@ WebUI:
 - Local Sync Import/No Network Controls。
 - Work/Episode表示責務分離。
 - Status/Current Structure/Automatic昇格/Rebuild。
-- Semantic Correction。
+- Semantic Correction/Inference ReviewとReviewItem管理の分離。
 - Aggregate Builder。
 - Profile Exact Aggregate Group/Stale Warning/Range必須。
 - Save vs Activate。
 - Lint Job Polling/Coverage/Stale。
 
-## 23. Codex禁止事項
+## 24. Codex禁止事項
 
 - `analysis_stale`等永続bool追加。
 - Basic/Semantic状態を単一化。
@@ -564,6 +537,8 @@ WebUI:
 - Network Source Import/Refresh UI/API追加。
 - Work Detailへ単一EpisodeのCurrent Pointerを混入。
 - Local File ImportをJob化。
+- Generic ReviewItem confirm/reject Endpoint追加。
+- ReviewItem resolveにInference/Override/Structure変更を暗黙連動。
 - `build_profile` Job追加。
 - Profile作成をWorkerへ回す。
 - Authoring Character/World/Canonへ自動Write。

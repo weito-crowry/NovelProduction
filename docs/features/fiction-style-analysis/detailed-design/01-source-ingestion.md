@@ -165,35 +165,90 @@ current_structure_revision_id = NULL
 - Work/Episode Title = filename stem。
 - Decode不能は `SOURCE_ENCODING_ERROR`。
 
-## 10. html_file Adapter
+## 10. HTML本文抽出共通アルゴリズム
+
+`html_file` とEPUB内XHTMLは同じ決定論的DOM→Raw Text Utilityを使う。
+
+### 10.1 Content Root
+
+Parse後、次の順でRootを1つ選ぶ。
+
+1. `<article>` が文書内にExactly 1件 -> そのElement。
+2. それ以外で `<main>` がExactly 1件 -> そのElement。
+3. それ以外 -> `<body>`。
+4. `<body>`不存在 -> `SOURCE_PARSE_ERROR`。
+
+Readability等の外部本文推定Libraryはv1で使わない。
+
+### 10.2 除外Element
+
+Root配下から次をSubtreeごと除外する。
+
+```text
+script
+style
+noscript
+template
+svg
+canvas
+nav
+header
+footer
+aside
+form
+```
+
+### 10.3 DOM→raw_text
+
+DOMをDocument Orderで1回だけWalkしText Nodeを重複なく出力する。
+
+- Text Node: 文字列をそのまま出力。HTML EntityはParser Decode後の文字。
+- `<br>`: 単一 `\n`。
+- `<ruby>`: `rt/rp` Subtreeを除外しSurface Textだけ出力。
+- `<hr>`: 文字を出力せず、現在のraw code point offsetを`scene_break_offsets_raw`へ記録する。
+- Block Elementの開始/終了ではParagraph Boundary Candidateを出す。
+
+Block Element集合:
+
+```text
+address article blockquote div dl fieldset figure
+h1 h2 h3 h4 h5 h6
+li main ol p pre section table ul
+```
+
+最終Serializationで:
+
+- Paragraph Boundary Candidateの連続は1つに畳む。
+- Paragraph間はExactly `\n\n`。
+- `<br>`由来の単一LFはParagraph内に保持。
+- 空Paragraphは出力しない。
+- 先頭/末尾Paragraph Boundaryは除去。
+
+このUtilityはCanonical Normalizationを行わない。ASCII trailing space、NFC、空行縮約等は02へ任せる。
+
+## 11. html_file Adapter
 
 追加Network Accessなし。
 
-- HTMLをUpload BytesからParse。
-- `script/style/noscript`等の非本文要素を除外。
-- 主要本文Containerを決定できる場合はその本文、決定不能なら`body`の可読Textを使う。
-- Block-level要素間を02契約のParagraph形式へSerialization。
-- `<br>`は単一LF。
-- `<ruby>`はSurface本文のみ。
-- `<hr>`等の文字を持たない明示区切りは架空文字を挿入せず`scene_break_offsets_raw`へ記録。
+- Section 10でRoot/Raw Text/Scene Break Hintを生成。
 - `external_episode_id = "1"`。
-- Title = HTML title → filename stem fallback。
+- Work/Episode Title = 非空`<title>` Text → filename stem fallback。
+- Authorは自動推定せずNULL。
+- Raw Textが空なら `SOURCE_EMPTY`。
 
-本文を一意に抽出できず空になる場合は `SOURCE_PARSE_ERROR`。
-
-## 11. epub Adapter
+## 12. epub Adapter
 
 - DRMなしEPUBのみ。
 - ZIP/OPF/SpineをParse。
 - Spine順に1 Spine Document = 1 Episode。
 - Navigation/CoverだけのItemは除外。
 - `external_episode_id = "spine:{1-based-order}"`。
-- Episode Title = Navigation/Heading → `Episode {n}` fallback。
-- Work Title/Author = EPUB Metadata → filename fallback。
-- HTML本文Serializationはhtml_fileと同じ規則。
+- Episode Title = Navigation Label → 最初の非空`h1..h6` → `Episode {n}` fallback。
+- Work Title/Author = EPUB Metadata → filename stem/NULL fallback。
+- 各Spine XHTMLはSection 10 UtilityでRaw Text化。
 - 同じUpload SourceSnapshotを複数Episodeが参照してよい。
 
-## 12. Duplicate / Re-import
+## 13. Duplicate / Re-import
 
 同一 `(source_type, external_work_id)` はExisting Workを返す。
 
@@ -201,7 +256,7 @@ current_structure_revision_id = NULL
 
 Duplicate RaceはDB Unique Constraint競合後にExisting Source/Workを再取得して同じ200 Responseへ収束させる。
 
-## 13. Purge
+## 14. Purge
 
 Reference Work削除は対応するSource RowをDELETEする。
 
@@ -223,7 +278,7 @@ Aggregate/ProfileのHistorical Snapshot扱いは08/12を正本とする。
 
 通常の削除確認は1回だけ。追加の権利確認Dialog/Checkboxは設けない。
 
-## 14. Error
+## 15. Error
 
 ```text
 SOURCE_TYPE_UNSUPPORTED
@@ -235,27 +290,31 @@ SOURCE_EMPTY
 
 Network Error系はv1に存在しない。
 
-## 15. Test
+## 16. Test
 
 - TXT/HTML/EPUB Identity = Upload SHA-256。
 - New -> 201同期、Jobなし。
 - Duplicate -> 200、Parse/Persistなし。
 - Duplicate Race -> Existing Reuse。
 - Upload Limit/Encoding/Parse Error。
-- EPUB Spine Order/Metadata。
+- HTML Root Selection article→main→body。
+- HTML除外Element。
+- DOM WalkでText重複なし。
+- Block Boundary / br / ruby / hr Serialization。
+- EPUB Spine Order/Metadata/Title fallback。
 - Adapter ParseとNormalization責務分離。
-- HTML/EPUB `<hr>` Raw Scene Hint。
 - Same Normalization Input -> TextRevision Reuse。
 - Same Raw TextでもHint変更 -> New TextRevision。
 - New Current Text -> Current Structure Clear。
 - All-or-Nothing Persistence。
 - Purge Cascade。
 
-## 16. Codex禁止事項
+## 17. Codex禁止事項
 
 - Narou/Kakuyomu/Generic Network Downloader追加。
 - Remote URL Import追加。
 - Refresh機能追加。
+- Readability等を独断導入して本文抽出規則を変更。
 - Local File ImportをJob化。
 - Upload Staging Table追加。
 - Adapter内へCanonical Normalizationを実装。
