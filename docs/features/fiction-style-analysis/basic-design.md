@@ -3,161 +3,254 @@
 **収集・正規化・構造解析・意味抽出・文体プロファイル・自作品評価**
 **v0.2 Draft / 2026-09-01**
 
-> 本書は本機能の基本設計である。具体的なデータ契約・閾値・API・SQLite schemaは `detailed-design/` を正本とする。
+> 本書は本機能の基本設計である。データ責務・version/revision・再解析可能性を上位仕様として固定し、具体的な取得方式、分類体系、Metric、LLM prompt、閾値、API/UI契約は `detailed-design/` で定義する。
 
 ## 0. エグゼクティブサマリー
 
-本機能は、既存小説から「読み心地」を構成する観測可能な特徴を抽出し、作品・Scene・人物ごとの文体プロファイルとして再利用可能にする。自作品を参照Profileと比較し、差分と根拠spanを提示する。
+本システムの目的は、既存小説から「読み心地」を構成する観測可能な特徴を抽出し、作品・Scene・人物ごとの文体プロファイルとして再利用可能にすることである。最終的には、自作品の各話・各Sceneを参照Profileと比較し、数値差と根拠箇所を提示する。
 
 中心原則:
 
-1. 原文Snapshotを不変で保持する。
+1. Sourceの元データを不変Snapshotとして保持する。
 2. Raw / Canonical / Structure / Semantic / Measurement / Aggregate / Profileを分離する。
-3. 推論・計測結果からCanonical Textへ逆引きできる。
+3. 解析結果からTextRevisionと原文spanへ逆引きできる。
 4. 決定論的処理とLLM推論を分離する。
-5. AI推論とManualOverrideを分離し、再解析で人手修正を消さない。
-6. Analyzer/Metric/Policyをversion/fingerprintで管理する。
-7. 不明値を許容し、低confidence結果を無理に確定しない一方、確認UIを過剰に挟まない。
+5. 人手修正を推論rowの上書きではなくoverlayとして保持する。
+6. Analyzerをversion/fingerprint付きDAGとして再解析可能にする。
+7. 安全確認・レビュー工程は必要箇所だけに置き、low-confidence結果を全件ReviewQueueへ送る等の過剰な停止条件を作らない。
 
 ```text
 Source Adapter
-  -> Immutable Source Snapshot
+  -> Immutable SourceSnapshot
   -> TextRevision / Canonical Text
-  -> Automatic Structure
-  -> Semantic Scene Boundary (Full analysis)
-  -> Semantic StructureRevision
-  -> Entity / Mention / Speaker / Term / Scene Semantics
-  -> Basic / Semantic Measurement
-  -> Aggregate / Corpus
-  -> StyleProfile + immutable StyleProfileVersion / StyleRule
-  -> Draft Lint / Finding / Evidence
+  -> Automatic StructureRevision
+  -> Semantic StructureRevision (必要な場合)
+  -> Semantic Extraction
+  -> Measurement
+  -> Aggregate / Corpus Statistics
+  -> StyleProfile / StyleProfileVersion / StyleRule
+  -> Compare / Draft Lint
 ```
 
-## 1. 目的・非目標
+## 1. 目的・スコープ
 
-### 目的
+### 1.1 目的
 
-- なろう・カクヨム・TXT・HTML・EPUB等から分析対象を取り込む。
-- Scene / Block / Sentenceへ構造化する。
-- 人物、話者、用語、場所、組織、POV、Scene意味分類を抽出する。
-- 会話率、発言長、地の文連続長、説明比率、新規用語密度等を計測する。
-- Corpus単位で統計を集約しStyleProfileを作る。
-- 自作品をProfileと比較し、根拠付きFindingを提示する。
+- なろう・カクヨム・TXT・HTML・EPUB等をReference Workとして取り込む。
+- 本文をScene / Block / Sentenceへ分解する。
+- 人物、話者、用語、POV、Scene種別等を抽出する。
+- 会話率、発言長、地の文連続長、説明密度、新規用語密度等を定量化する。
+- Corpus単位で統計を集約する。
+- StyleProfileを作成し、自作品との差分をLintとして提示する。
 
-### 非目標
+### 1.2 非目標
 
-- 「良い文章」を単一品質scoreで断定する。
-- 特定作品の文章そのものを模倣生成する。
-- v1で全文学的特徴を網羅する。
-- Lint結果から本文を自動書き換えする。
-- 汎用Web crawler、ログイン回避、有料壁回避を実装する。
+- 「良い文章」を単一スコアで断定すること。
+- 特定作品の表現をそのまま生成用模倣データへ変換すること。
+- 初期段階で文学的特徴を網羅すること。
+- Lint結果から本文を自動書き換えすること。
+- 汎用Web crawler、ログイン回避、有料壁回避を作ること。
+- Style Analysis推論から既存Character/World/Canon DBを自動更新すること。
+- v1でMCP toolを追加すること。
 
-## 2. 論理アーキテクチャ
+## 2. 設計原則
+
+| 原則 | 意味 |
+|---|---|
+| Source不変 | 元resource bytesはSourceSnapshotとしてimmutable保持。 |
+| 派生データ分離 | Text/Structure/Semantic/Metric/Profileを別layerにする。 |
+| Provenance | TextRevision、StructureRevision、AnalysisRun、spanへ追跡可能。 |
+| 再解析 | Analyzer/Policy/Metric/Prompt versionをfingerprintへ含める。 |
+| Stable identity | Entity/Term/Profileのidentityと推論/version snapshotを分離。 |
+| Human override | 推論rowを直接編集せずManualOverrideをoverlay。 |
+| Partial許容 | 一部Scene失敗を全episode失敗へ拡大しない。 |
+| 過剰Review回避 | unknown/low-confidenceを正常状態として保持可能にする。 |
+| Explicit text state | 本文/Structure/Lint入力はRevision/Versionを明示する。 |
+| Existing architecture尊重 | project-local SQLite、CORE/API/WEBUI責務を維持。 |
+
+## 3. 論理アーキテクチャ
 
 ```text
 [Collection]
-Source -> SourceSnapshot -> ReferenceWork/ReferenceEpisode
+SourceAdapter -> Source -> SourceSnapshot
 
-[Text Foundation]
-Document -> TextRevision -> TextMapping
+[Text]
+ReferenceEpisode / ProjectEpisodeDraft
+  -> StyleDocument
+  -> TextRevision
+  -> TextMapping
 
 [Structure]
-Automatic StructureRevision
--> Semantic StructureRevision
--> Manual StructureRevision
--> Scene -> Block -> Sentence
+TextRevision
+  -> Automatic StructureRevision
+  -> Semantic StructureRevision optional
+  -> Manual StructureRevision optional
+  -> Scene / Block / Sentence
 
 [Semantics]
-Entity <-> Mention
-Term <-> TermMention
-Annotation / Relation / Speaker / POV / Scene Tags
+Entity / Mention / Alias / Relation
+Term / TermMention
+Annotation
+Speaker / Scene tags / POV / Term attributes
 
 [Runtime]
 AnalysisPolicy
-AnalysisRun(Document Analyzer only)
+AnalysisRun
+Analyzer DAG
 Persisted Job
 
 [Analytics]
-Measurement -> Aggregate -> Corpus
+Measurement
+Aggregate
+Corpus
 
 [Style]
-StyleProfile -> StyleProfileVersion -> StyleRule
+StyleProfile
+StyleProfileVersion
+StyleRule
 
 [Review]
-Raw Inference -> ManualOverride -> Effective View
-Optional ReviewItem
+InferenceReview
+ManualOverride
+ReviewItem optional
+Effective View
 
 [Consumer]
-Compare / Visualization / Draft Lint
+Compare
+Draft Lint
+Finding / Evidence
 ```
 
-文体分析機能は既存authoring機能と同じproject DBを使用するが、`style_` prefixのbounded contextとして分離する。既存character/world/canonを推論結果で自動更新しない。
+Style Analysisは既存NovelProduction authoring機能とはbounded contextを分ける。ただしProject draft captureでは既存Work/Episode/Draft IDを明示参照する。
 
-## 3. 処理パイプライン
+## 4. 処理パイプライン
 
-| Phase | 工程 | 出力 |
+| 工程 | 主処理 | 主要出力 |
 |---|---|---|
-| P1 | Source import | SourceSnapshot / Reference catalog |
-| P2 | Normalization | TextRevision / TextMapping |
-| P3 | Deterministic structure | Automatic StructureRevision |
-| P4 | Semantic boundary | Semantic StructureRevision |
-| P5 | Entity/Term/Semantic extraction | Entity / Mention / Annotation |
-| P6 | Metric | Measurement |
-| P7 | Corpus aggregation | Aggregate |
-| P8 | Profile | StyleProfileVersion / StyleRule |
-| P9 | Draft comparison | LintRun / Finding / Evidence |
+| P1 Collection | Source取得/Import | SourceSnapshot, ReferenceWork/Episode |
+| P2 Normalize | Canonical Text生成 | TextRevision, TextMapping |
+| P3 Structure | 決定論的構造化 | Automatic StructureRevision |
+| P4 Boundary | Scene境界推定 | Boundary Annotation, Semantic StructureRevision |
+| P5 Semantic | Entity/Term/Speaker/Scene/POV | Mention, Annotation, Relation |
+| P6 Metric | 決定論的計測 | Basic/Semantic Measurement |
+| P7 Aggregate | Corpus/Work/Scene等の統計化 | Aggregate |
+| P8 Profile | 参照範囲作成 | StyleProfileVersion, StyleRule |
+| P9 Lint | Project draftとProfile比較 | LintRun, Finding, Evidence |
 
-## 4. Source / Raw data
+## 5. Collection
 
-- サイト固有処理はAPI側SourceAdapterへ隔離する。
-- Snapshotは元resource bytesを不変保存する。
-- HTML/TXT/EPUBを共通してBLOB Snapshotとして扱う。
-- ReferenceWork/ReferenceEpisodeはcurrent catalog projectionで、refresh時にmetadata/order/latest pointerを更新可能。
-- ユーザーが明示した作品だけを取得し、汎用crawlerは作らない。
-- 利用条件の自動法的判定、`rights_basis`必須入力、毎回の同意checkboxは設けない。
+- Site固有処理はSourceAdapterへ隔離する。
+- Network処理はAPI層。COREはDB/domainのみ。
+- SourceSnapshotはHTML/TXT/EPUBを含め元resource bytesをBLOBで保持する。
+- ReferenceWork/ReferenceEpisodeはcurrent catalog projectionとしてmetadata/order/latest snapshot pointerを更新可能。
+- Network fetch中に長時間DB transactionを開かない。
+- Import成功時にcatalog/Snapshot/TextRevisionをtransactionで反映する。
+- Source refreshで消えたEpisodeはcatalogから削除可能。SourceSnapshotはWork全体Purgeまで取得履歴として残す。
+- ReferenceWork Purgeは専用SourceであればSource/Snapshotまで削除するService transactionとする。
+- `rights_basis` の必須入力、毎回の同意checkbox等は機能contractに入れない。
 
-## 5. TextRevision / Normalization
+## 6. TextRevision / Normalization
 
-- adapterが抽出した可読 `raw_text` と解析用 `canonical_text` を分離する。
-- SourceSnapshot payloadを上書きしない。
-- Normalizerにversionを付ける。
-- Canonical offsetはUnicode code point単位 `[start,end)`。
-- Raw/Canonical対応をTextMappingへ保持する。
-- 自作品は既存Document engineからplain text projectionを取得し、Style Analysis独自parserを複製しない。
+- Adapterが抽出した可読本文をraw_textとして保持する。
+- Canonical Textは解析用派生本文。
+- OffsetはUnicode code point単位の半開区間 `[start_cp,end_cp)`。
+- UnicodeはNFC。NFKC等、文体表現を変える正規化は行わない。
+- Raw→Canonical変換はTextMappingで追跡する。
+- TextRevisionはimmutable。
+- 同一Raw hash + Normalizer versionなら再利用可能。
 
-## 6. Structure
+## 7. StructureRevision
+
+Structure階層:
+
+```text
+TextRevision
+  -> StructureRevision
+      -> Scene
+          -> Block
+              -> Sentence
+```
+
+StructureRevision kind:
+
+```text
+automatic
+semantic
+manual
+```
+
+### Automatic
+
+Quote/Heading/Separator等、決定論的ルールでbase構造を作る。明示境界がなければEpisode全体1 Sceneでもよい。
+
+### Semantic
+
+Scene Boundary Analyzerは任意文字offsetではなく `after_block_id` 候補だけを返す。AnalysisPolicyのauto-apply threshold以上をStructureServiceが決定論的にmaterializeする。
+
+Semantic Structureはparent Structureと生成元Boundary AnalysisRunを追跡する。
+
+### Manual
+
+ユーザーsplit/mergeはparentを持つ新StructureRevisionとして保存する。既存revisionをupdateしない。
 
 Block type:
 
 ```text
-dialogue / narration / monologue / heading / separator / unknown
+dialogue
+narration
+monologue
+heading
+separator
+unknown
 ```
 
-Block `order_index` はStructureRevision全体でglobal 1..N。
+Action/Description/Exposition/Psychology等はSemantic Annotationとする。
 
-### Automatic Structure
+## 8. Entity / Mention
 
-quote/separator/heading等の決定論的規則でbase構造を作る。
+Entityはstable identity。
 
-### Semantic Structure
+Reference作品では `reference_work_id` scopeでEpisodeを跨いで共有する。Project draftでは `document_id` scope。
 
-Full analysisではLLM Scene Boundary AnalyzerがBlock境界候補を出す。高confidence候補は新しい `semantic` StructureRevisionへ自動materializeする。本文文字列は変更しない。
+Entity identityに保持するもの:
 
-### Manual Structure
+```text
+entity_type
+canonical_name
+origin
+```
 
-ユーザーsplit/mergeは新しい `manual` StructureRevision。既存revisionは更新しない。
+Mention、Alias、Relationは生成元AnalysisRunを追跡する。推論による確認/却下/名称修正はInferenceReview/ManualOverrideでoverlayする。
 
-## 7. Entity / Term scope
+既存NovelProduction Character rowへ名前一致で自動mergeしない。
 
-reference作品のEntity/Termは `reference_work_id` scopeとし、episodeを跨いで同一人物・同一用語を追跡する。
+## 9. Term
 
-project draftは `document_id` scope。既存NovelProduction characterとの対応が必要な場合だけ明示linkを使う。
+Termもstable identityでReference Work全体またはProject Documentへ所属する。
 
-EntityとMention、TermとTermMentionを分離する。初出順のようなrefreshでstaleになる派生indexは保存せず、current effective revisionから計算する。
+Identity:
 
-## 8. Scene Semantics
+```text
+canonical_label
+term_type
+origin
+```
 
-Scene分類はmulti-axis:
+次はRun付きAnnotationとして保持する。
+
+```text
+term.novelty
+term.exact_match_safe
+term_explanation
+```
+
+これによりAnalyzer再実行時にTerm identityを上書きしない。
+
+初出は永続 `occurrence_index` ではなく、current effective revision/runのMentionをEpisode order + offsetでsortして算出する。
+
+## 10. Scene Semantics
+
+Scene分類はmulti-axis。
 
 ```text
 function
@@ -170,62 +263,116 @@ POV
 
 判断不能は `unclear`。`other` と区別する。
 
-Block semantic primary:
+Narration/Monologue Blockにはprimary semantic:
 
 ```text
-action / description / exposition / psychology / transition / other / unclear
+action
+description
+exposition
+psychology
+transition
+other
+unclear
 ```
 
-構成比はprimaryだけで計測する。
+を付ける。
 
-## 9. Analysis Runtime
+Taxonomy/Prompt/Analyzerはversionを持つ。
 
-AnalysisRunは「既存TextRevision/StructureRevisionからDocument派生データを作るAnalyzer」だけを管理する。
+## 11. AnalysisRuntime
 
-Normalization、StructureRevision作成、Aggregate、Profile生成、LintはAnalysisRunへ含めない。
+AnalysisRunはDocument内派生Analyzerに限定する。
 
-confidence threshold、Scene boundary auto-apply、Profile minimum sample等はversioned `AnalysisPolicy` を唯一の正本とする。
-
-v1 job workerはAPI process内1本。Redis/Celery/parallel workerは導入しない。
-
-Semantic LLM providerはAPI側 `openai_compatible` adapter。Full analysisをユーザーが明示実行する操作を送信開始操作とし、追加の確認dialogは必須にしない。
-
-## 10. Measurement
-
-Metricを2群へ分ける。
+対象例:
 
 ```text
-basic: structureだけで計測
-semantic: speaker/term/semantic outputを使用
+scene-boundary-detector
+entity-mention-extractor
+entity-resolver
+speaker-attribution
+term-candidate-extractor
+term-resolver
+term-explanation-detector
+scene-semantic-classifier
+block-semantic-classifier
+pov-classifier
+style-metrics-basic
+style-metrics-semantic
 ```
 
-semantic入力が一部欠落した場合、completeなScene metricは保持できるが、不完全なdocument全体semantic ratioは作らない。
+Normalization、Structure materialization、Aggregate、Profile、LintはAnalysisRunへ入れない。
 
-MetricDefinitionはversion、unit、算出定義、zero-width Lint toleranceを持つ。
+### AnalysisPolicy
 
-## 11. Aggregate / Corpus
+Confidence thresholdやProfile最小sample等はversioned `AnalysisPolicy` に一元化する。各Analyzerへ重複hard-codeしない。
 
-AggregateはMeasurement rowを観測単位として等重み集約する。長い作品のraw sentenceを再poolして自動weightしない。
+### Effective Run
 
-保持統計:
+同一Document/TextRevision/StructureRevision/Analyzerに複数Runが存在する場合、09の一貫した選択規則でeffective Runを決める。Responseは採用Run IDを返す。
+
+### Partial
+
+Scene/Block単位Analyzerは一部subjectだけ失敗した場合 `partial` とし、成功subjectを保持する。任意の失敗率thresholdで全Runをfailさせない。
+
+## 12. Measurement
+
+Metric計算はCOREの決定論的処理。
+
+Group:
 
 ```text
-mean / median / p10 / p25 / p75 / p90 / pstdev / min / max
+style-metrics-basic
+style-metrics-semantic
 ```
 
-Corpusはユーザーが目的別に作るreference work集合。
+BasicはStructureだけで計算可能。SemanticはSpeaker/Term/Semantic Annotationへ依存する。
 
-## 12. StyleProfile
-
-Profile identityとVersionを分離する。
+初期Metric例:
 
 ```text
-StyleProfile          # name/status等のstable identity
-StyleProfileVersion   # immutable Rule snapshot
+text.char_count
+sentence.len.p50/p90
+paragraph.len.p50/p90
+dialogue.char_ratio
+dialogue.utterance_len.p50/p90
+dialogue.turn_count.p50/p90
+narration.run_len.p50/p90
+semantic.exposition.char_ratio
+semantic.psychology.char_ratio
+term.new_per_1000_chars
+term.explanation_delay.p50/p90
+speaker.utterance_len.p50/p90
+speaker.consecutive_turns.p50
+```
+
+MetricDefinitionは式、unit、version、zero-width toleranceを持つ。
+
+Missing inputを0値へ変換しない。
+
+## 13. Corpus / Aggregate
+
+CorpusはReference Work/Episode集合。
+
+AggregateはMeasurement rowを観測単位として集約し、mean/median/p10/p25/p75/p90/pstdev等を保持する。
+
+Corpus membershipやInput Measurementが変わればfingerprintが変わり新Aggregateを作る。過去Aggregateは履歴として保持可能。
+
+## 14. StyleProfile
+
+Stable identityとimmutable Versionを分離する。
+
+```text
+StyleProfile
+  id/name/description/status/active_version_id
+
+StyleProfileVersion
+  profile_id/version_no/parent_version_id
+
 StyleRule
+  profile_version_id/metric/scope/preferred/min/max/weight/...
 ```
 
-Corpusからのdefault Rule:
+Corpus生成default:
 
 ```text
 preferred = median
@@ -233,96 +380,148 @@ min = p25
 max = p75
 ```
 
-sample不足時は自動Ruleを作らないが、manual Rule作成は許可する。
+Sample不足時はCorpus由来Ruleを自動生成しないが、Manual Rule作成を妨げない。
 
-## 13. Review / ManualOverride
+Profileがactiveの場合は `active_version_id` を明示する。新Version作成だけではactive Versionを暗黙切替しない。
 
-Effective View:
+Lint/ExportはProfile Versionを明示指定する。
+
+## 15. Review / ManualOverride
+
+Effective View基本優先順位:
 
 ```text
-manual > confirmed > inferred above policy threshold > unknown
+ManualOverride
+> Confirmed inference
+> latest eligible inferred value
+> unknown
 ```
 
-低confidence結果を全件ReviewQueueへ積まない。unknownは正常値として保持し、Semantics画面のfilterから確認できる。
+Low-confidence/unknownは正常状態。ReviewQueueへ全件自動投入しない。
 
-ReviewItemはspeaker/entity conflict、ユーザーがQueueへ追加したScene boundary proposal、stale override等の「操作価値がある項目」だけに使う。
+ReviewItemはScene Boundary ProposalをユーザーがReviewへ追加した場合、stale Override等、Review workflowに価値がある項目だけに使う。
 
-Override noteは任意。ローカル単一user前提で不要な二重CAS tokenを追加しない。
+ManualOverrideはReviewItemなしで直接作成可能。
 
-## 14. Style Lint
+Structure依存subjectはStructureRevision IDを持ち、stale subjectを検出できるようにする。
 
-FindingはProfileとの差だけを示す。
+## 16. Style Lint
 
-- preferredとの差だけではFindingを作らない。
-- zero-width rangeのtoleranceはMetricDefinitionを使う。
-- missing Metricはwarning + coverageとして返し、missing割合だけでLintRunをfailさせない。
-- 総合文章品質scoreは作らない。
+Lint入力:
 
-## 15. 永続化
+```text
+Project Document
+TextRevision
+StructureRevision
+Profile ID
+Profile Version
+Metric Run
+```
 
-- project-local `story.db`
-- `style_` prefix
-- migration 006/007/008
-- 001〜005変更禁止
-- raw payload: SQLite BLOB
-- raw/canonical text: SQLite TEXT
-- ORM追加なし
-- ProfileVersion等のimmutable rowのみUPDATE禁止
-- Reference Work PurgeはFK cascadeで本文を削除可能
+FindingはRule rangeからの逸脱を示す。文章品質の総合スコアは作らない。
 
-## 16. API / WebUI / MCP
+Rule対象MetricがmissingでもLintRunを割合thresholdでfailさせず、coverageとして表示する。
 
-APIはすべて `/projects/{project_id}/style-analysis`。
+Evidenceはspan/Block ID等を保持し、本文excerptをFinding rowへ複製しない。
 
-- `text_revision_id` は解析時必須。
-- `structure_revision_id` はoptional。省略時は指定TextRevisionからbuild/reuse。
-- latest revisionへ暗黙読み替えしない。
-- Profile APIはidentity/versionを分離する。
-- Lint UIはcoverageとstaleを表示する。
-- v1ではMCP変更なし、tool count 59維持。
+## 17. 永続化
 
-## 17. 品質保証
+v1は既存project-local `story.db` に `style_` prefix tableを追加する。
 
-- Deterministic処理はexact fixture test。
-- Source Adapterはmock HTTP fixture。
-- LLM Analyzerはfake client + small curated gold set。
-- 小規模datasetへ統計的根拠の薄い固定precision/F1 release gateを置かない。
-- DB integrityはmigration/integration suiteで確認し、各test layerへ重複させない。
-- CIからlive site/LLMへ接続しない。
+Migration:
 
-## 18. 推奨実装フェーズ
+```text
+006_style_analysis_foundation.sql
+007_style_analysis_semantics.sql
+008_style_analysis_analytics.sql
+```
 
-| Phase | 名称 | 主要scope |
-|---|---|---|
-| SA-A | Foundation | DB、models/repositories、job、AnalysisPolicy |
-| SA-B | Collection | Source Adapter、Snapshot、Reference catalog |
-| SA-C | Deterministic Analysis | Normalization、Automatic Structure、Basic Metric |
-| SA-D | Semantic Analysis | Scene Boundary、Entity/Speaker/Term/Semantics、Semantic Metric |
-| SA-E | Analytics/Profile | Corpus、Aggregate、Profile/Version/Rule |
-| SA-F | Review | Effective View、Override、限定ReviewItem |
-| SA-G | Draft Lint | project capture、Lint/Finding/Evidence |
-| SA-H | WebUI/E2E | UI integration、dogfood |
+既存001〜005は変更しない。
 
-## 19. v0.2 設計完了条件
+Raw resource bytes、Raw/Canonical textもSQLiteに保存する。実測で容量問題が出るまで別Storageを導入しない。
 
-- SourceSnapshotからTextRevisionまでprovenanceが追跡可能。
-- Automatic/Semantic/Manual StructureRevisionの責務が明確。
-- reference Entity/Termがepisodeを跨いで扱える。
-- basic/semantic Metricを分離できる。
-- Analyzer責務とAggregate/Profile/Lint責務が循環しない。
-- Profile identity/versionが一意に扱える。
+## 18. API境界
+
+URL prefix:
+
+```text
+/projects/{project_id}/style-analysis
+```
+
+原則:
+
+- Text取得は `text_revision_id` 明示
+- Structure取得/編集は `structure_revision_id` 明示
+- LintはProfile Version明示
+- Semantics/MetricはStructureRevisionを明示し、serverが09 Effective Runを選択可能
+- Effective Runを選んだResponseは採用AnalysisRun IDを返す
+- 過去Runの厳密表示用endpointを別途持つ
+- Latest Draft/Structureへ暗黙読み替えしない
+
+## 19. WebUI
+
+主要画面:
+
+```text
+Style Analysis Home
+Sources / Reference Works
+Document Analysis
+Corpus / Compare
+Profiles / Profile Editor
+Review
+Lint
+```
+
+Document AnalysisはTextRevision/StructureRevision selectorを持つ。
+
+Profile Editorは `保存` と `保存して有効化` を分離できる。
+
+Source importやFull Analysisにrights checkbox・毎回の確認dialog等の追加blocking UIは設けない。
+
+## 20. Quality Assurance
+
+- Deterministic parser/Metricはfixture unit test。
+- DB migration/invariantはintegration test。
+- Semantic AnalyzerはFake Model contract test + 小さなGold dataset。
+- CIは実サイト/実LLMへ接続しない。
+- Gold datasetに根拠の薄い固定精度gateを置かない。
+- Live dogfoodはCI外で実施する。
+- 同じintegrity/safety assertionを全test layerへ重複配置しない。
+
+## 21. 実装分割
+
+詳細な実装順は `detailed-design/README.md` のSA-A〜SA-Hを正本とする。
+
+```text
+SA-A Foundation / DB / Job
+SA-B Source Import
+SA-C Normalization / Structure / Basic Metrics
+SA-D Semantic Analysis
+SA-E Corpus / Aggregate / Profile
+SA-F Review / Override
+SA-G Project Capture / Lint
+SA-H WebUI / E2E / Dogfood
+```
+
+## 22. 完了条件
+
+- Reference WorkをimportしTextRevisionへ変換できる。
+- Automatic/Semantic/Manual Structureを履歴付きで扱える。
+- Entity/TermをReference Work横断で追跡できる。
+- Annotation/MeasurementからAnalysisRun/Structure/Text spanへ追跡できる。
+- Basic/Semantic Metricを再現可能に計測できる。
+- Corpus AggregateからVersion付きStyleProfileを生成できる。
+- Project DraftをProfile Versionと比較しcoverage付きFindingを生成できる。
 - ManualOverrideが再解析で失われない。
-- Lintがmissing Metricをcoverageとして扱える。
-- API/DB/UIで同じrevision/profile versionを参照できる。
 
-## 20. 将来拡張候補
+## 23. 将来拡張候補
 
 - Scene類似検索
-- リズム時系列可視化
+- 文体リズム時系列
 - Character voice fingerprint
 - POV逸脱検知
-- 用語説明タイミング支援
 - 読者負荷モデル
-- Corpus preset
-- realtime lint
+- Genre Corpus preset
+- Realtime Lint
 - Writing Guidance
+- MCP公開（別設計）

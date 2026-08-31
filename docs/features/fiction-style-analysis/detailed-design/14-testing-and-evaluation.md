@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Style Analysisの決定論的処理、DB整合性、API/WebUI、LLM推論、Source Adapterを再現可能に検証する。CIはlive site/modelへ依存させず、精度評価は別のdogfood/evaluationとして扱う。
+Style Analysisの決定論的処理、DB整合性、API/WebUI、LLM推論、Source Adapterを再現可能に検証する。CIはlive site/modelへ依存させず、精度評価はCI外のdogfood/evaluationとして扱う。
 
 上位仕様は `../basic-design.md`。
 
@@ -15,7 +15,13 @@ API/WebUI contract
 manual dogfood/evaluation
 ```
 
-同じ不変条件を全層へ重複配置しない。DB integrityはmigration/integration suite、UIはユーザーflow、Analyzerはschema/output contractへ責務を分ける。
+同じ不変条件を全層へ重複配置しない。
+
+- DB integrity: migration/integration
+- Analyzer: schema/output/fingerprint
+- API: contract/revision指定
+- WebUI: user flow
+- Model品質: CI外evaluation
 
 ## 3. 実装先
 
@@ -49,7 +55,7 @@ WEBUI/frontend/e2e/
   style-analysis.spec.ts
 ```
 
-既存naming conventionが異なる場合は既存に合わせる。
+既存naming conventionが異なる場合は既存へ合わせる。
 
 ## 4. Deterministic unit gate
 
@@ -66,16 +72,20 @@ WEBUI/frontend/e2e/
 - Block global order/type/span
 - Sentence span/order
 - separator `scene_id=NULL`
-- semantic Structure materialization
+- automatic Structure fingerprint
+- Semantic Structure materialization
+- Semantic Structure source AnalysisRun link
 
 ### Metrics
 
-- metric name/version
+- Metric name/version
 - scalar/percentile
 - sample_count
-- basic/semantic metric分離
+- Basic/Semantic Metric分離
+- speaker streak定義
+- Term effective novelty/explanation入力
 
-floatは `pytest.approx(..., abs=1e-9)`。
+Floatは `pytest.approx(..., abs=1e-9)`。
 
 ## 5. Fixture方針
 
@@ -99,9 +109,12 @@ redirect allowed/disallowed host
 response size limit
 multi-episode fetch途中失敗 -> catalog未更新
 EPUB binary snapshot hash
+refresh reorder
+refreshで消えたEpisode -> Document削除、SourceSnapshot保持
+Reference Work purge -> 専用Source/Snapshot削除
 ```
 
-selector変更はadapter_version変更対象。
+Selector変更はadapter_version変更対象。
 
 ## 7. DB / Migration gate
 
@@ -113,12 +126,18 @@ CORE CIで以下を確認する。
 - `PRAGMA foreign_key_check` empty
 - `PRAGMA integrity_check` = ok
 - JSON/enum/CHECK
-- purge cascade
-- immutable Snapshot/TextRevision/ProfileVersion UPDATE拒否
+- Mapping片側zero/両側zero
+- Block global order
 - Entity/Term exactly-one scope
-- Profile version unique
+- Entity/Term identity rowの推論属性分離
+- Semantic Structure source Run link
+- Profile identity/Version分離
+- Active Profile version所属validation
+- immutable Snapshot/TextRevision/ProfileVersion UPDATE拒否
+- Reference Work purge transaction
+- Project Episode cascade
 
-各integration scenarioの終了ごとに同じintegrity checkを繰り返さない。
+各integration scenarioの末尾へ同じintegrity checkを重複追加しない。
 
 ## 8. Analyzer mocked test
 
@@ -134,16 +153,19 @@ Fake `SemanticModelClient` で固定JSONを返す。
 - timeout/429
 - partial subject handling
 - AnalysisPolicy threshold/fingerprint
+- Effective AnalysisRun selection
+- Boundary candidate Annotation contract
+- Term novelty/exact-match Annotation per Run
 
-prompt全文の完全一致testは作らない。
+Prompt全文の完全一致testは作らない。
 
 ## 9. Gold dataset
 
 `CORE/tests/style_analysis/gold/` に自作短文を置く。
 
-固定件数ノルマは設けない。初期実装では、最低限次のカテゴリを各taskで1件以上含む小さなcurated setを作り、バグ修正ごとにregression fixtureを追加する。
+固定件数ノルマは設けない。初期実装では各カテゴリを最低1件含む小さなcurated setを作り、実バグ修正ごとにregression fixtureを追加する。
 
-### speaker
+### Speaker
 
 ```text
 explicit speech tag
@@ -175,7 +197,7 @@ explanation before/after name
 no explanation
 ```
 
-Dataset量を増やすこと自体を完了条件にしない。
+Dataset量そのものを完了条件にしない。
 
 ## 10. Model evaluation
 
@@ -201,32 +223,34 @@ latency summary
 
 ## 11. 品質指標の扱い
 
-初期v1では固定precision/F1値をrelease gateにしない。小規模gold setで `false merge rate <=2%` のような統計的に意味の薄い閾値も置かない。
+初期v1では固定precision/F1値をrelease gateにしない。小規模gold setで統計的に意味の薄い数値gateも置かない。
 
-重視する順序:
+重視順:
 
 1. schema/offset/DB invariantが壊れない
-2. 明示speaker等の簡単なcaseを正しく処理
+2. 明示Speaker等の簡単なcaseを正しく処理
 3. unknownを許容し誤った自動merge/話者確定を増やさない
 4. model/prompt変更前後の相対比較を記録
 
-評価結果はChatGPTレビュー時の判断材料とする。
+評価結果はChatGPTレビュー時の判断材料。
 
 ## 12. Runtime integration
 
-temp SQLite + fake modelで代表flowを通す。
+Temp SQLite + Fake Modelで代表flowを通す。
 
 ```text
-reference import
+Reference import
 -> TextRevision
--> automatic structure
--> semantic boundary materialization
--> semantic analyzers
--> basic/semantic metrics
+-> automatic Structure
+-> Boundary AnalysisRun
+-> Semantic Structure materialization + source link
+-> Semantic Analyzers
+-> Basic/Semantic Metrics
 -> Corpus Aggregate
 -> Profile Version
--> project draft capture
--> Lint
+-> Activate selected Version
+-> Project Draft capture
+-> Lint explicit Profile Version
 ```
 
 追加case:
@@ -234,8 +258,9 @@ reference import
 ```text
 second run cache hit
 policy version change
-manual Structure指定
-speaker override -> metric recompute
+manual Structure指定 -> Boundary skip
+speaker override -> Metric recompute
+Term novelty/explanation override -> Metric recompute
 worker interrupted recovery
 cancel
 partial Scene analyzer
@@ -243,18 +268,25 @@ partial Scene analyzer
 
 ## 13. API contract
 
-- project A/B isolation
+- Project A/B isolation
 - 404/409/413/422
-- job 202 lifecycle
-- explicit text_revision_id
-- optional structure_revision_id
-- Profile identity/version契約
+- Job 202 lifecycle
+- Text取得はexplicit text_revision_id
+- Structure取得はexplicit structure_revision_id
+- Semantics/Metric responseにselected AnalysisRun ID
+- Historical Run outputs/measurements endpoint
+- Analyzeはtext_revision required / structure optional
+- Profile identity/version/active Version contract
+- New Version作成だけではactive Version不変
+- Activateはversion_no required
+- LintはProfile Version explicit
+- Direct OverrideはReviewItem不要
 - ReviewItem CAS
-- override note optional
-- purge
-- raw source payloadが通常list/detailへ出ない
+- Override note optional
+- Reference Work purgeでSource/Snapshot削除
+- Raw Source payloadが通常list/detailへ出ない
 
-API key値そのものをレスポンスへserializeしないことはmodel config test 1箇所で確認し、各route testへ重複しない。
+API key値そのものをserializeしないことはModel Config test 1箇所で確認し、各routeへ重複しない。
 
 ## 14. WebUI
 
@@ -268,37 +300,42 @@ Testing Library既存pattern。
 必須flow:
 
 ```text
-source import
-job progress/retry
-reference browse/purge
-project draft capture
-analysis basic/full
-semantic boundary表示/manual split
+Source import
+Job progress/retry
+Reference browse/refresh/purge
+Project Draft capture
+TextRevision selector
+StructureRevision selector
+Analysis basic/full
+Semantic Boundary表示/manual split
 Corpus membership
-Profile Version edit + dirty guard
-speaker override + Review conflict
+Profile Version edit
+Save と Save+Activate の差
+Direct Speaker/Term Override
+Review conflict
 Lint coverage/stale
 Finding ignore
 ```
 
 ## 15. E2E
 
-external site/modelはmock/fake server。
+External site/modelはmock/fake server。
 
 代表flow 1本:
 
 ```text
-project open
--> local text import
--> deterministic analysis
+Project open
+-> Local Text import
+-> Deterministic Analysis
 -> Corpus create
 -> Profile build
--> project fixture capture
+-> Activate Version
+-> Project fixture capture
 -> Lint
 -> Finding display
 ```
 
-semantic flowはfake providerで別1本。
+Semantic flowはFake Providerで別1本。
 
 全細部をE2Eへ重複させない。
 
@@ -312,14 +349,14 @@ CI外・明示実行。
 - title/order/本文抽出を目視
 - 問題なければ作品全体へ拡張
 
-毎回のrights checkbox等は不要。ログイン/有料壁回避はしない。
+毎回のrights checkbox等は不要。Login/有料壁回避はしない。
 
 ### Model
 
 - configured provider/modelを確認
-- representative episodeでfull analysis
-- Scene境界、speaker、Term、semantic分類を目視
-- 明確な誤りをgold regressionへ追加
+- representative EpisodeでFull Analysis
+- Scene境界、Speaker、Term、Semantic分類を目視
+- 明確な誤りをGold Regressionへ追加
 
 ## 17. CI commands
 
@@ -359,7 +396,7 @@ MCPは変更しないが既存CI regressionとしてPASSを要求する。pre-co
 
 ## 18. Coverage
 
-既存80% gate維持。coverageのためだけの低価値testを大量追加しない。失敗・境界・versioning・idempotencyを優先する。
+既存80% gate維持。Coverageのためだけの低価値testを大量追加しない。失敗・境界・versioning・idempotencyを優先する。
 
 ## 19. Completion criteria
 
@@ -384,4 +421,5 @@ MCPは変更しないが既存CI regressionとしてPASSを要求する。pre-co
 - coverage thresholdを下げない。
 - 小規模gold datasetへ根拠のない精度gateを置かない。
 - 全integration caseへ同じintegrity/safety assertionを重複追加しない。
+- Revision/Version選択のcontract testを省略しない。
 - unrelated test refactorを広げない。

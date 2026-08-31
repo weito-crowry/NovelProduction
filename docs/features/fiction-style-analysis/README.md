@@ -26,34 +26,30 @@ docs/features/fiction-style-analysis/
    └─ 14-testing-and-evaluation.md
 ```
 
-- [basic-design.md](basic-design.md): 長期的な責務境界とデータフローを定める基本設計。
-- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、Codex向けSA-A〜SA-H実装順。
+- [basic-design.md](basic-design.md): 本機能全体の上位設計。
+- [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、SA-A〜SA-H実装順、Codex実装運用。
 
 ## 設計方針
 
-- Raw / Canonical / Structure / Semantic / Measurement / Aggregate / Profileを分離する。
-- reference Entity/Termはepisodeを跨ぐwork scopeで扱う。
-- Automatic / Semantic / Manual StructureRevisionを分離し、原文を変更せずScene境界を改善する。
-- confidence/sample thresholdはversioned AnalysisPolicyへ集約する。
-- low-confidence結果を全件ReviewQueueへ送らず、unknownを正常状態として扱う。
-- Profileはstable identityとimmutable versionを分離する。
-- Lintは参照Profileとの差とcoverageを示し、文章品質の断定や自動修正はしない。
+- Source/Revision/Run/Versionを追跡可能にする。
+- Stable identityと推論結果を分離する。
+- 再解析で人手修正を破壊しない。
+- Analyzer/Policy/Metricをversion管理する。
+- Low-confidenceを正常状態として扱え、全件ReviewQueueへ送らない。
+- 安全確認・競合確認・停止条件は必要な箇所だけに置き、通常操作を過剰に阻害しない。
+- 実装判断をCodexへ残さないため、詳細設計側でデータ契約・失敗時挙動・API/UI・test条件まで具体化する。
 
 ## 実装境界
 
-- CORE: domain、SQLite、normalization、structure、Analyzer、metric、profile、lint
-- API: source HTTP adapter、LLM provider adapter、job worker、FastAPI routes
-- WEBUI: collection、analysis、review、corpus/profile、lint
+- CORE: domain、SQLite、Normalization、Structure、Analyzer、Metric、Profile、Lint
+- API: Source HTTP Adapter、LLM Provider Adapter、Job Worker、FastAPI routes
+- WEBUI: Collection、Analysis、Corpus/Profile、Review/Override、Lint
 - MCP: v1 scope外。既存59 tool contractを維持
-
-## 過剰チェックを避ける
-
-ローカル単一user用途を前提とし、データ破損や誤ったrevision参照を防ぐためのvalidationは維持する。一方、rights_basis必須入力、毎回の同意dialog、Overrideの二重CAS、low-confidence全件Review、missing Metric割合によるLint失敗等は実装しない。
 
 ## ステータス
 
 - 基本設計: v0.2 Draft
-- 詳細設計: v0.2 自己レビュー第1巡修正版（02のみv0.1維持）
+- 詳細設計: v0.2 review反映版
 - 実装: 未着手
 
-実装開始時は `detailed-design/README.md` のSA-A〜SA-H分割を基準に、各PhaseごとにChatGPTでscopeを確定してCodexへ指示する。
+実装開始時は `detailed-design/README.md` のSA-A〜SA-Hを基準に、各PhaseごとにChatGPTでscopeを確定しCodex Lunaへ具体的に指示する。

@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-作品固有の用語・概念・技術名・制度名等を抽出し、「初出」「説明された位置」「説明までの距離」を計測可能にする。人物名抽出とは分離する。
+作品固有の用語・概念・技術名・制度名等を抽出し、「初出」「説明された位置」「説明までの距離」を計測可能にする。人物名抽出とは分離し、reference作品ではepisodeを跨いで同じTermを追跡する。
 
 上位仕様は `../basic-design.md`。
 
@@ -19,20 +19,16 @@ CORE/src/novel_core/style_analysis/
     term_explanation.py
 ```
 
-## 3. Term scope
+## 3. Term scope / identity
 
-TermもEntityと同様に次のどちらか一方へ所属する。
+Termは次のどちらか一方へ所属する。
 
 ```text
 reference_work_id  # reference作品全episode共通
 document_id        # project draft等の単独document
 ```
 
-両方NULL/両方非NULLは禁止する。
-
-reference作品ではepisodeを跨いで同じ用語を1 Termとして扱う。
-
-## 4. Termモデル
+Term rowはstable identityであり、再解析のたびに推論属性を上書きしない。
 
 ```text
 id
@@ -40,9 +36,7 @@ reference_work_id nullable
 document_id nullable
 canonical_label
 term_type
-novelty
-exact_match_safe
-status
+origin = inferred | manual
 created_by_run_id nullable
 created_at
 ```
@@ -62,11 +56,46 @@ specialized_term
 other
 ```
 
-人物名はTermにしない。Entityと同一実体を指す場合は `style_term_entity_links` で関連付ける。
+人物名はTermにしない。
+
+## 4. 推論属性はAnnotation
+
+`novelty` と `exact_match_safe` はTerm identityではなくAnalyzer出力なので `style_annotations` に保存する。
+
+### novelty
+
+```text
+annotation_type = term.novelty
+subject_type = term
+subject_id = term_id
+value_json = {"value": "work_specific"}
+confidence
+analysis_run_id
+```
+
+value:
+
+```text
+work_specific
+specialized_real_world
+common_real_world
+uncertain
+```
+
+### exact match safety
+
+```text
+annotation_type = term.exact_match_safe
+subject_type = term
+subject_id = term_id
+value_json = {"value": true}
+confidence
+analysis_run_id
+```
+
+Effective Viewは10のManualOverride/confirmed/latest eligible inference順で解決する。再解析で旧Annotationをupdateしない。
 
 ## 5. TermMention
-
-本文中出現:
 
 ```text
 id
@@ -79,9 +108,9 @@ surface
 analysis_run_id
 ```
 
-`occurrence_index` は永続化しない。refreshやepisode挿入で番号がstaleになるためである。初出・N回目はcurrent effective revision群を `episode.order_index, start_cp` でsortして都度算出する。
+`occurrence_index` は保存しない。初出/N回目はcurrent effective StructureRevision群のMentionを `episode.order_index, start_cp` でsortして計算する。
 
-同一surfaceの決定論的補完は `exact_match_safe=true` のTermだけ行う。
+同一surfaceの決定論的補完はeffective `term.exact_match_safe=true` のTermだけ行う。
 
 ## 6. 候補抽出
 
@@ -89,10 +118,10 @@ Scene単位でモデルへ渡す。
 
 - Scene text
 - Block ID/span
-- 同scopeの既存Term
+- 同scopeの既存Term + effective label/alias
 - Entity一覧
 
-「読者が作品内で意味を学習する必要がある語」を候補化し、通常の一般名詞を大量抽出しない。
+出力例:
 
 ```json
 {
@@ -112,63 +141,84 @@ Scene単位でモデルへ渡す。
 }
 ```
 
-span validationは04と同じutilityを使う。
+新Term作成時はidentity row + 同じrun由来のnovelty/exact-match Annotationを作る。既存Termへ解決した場合は新しいAnnotationを追加し、Term rowを更新しない。
+
+span validationは04共通utility。
 
 ## 7. Term resolution
 
-自動統合条件:
+自動統合:
 
-- canonical_label完全一致
+- effective canonical label完全一致
 - confirmed/manual alias一致
 - model同一判定 >= `AnalysisPolicy.term_resolution_auto_merge`
 
-初期default `0.90`。
+初期0.90。
 
-表記揺れは `style_term_aliases` へ保存する。
+短縮形が一般語と衝突する場合、effective `exact_match_safe=false` とする。
 
-短縮形が一般語と衝突する場合 `exact_match_safe=false`。
+## 8. Alias
 
-## 8. Novelty
+`style_term_aliases`:
+
+```text
+id
+term_id
+alias
+origin = inferred | manual
+analysis_run_id nullable
+created_at
+```
+
+自動aliasは生成runを記録する。再解析で既存aliasをupdateしない。
+
+## 9. NoveltyとMetric
+
+`term.new_per_1000_chars` のeligible:
 
 ```text
 work_specific
 specialized_real_world
-common_real_world
-uncertain
 ```
 
-`term.new_per_1000_chars` に数えるのは `work_specific` と `specialized_real_world`。
+`common_real_world` / `uncertain` は除外。
 
-`uncertain` はeffective metricから除外するが、ReviewItemを必須生成しない。Term一覧のfilterから人手確認できる。
+unknown/uncertainを理由にReviewItemを自動生成しない。Semantics/Term画面でfilter可能にする。
 
-## 9. 初出
+## 10. 初出
 
 ### reference work
 
-current effective TextRevisionを対象に:
+各ReferenceEpisodeのcurrent effective StructureRevisionに属するeffective TermMentionを:
 
 ```text
 reference_episode.order_index
--> mention.start_cp
+-> start_cp
 ```
 
-の最小値をfirst appearanceとする。
+でsortし最初をfirst appearanceとする。
 
 ### project document
 
-同document内の `start_cp` 最小Mention。API fieldは `first_in_document`。
+current StructureRevision内 `start_cp` 最小Mention。API fieldは `first_in_document`。
 
-DB insertion順・AnalysisRun順には依存しない。
+旧StructureRevision/旧AnalysisRun由来Mentionを混ぜない。
 
-## 10. 説明Annotation
+## 11. Term Explanation Annotation
 
-Term説明は `style_annotations` の `term_explanation`。
+説明候補はTermをsubjectにする。
 
-```json
-{
-  "term_id": 42,
+```text
+annotation_type = term_explanation
+subject_type = term
+subject_id = term_id
+start_cp/end_cp = explanation span
+confidence
+analysis_run_id
+value_json = {
+  "block_id": 22,
   "explanation_kind": "definition",
-  "completeness": "partial"
+  "completeness": "sufficient"
 }
 ```
 
@@ -183,49 +233,56 @@ contrast
 other
 ```
 
-`completeness`:
+`completeness`: `partial | sufficient`。
 
-```text
-partial
-sufficient
-```
+初回windowは初出Blockの前2/後6。見つからなければ同Scene末尾まで。別Sceneへ自動拡張しない。
 
-初回windowは初出Blockの前2Block・後6Block。見つからなければ同Scene末尾まで拡張する。別Sceneは自動拡張しない。
+## 12. Effective sufficient explanation
 
-## 11. 説明遅延
+Termごとの「Lint/Metricで使うsufficient explanation」は次で決める。
+
+1. ManualOverride `term.sufficient_explanation_annotation_id` があればそのAnnotation。
+2. clear overrideならなし。
+3. confirmed sufficient explanation。
+4. current effective runの `completeness=sufficient` かつ confidence >= `term_explanation_effective` のうち本文順最初。
+5. それ以外なし。
+
+ManualOverrideが指定するAnnotation IDは:
+
+- `annotation_type=term_explanation`
+- 同Term subject
+- current effective Text/Structure lineageに属する
+
+ことをserviceで検証する。
+
+## 13. 説明遅延
 
 ```text
 first sufficient explanation start_cp - first mention start_cp
 ```
 
-同一episode内だけcode point差を計算する。
+同一episode内だけcode point差。
 
-- 説明が名称より先なら負値可。
-- sufficientなしはNULL。
-- partialだけもNULL。
+- 説明先行は負値可。
+- sufficientなし/別episodeならNULL。
 
-補助metric `term.explained_same_scene_ratio` を持つ。
+補助Metric `term.explained_same_scene_ratio`。
 
-## 12. 説明重複
-
-1 Termに複数説明spanを許可。最初のsufficientだけdelay対象。
-
-後続再説明は保存可能だがv1必須metricにはしない。
-
-## 13. Entity link
-
-TermとEntityが同じ実体ならlink可能。
+## 14. Entity link
 
 ```text
+id
 term_id
 entity_id
-confidence
-status
+origin = inferred | manual
+confidence nullable
+analysis_run_id nullable
+created_at
 ```
 
-scopeが異なるEntity/Termはlink不可。auto link thresholdは09 AnalysisPolicy `term_entity_auto_link`、初期0.90。
+scope一致必須。将来自動linkする場合threshold `term_entity_auto_link` 初期0.90、run provenance必須。v1はmanual linkだけでも要件を満たす。
 
-## 14. Analyzer/version
+## 15. Analyzer/version
 
 ```text
 term-candidate-extractor v1
@@ -233,13 +290,9 @@ term-resolver v1
 term-explanation-detector v1
 ```
 
-Promptには一般語を過剰抽出しないnegative exampleを含める。
+Promptには一般語過剰抽出のnegative example。
 
-## 15. Confidence policy
-
-閾値の正本は09 AnalysisPolicy。
-
-初期default:
+## 16. AnalysisPolicy
 
 ```text
 term_resolution_auto_merge = 0.90
@@ -247,26 +300,30 @@ term_entity_auto_link = 0.90
 term_explanation_effective = 0.85
 ```
 
-threshold未満はraw推論として保持し、無理にeffective化しない。低confidenceごとのReviewItem自動生成はしない。
+09が正本。
 
-## 16. テスト
+## 17. Test
 
 - reference work episode跨ぎTerm統合
-- project document scope分離
-- 初出即説明
-- 数Block後説明
-- 説明→名称
-- 略称と一般語衝突
-- 表記揺れ
-- explanationなし
-- refresh/episode order変更後もfirst appearanceがstale indexに依存しない
+- Term identity再解析で不変
+- novelty/exact-match per-run Annotation
+- alias provenance
+- project scope分離
+- 初出即説明/数Block後/説明先行/説明なし
+- abbreviation一般語衝突
+- refresh/order変更でfirst appearance staleなし
+- current Structureだけから初出算出
+- sufficient explanation override set/clear
+- override annotation lineage validation
 - code point delay
 
-## 17. Codex実装時の禁止事項
+## 18. Codex禁止事項
 
-- MeCab/Sudachi等を勝手に追加しない。
-- NFKC等で表記を破壊しない。
-- 頻度だけで一般語をTermへ昇格しない。
-- 説明がないTermへ擬似説明を生成しない。
+- Term identity rowへnovelty/exact_match_safeを戻さない。
+- occurrence_indexを保存しない。
+- MeCab/Sudachiを勝手に追加しない。
+- NFKC等で表記破壊しない。
+- 頻度だけで一般語をTerm昇格しない。
+- 擬似説明生成しない。
 - project world/canonへ自動登録しない。
-- occurrence_indexのようなrefreshでstaleになる派生順序を保存しない。
+- Term推論属性を再解析でupdateしない。

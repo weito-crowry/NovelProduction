@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Scene/Blockへ意味ラベルを付与し、局面別に文体統計を比較できるようにする。Scene分類はmulti-axisを正本とし、判断不能を無理に既知labelへ押し込まない。
+Scene/Blockへ意味ラベルを付与し、局面別に文体統計を比較できるようにする。Scene分類はmulti-axisを正本とし、判断不能を無理に既知labelへ押し込まない。Scene Boundary Analyzerは03が安全にmaterializeできるBlock境界候補だけを返す。
 
 上位仕様は `../basic-design.md`。
 
@@ -88,11 +88,9 @@ mixed
 unclear
 ```
 
-`unclear` は他labelと同時指定しない。`other` は「判定できるがtaxonomy外」、`unclear` は「判定不能」。
+`unclear` は他labelと同時指定しない。`other` はtaxonomy外だが判定可能、`unclear` は判定不能。
 
 ## 4. Annotation形式
-
-axisごとに `style_annotations` へ保存する。
 
 multi-select:
 
@@ -109,16 +107,16 @@ single-select:
 {"label": "medium", "confidence": 0.84}
 ```
 
-巨大なScene JSONへまとめない。
+`style_annotations` にaxisごとに保存する。
 
 ## 5. Scene classifier入力
 
 - Scene全文
 - Block ID/type/text
-- effective speakerがあればspeaker名
+- effective speaker名があればそれ
 - Term名称一覧
 
-前後Scene全文、作品あらすじ、ジャンルは渡さない。対象Scene自体の読み味を分類する。
+前後Scene全文、あらすじ、ジャンルは渡さない。
 
 ## 6. function定義
 
@@ -126,21 +124,19 @@ single-select:
 |---|---|
 | daily | 日常行動・雑談・通常生活が中心 |
 | setup | 後続展開の前提・準備 |
-| dialogue | 会話そのものがScene推進の中心 |
+| dialogue | 会話自体がScene推進の中心 |
 | exposition | 設定・背景・知識伝達が中心 |
 | meeting | 会議・協議・正式打合せ |
 | investigation | 情報収集・推理・検証 |
 | travel | 移動そのものが主要活動 |
 | introspection | 内面思考・自己評価が中心 |
 | conflict | 対立・交渉・口論 |
-| action | 身体的行動・戦闘・追跡等 |
+| action | 身体行動・戦闘・追跡等 |
 | transition | 時間/場所/章の橋渡し |
 | reveal | 重要情報の明示 |
 | payoff | 前段準備/伏線の成果が中心 |
 | other | 上記以外の明確な機能 |
-| unclear | 十分な判定材料がない |
-
-会話率等の数値だけでfunctionを決めない。
+| unclear | 十分な材料がなく判定不能 |
 
 ## 7. pace / information_load
 
@@ -149,16 +145,16 @@ pace:
 - slow: 内省・詳細描写・長い説明が多く状態変化が少ない
 - medium: 中間
 - fast: 短いやり取り/行動/状態変化が連続
-- unclear: 混在し単一判定が不安定
+- unclear: 単一判定が不安定
 
 information_load:
 
 - low: 既知前提の会話/行動中心
 - medium: 数個の新情報
-- high: 複数の固有概念・因果説明が集中
+- high: 固有概念・設定・因果説明が集中
 - unclear: 判定不能
 
-Term情報は補助signal。Term analyzerを必須依存にしない。
+Term情報は補助signalであり必須依存にしない。
 
 ## 8. POV
 
@@ -168,11 +164,11 @@ pov_entity_id nullable
 confidence
 ```
 
-Entity未解決でもmodeは保存可能。Scene内POV shiftはannotationとして残す。
+Entity未解決でもmode保存可。POV shift疑いはraw annotationで保持するだけでSceneを直接変更しない。
 
 ## 9. Block semantics
 
-narration/monologueのprimary category:
+primary:
 
 ```text
 action
@@ -184,7 +180,7 @@ other
 unclear
 ```
 
-secondary tags:
+secondary:
 
 ```text
 sensory
@@ -196,9 +192,9 @@ summary
 foreshadowing
 ```
 
-構成比はprimaryだけを使う。`unclear` はsemantic ratioのカテゴリ分子へ入れない。
+構成比はprimaryだけ。`other/unclear` はカテゴリ分子に入れない。
 
-dialogueは別 `dialogue_function` annotation:
+Dialogue function:
 
 ```text
 casual
@@ -212,11 +208,13 @@ other
 unclear
 ```
 
-multi-label可。v1必須metricにはしない。
+multi-label可、v1必須Metric外。
 
 ## 10. Scene Boundary Analyzer
 
-03 automatic base structure内のBlock境界を評価する。Analyzer IDは `scene-boundary-detector`。
+Analyzer ID: `scene-boundary-detector`。
+
+入力は03 automatic base StructureRevisionの**1 base Sceneずつ**。候補位置はそのScene内Block境界だけ。
 
 出力:
 
@@ -242,15 +240,52 @@ participant_reset
 context_reset
 ```
 
-09 `AnalysisPolicy.scene_boundary_auto_apply` 以上は03がsemantic StructureRevisionへ自動materializeする。初期default 0.85。
+validator:
 
-`scene_boundary_candidate_min` 以上/auto_apply未満はproposalとして保存する。初期default 0.60。proposalをReviewItemへ自動投入する必要はなく、Structure画面で「候補表示」を選択した場合に表示する。
+- `after_block_id` が入力base Scene所属Blockであること。
+- Scene末尾Blockは候補にしない。既にScene終端だからである。
+- separator/heading由来既存境界へ重複candidateを作らない。
+- confidence 0〜1。
+- reasonはknown enum、最低1件。
 
-## 11. Confidence policy
+invalid candidateだけを捨て、他候補は保持する。
 
-正本は09 AnalysisPolicy。
+## 11. Boundary Annotation
 
-初期default:
+有効candidateは03と同じ契約で保存する。
+
+```text
+annotation_type = scene_boundary_candidate
+subject_type = block
+subject_id = after_block_id
+analysis_run_id = boundary run
+confidence = candidate confidence
+value_json = {
+  "base_structure_revision_id": 7,
+  "reasons": ["time_shift"]
+}
+```
+
+Runの `structure_revision_id` も同じbase revisionを指す。二重情報はmaterialize時の整合validationに使う。
+
+## 12. Boundary適用
+
+09 AnalysisPolicy:
+
+```text
+scene_boundary_auto_apply = 0.85
+scene_boundary_candidate_min = 0.60
+```
+
+- >= auto_apply: 03 Semantic Structureへ自動materialize候補。
+- candidate_min以上/auto_apply未満: proposalとして保存。
+- candidate_min未満: DBへcandidate Annotationを保存しなくてよい。AnalysisRun output countにも含めない。
+
+ReviewQueueへ自動追加しない。
+
+## 13. Confidence policy
+
+09 AnalysisPolicyが正本。
 
 ```text
 scene_label_effective = 0.80
@@ -259,23 +294,23 @@ scene_boundary_auto_apply = 0.85
 scene_boundary_candidate_min = 0.60
 ```
 
-threshold未満の判定はraw inferenceとして保持する。threshold未満を強制的に`other`へ置換しない。effective viewでは`unclear`を返す。
+threshold未満Scene/Block分類はraw inferenceとして保存し、effective viewでは `unclear`。
 
-## 12. Chunking
+## 14. Chunking / Reduce
 
-Sceneが30,000 code pointsを超える場合:
+Scene >30,000 code points:
 
-- Block境界で最大15,000 code pointsのchunk
+- Block境界で最大15,000 code points chunk
 - 各chunk分類
-- function/toneはconfidence付き候補を統合
-- pace/information_load/interactionはchunk summaryからreduce call
+- function/toneはlabelごとに最高confidenceを採用しthreshold前のraw候補集合を作る
+- `unclear` が1 chunkに出ただけで他labelを消さない
+- 統合後、具体labelが1件以上残れば`unclear`を除く。具体labelが0なら`unclear`
+- pace/information_load/interactionはchunk summaryからreduce callしsingle value
 - POV矛盾は`unclear`
 
-provider tokenizerへ依存せずcode pointで分割する。
+Boundary Analyzerは隣接chunk境界周辺Blockを重複contextとして含めてよいが、出力Block IDは一意dedupeする。
 
-Scene Boundary Analyzerはbase Sceneごとに処理し、30,000超では隣接chunk境界周辺Blockも重複contextとして含める。
-
-## 13. Version
+## 15. Version
 
 ```text
 scene-semantic-classifier v1
@@ -285,32 +320,29 @@ scene-boundary-detector v1
 scene-taxonomy-v1
 ```
 
-taxonomy変更はtaxonomy versionを上げる。
+## 16. Test
 
-## 14. テスト
-
-- 日常会話
-- 設定説明
-- 会議
-- 内省
-- action
-- travel
-- reveal
-- dialogueだがexposition主体
-- conflictだが会話率低
-- unclear分類
+- daily/exposition/meeting/introspection/action/travel/reveal/conflict
+- unclear + otherの区別
+- chunk reduceでconcrete labelとunclear混在
 - POV shift
-- boundary high-confidence自動適用
-- boundary middle-confidence proposal
-- boundary low-confidence破棄
+- boundary candidate Block membership
+- Scene末尾candidate拒否
+- invalid candidateのみdrop
+- high candidate auto apply対象
+- middle candidate proposal
+- low candidate非保存
+- Annotation contract/base structure一致
 
-Model精度は14のevaluationで追跡し、CIではschema/invariantをgateする。
+Model精度は14 evaluationで追跡しCIはschema/invariant gate。
 
-## 15. Codex実装時の禁止事項
+## 17. Codex禁止事項
 
-- Sceneを単一scene_typeへ縮約しない。
-- functionを数値heuristicだけで決めない。
-- LLMがStructureRevision rowを直接編集しない。
-- block secondary tagを構成比で二重カウントしない。
-- 判断不能結果を無理に`other`へ確定しない。
-- boundary proposalごとにReviewItemを自動生成しない。
+- Sceneを単一scene_typeへ縮約
+- functionを数値heuristicだけで決定
+- LLMがStructure rowを直接編集
+- secondary tag二重カウント
+- 判断不能を`other`へ強制
+- boundary proposal全件ReviewItem化
+- arbitrary character offset boundary
+- `unclear` と具体labelの同時effective化

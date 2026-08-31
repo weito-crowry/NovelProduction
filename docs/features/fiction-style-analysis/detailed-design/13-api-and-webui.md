@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Style AnalysisのCORE機能を既存FastAPI/React WebUIへ統合するAPI契約、画面構成、job表示、query invalidationを確定する。authoring導線を壊さず独立featureとして追加する。
+Style AnalysisのCORE機能を既存FastAPI/React WebUIへ統合するAPI契約、画面構成、job表示、query invalidationを確定する。Authoring導線を壊さず独立featureとして追加する。
 
 上位仕様は `../basic-design.md`。
 
@@ -10,7 +10,7 @@ Style AnalysisのCORE機能を既存FastAPI/React WebUIへ統合するAPI契約�
 
 v1ではMCPへStyle Analysis toolを追加しない。`MCP/` はscope外、既存tool count 59を維持する。
 
-Style Analysis推論から既存character/world/canonを自動更新しない。
+Style Analysis推論から既存Character/World/Canonを自動更新しない。
 
 ## 3. API実装先
 
@@ -44,9 +44,28 @@ API/src/novel_api/
 /projects/{project_id}/style-analysis
 ```
 
-project解決/error contractは既存project scoped routeを再利用する。
+Project解決/error contractは既存project-scoped routeを再利用する。
 
-## 5. Source / Reference API
+## 5. Revision指定方針
+
+本文・Structure・解析結果を返すendpointでは、どのRevision/Runを表示しているかをresponseへ必ず含める。
+
+### 明示必須
+
+- Text本文取得: `text_revision_id`
+- Structure取得/編集: `structure_revision_id`
+- Lint: `text_revision_id + structure_revision_id + profile_version_no`
+- Profile export: `version_no`
+
+### Effective Run選択を許可するもの
+
+Semantics/Metricの通常UI表示は、`structure_revision_id` を明示した上で09のEffective AnalysisRun選択規則をserver側で使ってよい。Responseには採用した `analysis_run_id` を必ず返す。
+
+過去Runを厳密に表示したい場合はRun endpointを使う。
+
+この方針により「latest draft/latest structure」の暗黙参照は避けつつ、AnalyzerごとのRun IDを通常画面で毎回入力させない。
+
+## 6. Source / Reference API
 
 ```text
 POST   /imports
@@ -78,21 +97,29 @@ source_type = text | html_file | epub
 file
 ```
 
-response `202`:
+Response `202`:
 
 ```json
 {"import_id": 12, "job_id": 44, "status": "queued"}
 ```
 
-DELETE reference workは明示Purge、成功204。
+### DELETE Reference Work
 
-## 6. Document / Structure API
+明示Purge。成功204。
+
+実装は12のPurge transactionを呼ぶ。ReferenceWorkだけでなく、そのWork専用SourceであればSource/Snapshotまで削除する。
+
+UI confirmは通常の削除確認1回だけ。権利確認や追加二重確認はしない。
+
+## 7. Document / Text / Structure API
 
 ```text
 POST /project-episodes/{episode_id}/capture
 GET  /documents
 GET  /documents/{document_id}
+GET  /documents/{document_id}/revisions
 GET  /documents/{document_id}/text
+GET  /documents/{document_id}/structures
 GET  /documents/{document_id}/structure
 GET  /documents/{document_id}/structure/boundary-proposals
 POST /documents/{document_id}/scenes/{scene_id}/split
@@ -105,7 +132,9 @@ POST /documents/{document_id}/scenes/merge
 {"draft_id": 123}
 ```
 
-latestへ暗黙解決しない。response:
+latestへ暗黙解決しない。
+
+Response:
 
 ```json
 {
@@ -115,7 +144,46 @@ latestへ暗黙解決しない。response:
 }
 ```
 
-Structureはcapture時に必須生成しない。`analyze` deterministic/fullが指定TextRevisionからbuild/reuseする。
+Structureはcapture時に必須生成しない。
+
+### GET text
+
+```text
+GET /documents/{document_id}/text?text_revision_id=10
+```
+
+Responseに `text_revision_id`, `raw_sha256`, `canonical_sha256`, `canonical_text`。
+
+`text_revision_id` 省略は422。
+
+### GET structure
+
+```text
+GET /documents/{document_id}/structure?structure_revision_id=9
+```
+
+Responseに:
+
+```text
+text_revision_id
+structure_revision_id
+source_kind
+parent_structure_revision_id
+semantic_source_run_id nullable
+scenes/blocks/sentences
+```
+
+`structure_revision_id` 省略は422。
+
+### Boundary proposals
+
+```text
+GET /documents/{document_id}/structure/boundary-proposals?base_structure_revision_id=7
+```
+
+09のEffective AnalysisRun選択で対象 `scene-boundary-detector` Runを選び、responseに `boundary_analysis_run_id` を返す。
+
+厳密な過去Runを見たい場合はRun output endpointを使う。
 
 ### split
 
@@ -140,7 +208,7 @@ Structureはcapture時に必須生成しない。`analyze` deterministic/fullが
 }
 ```
 
-## 7. Analysis / Job API
+## 8. Analysis / Job API
 
 ```text
 POST /documents/{document_id}/analyze
@@ -149,11 +217,14 @@ POST /jobs/{job_id}/cancel
 POST /jobs/{job_id}/retry
 GET  /analysis-runs
 GET  /analysis-runs/{run_id}
+GET  /analysis-runs/{run_id}/outputs
+GET  /analysis-runs/{run_id}/measurements
+GET  /documents/{document_id}/semantics
 GET  /documents/{document_id}/metrics
 GET  /documents/{document_id}/scenes/{scene_id}/metrics
 ```
 
-request:
+Analyze request:
 
 ```json
 {
@@ -163,14 +234,46 @@ request:
 }
 ```
 
-- `text_revision_id` required。
-- `structure_revision_id` optional。
-- omitted: automatic Structure build/reuse、fullならsemantic boundaryをmaterialize。
-- provided: exact Structureを使用。manual Structureではboundary auto applyを再実行しない。
+- `text_revision_id` required
+- `structure_revision_id` optional
+- omitted: automatic Structure build/reuse、fullならSemantic Boundaryをmaterialize
+- provided: exact Structureを使用。Scene Boundary Detectorを再実行しない
 
 `preset=full` でprovider未設定ならjob作成前に `409 ANALYZER_PROVIDER_UNAVAILABLE`。
 
-## 8. Corpus API
+### GET semantics
+
+```text
+GET /documents/{document_id}/semantics?structure_revision_id=9
+```
+
+09 Effective AnalysisRun選択に従ってEntity/Speaker/Term/Scene Semanticsのeffective/raw概要を返す。ResponseはAnalyzerごとの採用Run ID一覧を含む。
+
+```json
+{
+  "structure_revision_id": 9,
+  "selected_runs": {
+    "speaker-attribution": 31,
+    "scene-semantic-classifier": 33
+  },
+  "...": "..."
+}
+```
+
+### GET metrics
+
+```text
+GET /documents/{document_id}/metrics?structure_revision_id=9&group=basic
+GET /documents/{document_id}/metrics?structure_revision_id=9&group=semantic
+```
+
+Responseに採用 `analysis_run_id` を含める。
+
+Scene metricsも同じgroup/Structure指定。
+
+過去Runを完全固定したい場合は `/analysis-runs/{run_id}/measurements` を使う。
+
+## 9. Corpus API
 
 ```text
 GET    /corpora
@@ -187,9 +290,9 @@ GET    /corpora/{corpus_id}/metrics
 GET    /corpora/compare
 ```
 
-Compareは2〜5 Corpus、metric最大20。
+Compareは2〜5 Corpus、Metric最大20。
 
-## 9. Profile API
+## 10. Profile API
 
 Profile identityとVersionを分離する。
 
@@ -207,39 +310,93 @@ GET    /profiles/{profile_id}/versions/{version_no}/export
 POST   /profiles/import
 ```
 
-- PATCHはname/descriptionだけ。
-- version作成endpointでrules snapshotを全送信。
-- active/archiveはProfile identity statusだけ変更。
-- ProfileVersion/Ruleはupdateしない。
+- PATCH: name/descriptionだけ
+- Version作成: Rules snapshot全送信
+- ProfileVersion/Ruleはupdateしない
 
-## 10. Review API
+### Activate
+
+Request:
+
+```json
+{"version_no": 3}
+```
+
+08に従い、同Profile所属Versionを検証して:
+
+```text
+status = active
+active_version_id = selected version
+```
+
+を1 transactionで更新する。
+
+新Version作成だけではactive versionを切替えない。
+
+Profile detail/list response:
+
+```text
+status
+active_version_no nullable
+latest_version_no
+```
+
+Lint/Exportはactive/latestへ暗黙読み替えしない。
+
+### Archive
+
+Profile identity statusを `archived` にする。active_version_idは履歴として保持可。
+
+## 11. Review / Direct Override API
+
+ReviewQueue:
 
 ```text
 GET  /review-items
 GET  /review-items/{item_id}
 POST /review-items/{item_id}/confirm
 POST /review-items/{item_id}/reject
-POST /review-items/{item_id}/override
 POST /review-items/{item_id}/ignore
 ```
 
 ReviewItem writeは `expected_version`。
 
-Override body:
+Direct OverrideはReviewItemを経由しないendpointを用意する。
+
+```text
+POST /overrides
+```
+
+Request例:
 
 ```json
 {
+  "subject_type": "block",
+  "subject_id": 55,
+  "field_path": "block.speaker_entity_id",
+  "operation": "set",
   "value": 3,
   "structure_revision_id": 9,
+  "base_analysis_run_id": 31,
   "note": null
 }
 ```
 
-`note` optional。別の汎用effective tokenは要求しない。
+- `note` optional
+- Structure依存subjectだけ `structure_revision_id` required
+- 汎用二重CAS tokenは要求しない
 
-低confidence推論一覧はReviewItem化せず、Document Semantics API/filterから参照可能にする。
+Inference confirm/rejectをReviewItemなしで行う必要がある場合:
 
-## 11. Lint API
+```text
+POST /inference-reviews
+```
+
+に `subject/field_path/analysis_run_id/status/note` を送る。
+
+低confidence結果はReviewItem化せずDocument Semanticsから直接確認・Overrideできる。
+
+## 12. Lint API
 
 ```text
 POST /documents/{document_id}/lint
@@ -249,7 +406,7 @@ GET  /lint-runs/{lint_run_id}/findings
 POST /findings/{finding_id}/review
 ```
 
-request:
+Request:
 
 ```json
 {
@@ -260,9 +417,11 @@ request:
 }
 ```
 
-response `202` + job ID。
+Response `202` + job ID。
 
-LintRun detailは:
+Profileがactiveでも `profile_version_no` 省略はしない。
+
+LintRun detail:
 
 ```text
 enabled_rule_count
@@ -272,20 +431,18 @@ coverage_ratio
 stale
 ```
 
-を返す。
+## 13. Pagination
 
-## 12. Pagination
-
-list endpointは既存pattern:
+List endpointは既存pattern:
 
 ```text
 limit default 50, max 200
 offset default 0
 ```
 
-cursor paginationはv1で導入しない。
+Cursor paginationはv1で導入しない。
 
-## 13. Error contract
+## 14. Error contract
 
 既存API envelopeを再利用。
 
@@ -294,14 +451,14 @@ cursor paginationはv1で導入しない。
 404 not found
 409 version conflict/provider unavailable/stale structure
 413 upload/source too large
-422 schema validation
+422 schema/revision validation
 500 invariant/internal
 502 external source/model upstream failure
 ```
 
-network import/model job中の失敗はJob errorとして返す。
+Network import/model job中の失敗はJob errorとして返す。
 
-## 14. WebUI実装先
+## 15. WebUI実装先
 
 ```text
 WEBUI/frontend/src/features/styleAnalysis/
@@ -324,7 +481,7 @@ WEBUI/frontend/src/features/styleAnalysis/
 
 既存 `src/api/client.ts` とquery cacheを使う。
 
-## 15. Route
+## 16. Route
 
 ```text
 /projects/:projectId/style-analysis
@@ -341,7 +498,7 @@ WEBUI/frontend/src/features/styleAnalysis/
 
 Project sidebarに `文体分析` 1件追加。
 
-## 16. Home
+## 17. Home
 
 ```text
 Reference Works count
@@ -351,7 +508,9 @@ Active Profiles count
 Latest Lint summary
 ```
 
-## 17. Sources
+`Latest Lint` はDashboard表示用の一覧順であり、解析入力としてlatestを暗黙利用する意味ではない。
+
+## 18. Sources
 
 - Narou/Kakuyomu URL入力
 - file upload
@@ -361,12 +520,18 @@ Latest Lint summary
 - refresh
 - purge
 
-画面上部に短い利用注意文を表示してよいが、blocking checkboxやrights selectは置かない。
+画面上部に短い利用注意文を表示してよいが、blocking checkbox/rights selectは置かない。
 
-## 18. Document Analysis
+Purge確認は1回。
+
+## 19. Document Analysis
 
 ```text
-Header: work / episode / text revision / structure revision / analysis status
+Header:
+  work / episode
+  TextRevision selector
+  StructureRevision selector
+  analysis status
 Tabs:
   Text
   Structure
@@ -374,28 +539,38 @@ Tabs:
   Metrics
 ```
 
+Text/Structure selector変更時はURL queryまたはcomponent stateで明示IDを保持する。
+
 ### Structure
 
-- automatic/semantic/manual revision種別表示
+- automatic/semantic/manual revision種別
+- parent revision
+- Semantic Structure生成元Boundary Run
 - Scene list
-- boundary proposal overlay on/off
+- boundary proposal overlay
 - manual split/merge
-
-semantic boundaryのauto apply済み箇所も元base structureとの差として表示可能にする。
 
 ### Semantics
 
 - Entity/Term/Speaker/Scene tags
 - unresolved/unclear filter
 - raw/effective切替
+- 採用AnalysisRun ID表示
+- Direct Override
 
-低confidence結果を修正したい場合だけOverride/Reviewへ進む。
+低confidence結果を修正したい場合だけ操作する。ReviewQueueへの移動は任意。
 
-## 19. Corpus / Compare
+### Metrics
+
+- Basic/Semantic group切替
+- 採用Metric Run ID
+- table + metric単位chart
+
+## 20. Corpus / Compare
 
 Corpus membership編集。
 
-Compareはtableを正本。chartはmetricごとに1 chart、異unit混在なし。
+Compareはtableを正本。ChartはMetricごとに1 chart、異unit混在なし。
 
 ```text
 median
@@ -404,17 +579,19 @@ sample count
 work count
 ```
 
-## 20. Profile Editor
+## 21. Profile Editor
 
-Profile identity fields:
+Identity:
 
 ```text
 name
 description
 status
+active version
+latest version
 ```
 
-Version rule table:
+Version Rule table:
 
 ```text
 enabled
@@ -428,22 +605,34 @@ severity policy
 source
 ```
 
-Saveはnew ProfileVersion。dirty guardは既存component再利用。
+Saveはnew ProfileVersion。active profileを編集してもSaveだけではactive versionを切替えない。
 
-## 21. Review
+UIは:
 
-左ReviewItem、右evidence/raw/effective/actions。
+```text
+保存
+保存して有効化
+```
 
-Queueにないlow-confidence結果はDocument Semanticsから直接Override可能にしてよい。
+を分けてよい。「保存して有効化」はVersion作成後Activate APIを呼ぶ。
 
-Scene boundary proposalはStructure画面を主導線とし、Review画面はユーザーがQueueへ追加した候補だけ扱う。
+Dirty guardは既存component再利用。
 
-## 22. Lint
+## 22. Review
+
+左ReviewItem、右evidence/actions。
+
+Queueにないlow-confidence結果はDocument Semanticsから直接Overrideする。
+
+Scene Boundary ProposalはStructure画面を主導線とする。
+
+## 23. Lint
 
 表示:
 
 ```text
 対象draft/TextRevision
+StructureRevision
 Profile/version
 coverage
 stale indicator
@@ -463,24 +652,25 @@ acknowledge/ignore
 
 coverage 0でもerror画面にせず「比較可能なMetricなし」。
 
-## 23. Job polling
+## 24. Job polling
 
 WebSocket/SSEは追加しない。
 
 TanStack Queryで `queued|running` の間2秒poll。終了statusで停止。
 
-## 24. Query invalidation
+## 25. Query invalidation
 
-- import -> imports/referenceWorks
-- analysis -> document/structure/runs/metrics/semantics
-- override -> semantics/metrics/jobs
-- aggregate -> corpus metrics
-- profile version -> profiles/profile versions
-- lint -> lint runs/findings
+- import/refresh/purge -> imports/referenceWorks/referenceEpisodes
+- analysis -> document structures/runs/metrics/semantics
+- Direct Override -> semantics/metrics/jobs
+- Aggregate -> Corpus metrics
+- Profile Version -> profiles/versions
+- Activate -> profile identity/list
+- Lint -> lint runs/findings
 
-全project queryを無差別invalidateしない。
+全Project queryを無差別invalidateしない。
 
-## 25. 操作性
+## 26. 操作性
 
 - input label
 - progress text
@@ -490,37 +680,44 @@ TanStack Queryで `queued|running` の間2秒poll。終了statusで停止。
 
 新規の独自安全確認modalは作らない。
 
-## 26. Testing
+## 27. Testing
 
 API:
 
-- project isolation
+- Project isolation
 - 202 job
-- optional structure revision
-- manual structureではboundary auto apply skip
-- Profile identity/version API
+- explicit Text/Structure retrieval
+- Effective Run response includes selected run ID
+- exact historical Run output/Measurement retrieval
+- optional Structure in Analyze
+- explicit StructureでBoundary skip
+- Profile identity/Version/active Version API
+- Direct Override without ReviewItem
 - ReviewItem CAS
-- optional override note
-- purge
-- provider unavailable
+- Purgeで専用Source/Snapshot削除
+- Provider unavailable
 
 WEBUI:
 
 - import form
 - job polling stop
-- project A/B isolation
-- Structure boundary proposal表示
-- Profile version dirty guard
+- Project A/B isolation
+- Revision selector
+- Structure Boundary Proposal
+- Profile Save vs Save+Activate
+- Direct Override
 - Review conflict
 - Lint coverage/stale
-- purge confirm
+- Purge confirm 1回
 
-## 27. Codex実装時の禁止事項
+## 28. Codex実装時の禁止事項
 
 - MCP tool/countを変更しない。
 - WebSocket/SSEを追加しない。
 - 独自API client/query cacheを作らない。
-- authoring DBを推論で自動更新しない。
-- source importにrights_basis/同意checkboxを再追加しない。
-- full analysisに毎回確認dialogを追加しない。
-- Profile identityとVersion endpointを混同しない。
+- Authoring DBを推論で自動更新しない。
+- Source importにrights_basis/同意checkboxを再追加しない。
+- Full Analysisに毎回確認dialogを追加しない。
+- Text/Structure/Lint入力をlatestへ暗黙解決しない。
+- Profile Version作成だけでactive Versionを勝手に切替えない。
+- Low-confidence修正を必ずReviewQueue経由にしない。

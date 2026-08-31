@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-複数作品・episode・SceneのMeasurementを集約し、比較可能なCorpus統計と執筆時のStyleProfileへ変換する。実測値・集約値・目標ruleを分離する。
+複数作品・episode・SceneのMeasurementを集約し、比較可能なCorpus統計と執筆時のStyleProfileへ変換する。実測値・集約値・目標Ruleを分離し、Profileのstable identityとimmutable Versionも分離する。
 
 上位仕様は `../basic-design.md`。
 
@@ -28,7 +28,7 @@ created_at
 updated_at
 ```
 
-work membership:
+Work membership:
 
 ```text
 corpus_id
@@ -37,9 +37,9 @@ include_all_episodes
 created_at
 ```
 
-episode単位overrideは `style_corpus_episode_memberships`。
+Episode単位overrideは `style_corpus_episode_memberships`。
 
-1 reference workは複数Corpusへ所属可。
+1 Reference Workは複数Corpusへ所属可。
 
 ## 4. Aggregate
 
@@ -77,15 +77,15 @@ max
 
 ## 5. Aggregate単位
 
-Aggregateは**Measurement rowを観測単位として等重み**で集約する。
+AggregateはMeasurement rowを観測単位として等重みで集約する。
 
-- episode scope: episode Measurementを1観測
+- episode scope: Episode Measurementを1観測
 - scene filter: Scene Measurementを1観測
-- character scope: character Measurementを1観測
+- character scope: Character Measurementを1観測
 
-raw sentence等へ遡って再poolしない。これにより長い作品だけが自動的に重くならない。
+Raw sentence等へ遡って再poolしない。長い作品だけが自動的に重くならないようにする。
 
-将来work weightを導入する場合はAggregate policy versionを変える。
+将来Work weightを導入する場合はAggregate policy versionを変える。
 
 ## 6. Aggregate scope/filter
 
@@ -96,7 +96,7 @@ scene_label
 character
 ```
 
-`scene_label` は `scope_id` に親work/corpus ID、`filter_json` にtaxonomy条件。
+`scene_label` は `scope_id` に親Work/Corpus ID、`filter_json` にtaxonomy条件を入れる。
 
 ```json
 {
@@ -110,13 +110,14 @@ character
 ## 7. Aggregate input
 
 - current effective StructureRevisionのMeasurement
-- metric version一致
+- Metric version一致
 - Corpus membership内
-- semantic metricは07でcompleteと判定されたscopeのみ
-- rejected source/documentを除外
-- 同一target/metric/versionで複数runがある場合はcurrent effective succeeded run 1件
+- Semantic Metricは07でcompleteと判定されたscopeのみ
+- 同一target/metric/versionで複数runがある場合は09のeffective run選択に従う
 
-partial semantic runのうち成功Sceneから生成されたScene Measurementは利用可能。document全体の不完全metricは07でそもそも生成しない。
+Partial Semantic Runの成功Sceneから生成されたScene Measurementは利用可能。Document全体の不完全Metricは07で作らない。
+
+Reference Work purge後はCorpus membershipが消えるため、以後の再集約では対象外になる。過去Aggregate rowは履歴値として残してよい。
 
 ## 8. 統計式
 
@@ -127,7 +128,7 @@ partial semantic runのうち成功Sceneから生成されたScene Measurement�
 
 ## 9. Profile生成のsample policy
 
-固定値を各serviceへ散在させず、09 `AnalysisPolicy` を正本にする。
+固定値は09 `AnalysisPolicy` を正本にする。
 
 初期default:
 
@@ -138,15 +139,13 @@ profile_min_character_utterances = 10
 profile_min_term_samples = 5
 ```
 
-不足時はRuleを自動生成しない。これは品質保証の停止条件ではなく、単に「統計的参考範囲を作るには少なすぎる」という生成条件である。UIからmanual Ruleは作成可能。
+不足時はCorpus由来Ruleを自動生成しない。これは処理停止用の安全チェックではなく、自動生成条件である。UIからManual Ruleは作成可能。
 
-## 10. Profile identity/version
-
-旧案の「Profile row自体をversion snapshotにする」方式は採用しない。stable identityとimmutable versionを分離する。
+## 10. Profile identity / Version
 
 ### StyleProfile
 
-mutable identity/meta:
+Stable mutable identity/meta:
 
 ```text
 id
@@ -154,13 +153,22 @@ name
 description
 source_corpus_id nullable
 status = draft | active | archived
+active_version_id nullable
 created_at
 updated_at
 ```
 
+`active_version_id` は同Profileに属する `StyleProfileVersion.id` のみ許可する。DBの単純FKだけでは同一Profile所属を保証できないため、ProfileServiceで検証する。
+
+意味:
+
+- `draft`: `active_version_id` はNULLでよい
+- `active`: `active_version_id` 必須
+- `archived`: `active_version_id` は最後に採用していたVersionを保持してよい
+
 ### StyleProfileVersion
 
-immutable snapshot:
+Immutable snapshot:
 
 ```text
 id
@@ -176,7 +184,7 @@ UNIQUE `(profile_id, version_no)`。
 
 `profile_version_id` に所属する。
 
-これによりprofile名/statusを変えても過去Rule snapshotを変更しない。
+Profile name/status/active versionを変更しても過去Rule snapshotを変更しない。
 
 ## 11. StyleRule
 
@@ -213,7 +221,7 @@ min = p25
 max = p75
 ```
 
-ratioは0〜1へclamp。
+Ratioは0〜1へclamp。
 
 p25=p75でもrangeを勝手に広げない。11がMetricDefinitionのzero-width toleranceを使う。
 
@@ -233,7 +241,7 @@ character_id
 
 複数条件AND、配列内OR。
 
-外部reference characterをproject characterへ名前一致で自動対応しない。
+外部Reference CharacterをProject Characterへ名前一致で自動対応しない。
 
 ## 14. Corpus比較
 
@@ -251,9 +259,19 @@ work_count
 
 異なるunitを同一chart axisへ混ぜない。
 
-## 15. Profile編集
+## 15. Profile作成・編集・Activation
 
-Profile Editorは現在versionのrulesをcopyして新versionを作る。
+### Corpusから作成
+
+1. StyleProfile identityを作る
+2. Version 1を作る
+3. Corpus AggregateからRule snapshotを作る
+4. 初期statusは `draft`
+5. `active_version_id` はNULL
+
+### Rule編集
+
+現在選択中VersionのRulesをcopyして新Versionを作る。
 
 編集可能:
 
@@ -263,11 +281,34 @@ Profile Editorは現在versionのrulesをcopyして新versionを作る。
 - enabled
 - severity_policy
 
-metric name/version/scopeを変更したい場合は旧Ruleをdisabledにして新Ruleを追加する。
+Metric name/version/scopeを変更したい場合は旧Ruleをdisabledにし、新Ruleを追加する。
 
-Profile `status` のactivate/archiveはversion contentを変更しない。
+### Activate
 
-## 16. Export/import
+Activate操作は必ずVersionを明示する。
+
+```text
+profile_id
+version_no
+```
+
+ProfileServiceはそのVersionが同Profile所属であることを検証し、1 transactionで:
+
+```text
+status = active
+active_version_id = selected version id
+updated_at更新
+```
+
+とする。
+
+新Version作成だけではactive versionを自動切替しない。ユーザーが保存と同時にactivateするUIを用意する場合でも、API内部ではVersion作成→Activateの明示2操作として扱う。
+
+Archiveは `status=archived` にする。active_version_idを消す必要はない。
+
+## 16. Export / Import
+
+ExportはVersionを明示する。
 
 ```json
 {
@@ -284,41 +325,61 @@ Profile `status` のactivate/archiveはversion contentを変更しない。
 
 Raw text、Entity/Mentionは含めない。
 
-unknown metric/versionは `unsupported_rules` としてimport結果へ返し、そのRuleをdisabledで保存してよい。Profile全体を拒否しない。
+Unknown Metric/Versionは `unsupported_rules` として返し、そのRuleをdisabledで保存してよい。Profile全体を拒否しない。
+
+Import後はdraft Profile + Versionを作る。unsupported Ruleがなくても勝手にactive化しない。
 
 ## 17. Aggregate再計算
 
-fingerprint入力:
+Fingerprint入力:
 
 - Corpus membership
 - input Measurement IDs/fingerprints
-- metric version
+- Metric version
 - filter
 - aggregate policy version
 
 Aggregateはappend-only。head tableは作らずfingerprint一致rowをreuseする。
 
-## 18. テスト
+## 18. API/UIへ返すCurrent Profile
+
+Profile一覧/detailでは以下を明示する。
+
+```text
+status
+active_version_no nullable
+latest_version_no
+```
+
+`latest_version_no` は表示用。LintやExportの入力をlatestへ暗黙読み替えしない。
+
+## 19. テスト
 
 - membership重複禁止
 - episode include/exclude
 - equal-weight Measurement aggregate
 - p25/median/p75
 - sample不足時auto Ruleなし
-- manual Ruleはsample不足でも作成可
+- Manual Ruleはsample不足でも作成可
 - Profile identityとVersion分離
 - version_no uniqueness
-- status変更でVersion不変
+- Version immutable
+- active時active_version必須
+- active Versionが同Profile所属か検証
+- 新Version作成でactive Versionが勝手に切替わらない
+- archiveでVersion不変
 - scope validation
-- exportに本文なし
+- Exportに本文なし
 - unsupported Rule import disabled
+- Importはdraft
 - effective Measurement重複排除
 
-## 19. Codex実装時の禁止事項
+## 20. Codex実装時の禁止事項
 
 - Measurementを直接StyleRuleとして保存しない。
 - raw観測を勝手に再poolして長編作品へ重みを付けない。
 - sample不足を0値Ruleにしない。
-- cross-work characterを名前一致で統合しない。
-- Profile version contentをupdateしない。
-- raw本文をProfile exportへ含めない。
+- cross-work Characterを名前一致で統合しない。
+- ProfileVersion/Ruleをupdateしない。
+- active Versionを暗黙latestへ切替しない。
+- Raw本文をProfile exportへ含めない。

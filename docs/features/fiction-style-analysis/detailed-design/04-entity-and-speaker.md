@@ -20,22 +20,37 @@ CORE/src/novel_core/style_analysis/
     relations.py
 ```
 
-LLM通信は09の `SemanticModelClient` 経由。COREからprovider SDKをimportしない。
+LLM通信は09 `SemanticModelClient` 経由。
 
 ## 3. Entity scope
 
-Entityの所属scopeは次のどちらか一方。
+Entityは次のどちらか一方へ所属する。
 
 ```text
-reference_work_id  # reference作品。全episode共通
- document_id       # project draft等、単独document
+reference_work_id  # reference作品全episode共通
+document_id        # project draft等の単独document
 ```
 
-両方NULL、両方非NULLは禁止する。
+両方NULL/両方非NULLは禁止。
 
-reference作品では人物・組織・場所をepisode単位に分断しない。project draft解析では既存NovelProduction `characters` へ自動mergeせず、Style Analysis document内Entityとして扱う。
+reference作品では人物・組織・場所をepisode単位に分断しない。project draftでは既存 `characters` へ自動mergeしない。
 
-## 4. Entity種別
+## 4. Entity identity
+
+Entity rowは「同一実体のstable identity」。再解析のたびにcanonical_name/statusを推論で上書きしない。
+
+```text
+id
+reference_work_id nullable
+document_id nullable
+entity_type
+canonical_name
+origin = inferred | manual
+created_by_run_id nullable
+created_at
+```
+
+`entity_type`:
 
 ```text
 person
@@ -48,25 +63,11 @@ event
 other
 ```
 
-Termは05で別管理する。
+初回自動抽出時は `origin=inferred`。ユーザーが直接作る場合は `manual`。
 
-## 5. Entity / Mention
+確認/却下/名称修正は10 `style_inference_reviews` / `ManualOverride` でoverlayする。これにより再解析履歴とidentityを混同しない。
 
-Entity:
-
-```text
-id
-reference_work_id nullable
-document_id nullable
-entity_type
-canonical_name
-description nullable
-status = inferred | confirmed | rejected | manual
-created_by_run_id nullable
-created_at
-```
-
-Mention:
+## 5. Mention
 
 ```text
 id
@@ -92,7 +93,7 @@ role_title
 implicit
 ```
 
-明示文字列のない省略主語はMentionを作らずannotationで扱う。Mention spanは必ず非ゼロ幅。
+明示文字列のない省略主語はMentionを作らずannotationで扱う。Mention spanは非ゼロ幅。
 
 ## 6. 解析順
 
@@ -104,17 +105,15 @@ Scene input
   -> Relation extraction
 ```
 
-reference作品のEntity resolution候補は同 `reference_work_id`。project documentは同 `document_id`。
+reference候補は同 `reference_work_id`、project候補は同 `document_id`。
 
 ## 7. Mention extraction
-
-Scene単位でモデルへ渡す。
 
 入力:
 
 - Scene text
 - Block ID/type/span
-- 同scopeの既存Entity一覧
+- 同scopeのEntity + effective canonical name/alias
 - 直前Scene末尾最大3Blockの人物名context
 
 出力例:
@@ -138,41 +137,46 @@ Scene単位でモデルへ渡す。
 
 offset validation:
 
-1. 指定位置とsurfaceが一致すれば採用。
-2. 不一致なら同Block内の一意な完全一致を1回だけ検索。
-3. 0件/複数件ならそのMentionだけ破棄しwarningを残す。
+1. 指定位置とsurface一致 -> 採用。
+2. 不一致 -> 同Block内一意完全一致を1回検索。
+3. 0件/複数件 -> そのMentionだけ破棄しwarning。
 
-単一Mentionのspan不整合でrun全体をfailさせない。
+単一Mention不整合でrun全体をfailさせない。
 
 ## 8. Entity resolution
 
 自動統合条件:
 
-1. canonical name完全一致
+1. effective canonical name完全一致
 2. confirmed/manual alias完全一致
-3. model同一判定が09 `AnalysisPolicy.entity_resolution_auto_merge` 以上
+3. model同一判定 >= `AnalysisPolicy.entity_resolution_auto_merge`
 
-初期defaultは `0.90`。
+初期default `0.90`。
 
-次は自動統合しない。
+自動統合しない:
 
 - 姓だけ一致
 - pronounだけ
 - 役職だけ
-- 同名人物候補が複数
+- 同名候補複数
 
-候補は最大20件。threshold未満は未解決Mentionとして保持する。未解決は正常状態であり、ReviewItemを必ず作る必要はない。
+候補最大20件。threshold未満は `entity_id=NULL` Mentionとして保持可能。unknownは正常状態。
+
+新Entityを作るのは「既存候補なし、または明確に別実体」と判定したproper name/alias候補。pronoun/role_title単独から新Entityを作らない。
 
 ## 9. Alias
 
 `style_entity_aliases`:
 
 ```text
+id
 entity_id
 alias
 alias_kind
-status
+origin = inferred | manual
+analysis_run_id nullable
 source_mention_id nullable
+created_at
 ```
 
 alias kind:
@@ -186,20 +190,20 @@ title
 role
 ```
 
-confirmed/manual aliasは再解析で維持する。
+自動aliasは生成runを必ず記録する。confirmed/manual相当はEffective Viewで優先され、再解析で削除しない。
 
 ## 10. Speaker attribution
 
-対象は `block_type=dialogue`。
+対象 `block_type=dialogue`。
 
-候補生成:
+候補:
 
 1. 同Scene person Entity
-2. 前後2BlockにMentionがあるperson
-3. 直前dialogue speaker
+2. 前後2Block Mention person
+3. 直前dialogue effective speaker
 4. Scene participant
 
-モデルへ対象前後最大4Blockを渡す。
+モデルへ対象前後最大4Block。
 
 ```json
 {
@@ -222,49 +226,43 @@ scene_context
 unknown
 ```
 
-thresholdは09 AnalysisPolicyを正本とする。
+thresholdは09 AnalysisPolicy:
 
 ```text
 speaker_effective = 0.85
 speaker_candidate = 0.60
 ```
 
-- >= effective: inferred speakerとして利用。
-- candidate以上/effective未満: 候補として保存、effectiveはunknown。
-- candidate未満: entity_idをeffectiveにしない。
+- >= effective: inferred effective speaker。
+- candidate以上/effective未満: raw candidate保存、effective unknown。
+- candidate未満: effective unknown。
 
-Turn-takingだけを根拠にeffective thresholdを超えない。
+Turn-takingだけでeffective thresholdを超えない。
 
 ## 11. Speaker Annotation
-
-Block rowへspeaker列を追加せず `style_annotations` に保存する。
 
 ```text
 annotation_type = speaker
 subject_type = block
 subject_id = block_id
-value_json = {"entity_id": 3}
+value_json = {"entity_id": 3, "reason_code": "...", "evidence_block_ids": [...]}
 confidence
 analysis_run_id
 ```
 
-ManualOverrideは10のEffective Viewでoverlayする。
+Block rowへspeaker列を追加しない。
 
 ## 12. Scene participant
 
-person Entityが以下のいずれかを満たせばparticipant。
-
 - Scene内Mentionあり
 - effective speaker
-- modelが非発話参加者として09 policy threshold以上
+- model非発話参加者 >= `participant_effective`（初期0.80）
 
-初期 `participant_effective=0.80`。
-
-過去について名前が言及されただけの人物はparticipantにしない。
+過去文脈の名前言及だけならparticipantにしない。
 
 ## 13. Relation
 
-v1は文体探索に使える最小限。
+v1:
 
 ```text
 speaks_to
@@ -278,20 +276,24 @@ subordinate
 other
 ```
 
-`co_present` はparticipantsから決定論的生成可能。恒常関係はinferredのままでよく、文体metricの必須入力にしない。
+`co_present` はparticipantsから決定論的生成可。恒常関係は文体Metric必須入力にしない。
+
+Relation rowは `analysis_run_id` を持ち、自動再解析で旧Relationをupdateしない。
 
 ## 14. Project character link
-
-既存characterとの対応が必要な場合だけ `style_entity_links` を使う。
 
 ```text
 style_entity_id
 project_character_id
-status = inferred | confirmed | manual
+origin = inferred | manual
 confidence nullable
+analysis_run_id nullable
+created_at
 ```
 
-confirmed/manual linkだけ人物別StyleProfile比較へ使用する。名前一致で自動リンクしない。
+自動linkをv1で作る必要はない。UIから明示linkした場合は `manual`。将来自動linkする場合も生成runを記録する。
+
+人物別project Profile比較に使うのはmanual/confirmed effective linkだけ。名前一致自動link禁止。
 
 ## 15. Prompt/version
 
@@ -302,42 +304,41 @@ speaker-attribution v1
 entity-relation-extractor v1
 ```
 
-promptは `CORE/src/novel_core/style_analysis/prompts/` にversion付きresourceとして置く。
+promptはversion付きresource。
 
 ## 16. Review方針
 
-低confidence結果を無差別にReviewQueueへ積まない。
+Speaker/Entityの低confidence・候補複数を理由にReviewItemを自動生成しない。raw candidate/unknownはSemantics画面のfilterで確認する。
 
-ReviewItemを自動作成するのは初期状態では次だけ。
+ReviewItemを作るのは次だけ。
 
-- modelが複数Entity候補の明示conflictを返した
-- user-visible speaker解析で候補が複数かつconfidence差が小さい
-- manual operationの対象Entityが解決不能
+- ユーザーがSemantics画面から「Reviewへ追加」を明示したsubject
+- stale ManualOverride移行のようにReview workflow自体が必要なもの
 
-その他のunknown/未解決結果はSemantics画面のfilterで確認可能にする。
+したがって「候補confidence差が小さい」のような追加heuristicはReviewServiceへ実装しない。
 
 ## 17. テスト
 
-- reference work内episode跨ぎEntity resolution
-- project document scope分離
-- surface offset validation
+- reference work episode跨ぎEntity resolution
+- project scope分離
+- Entity identity再解析で上書きなし
+- alias analysis_run provenance
+- offset validation
 - exact alias resolution
 - ambiguous alias非merge
-- candidate filtering
-- policy threshold
-- explicit speech tag attribution
+- explicit speech attribution
 - turn-takingだけではeffectiveにしない
 - 3人会話unknown
 - 同姓人物誤統合なし
+- low-confidence/候補複数でもReviewItem自動生成なし
 
-Gold datasetの精度値は14の評価方針に従い、CI hard gateにしない。
+## 18. Codex禁止事項
 
-## 18. Codex実装時の禁止事項
-
-- 全dialogueへspeakerを強制割当しない。
-- surname一致だけでEntity mergeしない。
-- existing character tableへ推論結果を書き込まない。
-- model offsetを検証なしで保存しない。
-- relation抽出をworld/canon自動更新へ接続しない。
-- provider SDKをCOREへ追加しない。
-- unknown結果ごとにReviewItemを大量生成しない。
+- 全dialogue speaker強制割当
+- surname一致だけでmerge
+- Entity identity rowを再解析でupdate
+- existing character tableへ推論write
+- model offset無検証保存
+- world/canon自動更新
+- provider SDKをCOREへ追加
+- speaker ambiguity heuristicでReviewItemを自動量産

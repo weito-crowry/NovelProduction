@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Document解析Analyzerを依存関係付きDAGとして実行し、入力revision・設定・model・promptをfingerprint化する。前処理・Corpus集約・Profile生成・LintをAnalysisRunへ無理に押し込まず、責務を分離する。
+Document解析Analyzerを依存関係付きDAGとして実行し、入力revision・設定・model・promptをfingerprint化する。前処理、Structure作成、Corpus集約、Profile生成、LintをAnalysisRunへ押し込まず責務を分離する。
 
 上位仕様は `../basic-design.md`。
 
@@ -25,11 +25,9 @@ API/src/novel_api/style_analysis/
   model_client.py
 ```
 
-## 3. Runtime責務の分離
+## 3. Runtime責務
 
-### AnalysisRunで管理するもの
-
-既存 `TextRevision` / `StructureRevision` を入力としてDocument内に派生データを作るAnalyzer。
+### AnalysisRun対象
 
 ```text
 scene-boundary-detector
@@ -47,16 +45,14 @@ style-metrics-basic
 style-metrics-semantic
 ```
 
-### AnalysisRunに入れないもの
+### AnalysisRun対象外
 
-- normalization: TextRevision作成処理。02のversion/hashで再利用。
-- deterministic segmentation: StructureRevision作成処理。03のversion/fingerprintで再利用。
-- semantic Structure materialization: 03 StructureService。
-- Aggregate: 08 AggregateService/job。
-- Profile生成: 08 ProfileService/job。
-- Lint: 11 LintRun/job。
-
-これにより `AnalysisRun` が「自分のinputを自分で生成する」循環を作らない。
+- normalization: 02 TextRevision作成
+- deterministic segmentation: 03 automatic StructureRevision
+- semantic Structure materialization: 03 StructureService
+- Aggregate: 08 AggregateService/job
+- Profile: 08 ProfileService/job
+- Lint: 11 LintRun/job
 
 ## 4. Analyzer契約
 
@@ -86,13 +82,11 @@ class Analyzer(Protocol):
     def run(self, context: AnalyzerContext) -> AnalyzerResult: ...
 ```
 
-AnalysisServiceがtransaction/fingerprintを管理する。
+AnalysisServiceがrun state/fingerprint/transactionを管理する。
 
 ## 5. AnalysisPolicy
 
-confidence thresholdやsample最小値を各Analyzerへ散在させない。
-
-`analysis_policy.py` にversioned dataclassを置く。
+唯一のthreshold/sample policy正本。
 
 ```python
 @dataclass(frozen=True)
@@ -115,41 +109,66 @@ class AnalysisPolicy:
     profile_min_term_samples: int = 5
 ```
 
-初期値は実装判断ではなく本設計で確定。将来調整時はpolicy versionを上げ、fingerprintへ含める。
+調整時はversionを上げfingerprintへ含める。
 
-## 6. Orchestration
+## 6. Effective AnalysisRun選択
+
+同一target/analyzerに複数runが存在し得るため、repositoryに1つの選択規則を実装する。
+
+候補条件:
+
+```text
+same document_id
+same text_revision_id
+same structure_revision_id
+same analyzer_id
+status in succeeded | partial
+```
+
+### succeededを要求するconsumer
+
+Basic document Metric等、complete outputが必要なconsumerは最新の `succeeded` runだけを選ぶ。
+
+### partial subjectを利用可能なconsumer
+
+Scene単位のSemantics表示や07のcomplete Scene Metricは、最新 `succeeded` がなければ最新 `partial` runの成功subject outputを利用可能。
+
+「最新」は `created_at DESC, id DESC`。fingerprint一致の古いrunを新しい異fingerprint runより優先しない。
+
+ManualOverrideはrun選択後にEffective Viewとしてoverlayする。
+
+## 7. Orchestration
 
 ### deterministic preset
 
 ```text
-指定TextRevision
--> automatic StructureRevisionを作成/reuse
+TextRevision
+-> automatic Structure build/reuse
 -> style-metrics-basic
 ```
 
-### full preset
+### full preset: structure未指定
 
 ```text
-指定TextRevision
--> automatic StructureRevisionを作成/reuse
--> scene-boundary-detector(base structure)
--> semantic StructureRevisionをmaterialize/reuse
--> entity mention/resolution
--> term candidate/resolution
--> speaker/relation
--> term explanation
--> scene/block/POV semantics
--> style-metrics-basic(final structure)
--> style-metrics-semantic
+TextRevision
+-> automatic base Structure build/reuse
+-> scene-boundary-detector(base)
+-> semantic Structure materialize/reuse
+-> final Structure決定
+-> Entity/Term/Speaker/Semantics analyzers
+-> style-metrics-basic(final)
+-> style-metrics-semantic(final)
 ```
 
-Boundary Detectorがcandidateを1件も自動適用しなければbase structureをfinalとしてreuseする。
+Boundary Detector runのcandidate Annotationから03がsemantic Structureを作る。生成時 `style_structure_analysis_sources` にRun provenanceを記録する。
 
-manual StructureRevisionをrequestで明示した場合、Scene Boundary Detectorを再適用せず、そのmanual revisionをfinal structureとして後続解析する。
+### full preset: structure明示
 
-## 7. Dependency DAG
+requestのStructureRevisionをfinalとして使用する。`manual` だけでなく `automatic/semantic` も指定可。**明示Structureがある場合はScene Boundary Detectorを再実行しない。** ユーザーがrevisionを固定した意図を優先する。
 
-final StructureRevision確定後:
+## 8. Dependency DAG
+
+final Structure確定後:
 
 ```text
 entity-mention-extractor
@@ -173,9 +192,9 @@ block-semantic-classifier
   -> style-metrics-semantic
 ```
 
-cycleはregistry初期化時に検出し起動error。
+cycleはregistry初期化時error。
 
-## 8. AnalysisRun
+## 9. AnalysisRun
 
 ```text
 id
@@ -211,7 +230,7 @@ failed
 cancelled
 ```
 
-## 9. Fingerprint
+## 10. Fingerprint
 
 canonical JSON SHA-256。
 
@@ -219,53 +238,63 @@ canonical JSON SHA-256。
 analyzer_id/version
 input text hash
 structure fingerprint
-sorted dependency fingerprints
+sorted dependency run fingerprints
 config
 policy version
 model provider/id if model-based
 prompt id/version if model-based
 taxonomy version if applicable
-metric definition versions if applicable
+MetricDefinition versions if applicable
 ```
 
-serialization: sorted keys、compact separators、UTF-8、ensure_ascii=false。
+serialization: sorted keys, compact separators, UTF-8, ensure_ascii=false。
 
-`succeeded` fingerprint一致をcache hit。`partial/failed` は自動reuseしない。
+`succeeded` fingerprint一致のみcache hit。`partial/failed` はreuseしない。
 
-## 10. Partial policy
+## 11. Scene Boundary provenance
 
-「失敗率10%」のような任意閾値は設けない。
+Boundary Detector自身はbase StructureRevisionを入力に通常のAnalysisRunを作る。
+
+- `AnalysisRun.structure_revision_id` = automatic base。
+- candidateは06/03契約のAnnotation。
+- semantic StructureはRun outputではなく03 StructureServiceのmaterialized projection。
+- semantic Structure作成後 `style_structure_analysis_sources` でRunをlink。
+- semantic Structure fingerprintは03定義を正本。
+
+後続Analyzerはsemantic Structureを入力とするため、dependency_run_idsへBoundary Detectorを直接含める必要はない。Structure fingerprintがそのprovenanceを表現する。
+
+## 12. Partial policy
+
+任意失敗率thresholdは置かない。
 
 Scene/Block単位Analyzer:
 
-- 1件以上usable outputがあり、一部subjectだけ失敗: `partial`
-- usable outputが0件、provider/contract/storage等の全体失敗: `failed`
-- 全subject成功: `succeeded`
+- 全subject成功 -> succeeded
+- usable output >=1かつ一部失敗 -> partial
+- usable output 0、またはprovider/contract/storage全体失敗 -> failed
 
-`partial` の成功subject出力は保持する。07がcoverageを見て、complete scopeだけMeasurementを生成する。
+partial成功subject outputは保持。07がscope completenessを判断する。
 
-これにより1 Scene失敗だけで全episode解析を捨てない。
-
-## 11. 変更伝播
+## 13. 変更伝播
 
 | 変更 | stale/recompute |
 |---|---|
-| raw text/normalizer | Structure以降全部 |
+| raw/normalizer | Structure以降全部 |
 | automatic segmenter | Boundary/Semantic/Metric |
 | semantic/manual Structure | Semantic/Metric |
-| entity extractor | resolver/speaker/relation、speaker metric |
-| speaker override | speaker metric、Aggregate、Lint |
-| term analyzer | term metric、Aggregate、Lint |
-| taxonomy/classifier | scene Aggregate、semantic metric、Lint |
+| Entity analyzer | resolver/speaker/relation、speaker Metric |
+| speaker override | speaker Metric、Aggregate、Lint |
+| Term analyzer/Term attribute | term Metric、Aggregate、Lint |
+| taxonomy/classifier | scene Aggregate、semantic Metric、Lint |
 | MetricDefinition | Aggregate/Profile/Lint |
-| AnalysisPolicy | 影響するAnalyzer/Structure/Profile以降 |
-| Profile version | Lintのみ |
+| AnalysisPolicy | 影響Analyzer/Structure/Profile以降 |
+| ProfileVersion | Lintのみ |
 
 row deleteでinvalidateしない。
 
-## 12. Persisted job
+## 14. Persisted job
 
-v1はRedis/Celery不要。API process内worker thread 1本。
+API process内worker thread 1本、FIFO、同時実行1。
 
 ```text
 style_jobs
@@ -292,38 +321,36 @@ build_profile
 run_lint
 ```
 
-FIFO、同時実行1。
+## 15. Restart
 
-## 13. 再起動
+起動時 `running` job/runを `failed / WORKER_INTERRUPTED`。queuedは続行。running自動requeueなし。
 
-API起動時、`running` job/runを `failed / WORKER_INTERRUPTED` にする。queuedは処理再開。runningを自動再queueしない。
-
-## 14. Transaction
+## 16. Transaction
 
 AnalysisRun:
 
-1. running状態commit
-2. Analyzer計算
-3. output + final run statusを1 transactionでpersist
-4. persistence失敗時rollback、run failed
+1. running commit
+2. compute
+3. output + final statusを1 transaction
+4. persistence失敗rollback + run failed
 
-partial出力も同じ1 transactionで保存する。
+partial outputも1 transaction。
 
-network fetch中はtransactionを開かない（01）。
+Source fetch transactionは01。
 
-## 15. Cancellation
+## 17. Cancellation
 
-queuedは即cancel。runningは`cancel_requested=1`。
+queued即cancel。runningは`cancel_requested=1`。
 
-確認境界:
+check point:
 
-- Scene/Block処理の間
-- source episode取得の間
+- Scene/Block間
+- source episode取得間
 - model call前後
 
-requestを強制killしない。cancelled outputはeffectiveに使わない。
+外部request強制killなし。cancelled outputはeffectiveに使わない。
 
-## 16. SemanticModelClient
+## 18. SemanticModelClient
 
 ```python
 @dataclass(frozen=True)
@@ -346,7 +373,7 @@ class SemanticModelClient(Protocol):
     def complete_json(self, request: ModelRequest) -> ModelResponse: ...
 ```
 
-## 17. API model adapter
+## 19. API model adapter
 
 v1:
 
@@ -354,8 +381,6 @@ v1:
 disabled
 openai_compatible
 ```
-
-設定:
 
 ```text
 STYLE_ANALYSIS_LLM_PROVIDER
@@ -367,19 +392,17 @@ STYLE_ANALYSIS_LLM_TIMEOUT_SECONDS default 60
 
 API keyはDB/log/AnalysisRunへ保存しない。
 
-`disabled` ならfull presetを開始できず `ANALYZER_PROVIDER_UNAVAILABLE`。deterministicは利用可能。
+Full analysis明示実行を送信開始操作とし、追加checkbox/dialogは必須にしない。UIはprovider/model名を表示する。
 
-UIは現在のprovider/model名を表示する。ユーザーが明示的に「Full analysis」を実行する操作自体を送信同意とみなし、追加checkboxや毎回の確認dialogは設けない。
-
-## 18. Model call
+## 20. Model call
 
 - temperature=0
 - timeout/429/5xx retry最大1回
-- schema invalidはrepair retry最大1回
-- repair失敗は対象subject失敗としてpartial/failed判定
+- schema invalid repair retry最大1回
+- repair失敗は対象subject失敗
 - raw response全文を通常logへ出さない
 
-## 19. API
+## 21. API
 
 ```text
 POST /projects/{project_id}/style-analysis/documents/{document_id}/analyze
@@ -390,34 +413,33 @@ GET  /projects/{project_id}/style-analysis/analysis-runs
 GET  /projects/{project_id}/style-analysis/analysis-runs/{run_id}
 ```
 
-`analyze`:
+analyze:
 
-- `text_revision_id` 必須。
+- `text_revision_id` required。
 - `structure_revision_id` optional。
-- omittedなら指定TextRevisionからautomatic/semantic structureをbuild/reuse。
-- providedならそのStructureRevisionがTextRevision所属であることを検証し、manual/semantic/automaticいずれも使用可。
+- provided Structureは同document/TextRevision所属を検証。
 
-## 20. テスト
+## 22. Test
 
-- DAG order/cycle
-- policy version fingerprint
+- DAG/cycle
+- policy fingerprint
+- effective run selection succeeded/partial/latest
 - cache hit/miss
-- manual StructureでBoundary Detector skip
-- semantic Structure materialization
+- omitted StructureでBoundary+semantic materialize
+- explicit StructureでBoundary skip
+- source link provenance
 - partial subject保持
-- failed no output
-- basic metric provider不要
-- restart recovery
-- FIFO/cancel
+- basic Metric provider不要
+- restart/FIFO/cancel
 - provider disabled
-- model retry/repair
+- retry/repair
 
-## 21. Codex実装時の禁止事項
+## 23. Codex禁止事項
 
-- normalize/segment/Aggregate/Profile/Lintを無理にAnalysisRunへ入れない。
-- Celery/Redis/parallel workerを追加しない。
-- partial/failedをcache hitにしない。
-- confidence thresholdをAnalyzerごとに重複hard-codeしない。
-- provider SDKをCOREへ入れない。
-- model/provider変更をfingerprintから隠さない。
-- full analysis開始時に不要な確認dialogを追加しない。
+- normalize/segment/Aggregate/Profile/LintをAnalysisRunへ入れない。
+- Celery/Redis/parallel worker追加。
+- partial/failed cache hit。
+- threshold重複hard-code。
+- provider SDKをCOREへ入れる。
+- model/providerをfingerprintから隠す。
+- explicit Structure指定時にScene Boundaryを勝手に再適用。

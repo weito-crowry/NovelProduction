@@ -28,37 +28,33 @@ API/src/novel_api/style_analysis/
     epub.py
 ```
 
-CORE既存の `database.py`、Project Registry、authoring tableの責務は変更しない。
+既存 `database.py`、Project Registry、authoring tableの責務は変更しない。
 
 ## 3. 対応ソース
-
-初期 `source_type` は次で固定する。
 
 | source_type | 入力 | 通信 |
 |---|---|---|
 | `narou` | 作品URLまたはNコード | あり |
 | `kakuyomu` | 作品URL | あり |
-| `text` | UTF-8テキストファイル | なし |
-| `html_file` | 保存済みHTMLファイル | なし |
+| `text` | UTF-8 text file | なし |
+| `html_file` | 保存済みHTML | なし |
 | `epub` | DRMなしEPUB | なし |
 
-汎用URLを取得する `remote_html` はv1では実装しない。サイトAdapterを明示的に追加する方式とする。
+汎用 `remote_html` はv1では実装しない。
 
 ## 4. 取得ポリシー
 
-本機能はユーザーが明示指定した作品・ファイルだけを取り込む。法的権利判定や利用条件の自動判定はアプリケーションの責務にしない。
+ユーザーが明示指定した作品・fileだけを取り込む。法的権利判定はアプリケーション責務にしない。
 
-v1で禁止する実装は次だけとする。
+禁止:
 
-- サイト全体クロールや検索結果からの一括収集
-- ログイン、CAPTCHA、アクセス制限、有料表示の回避
+- サイト全体crawl/検索結果一括収集
+- login/CAPTCHA/access control/有料表示の回避
 - 許可host外への汎用fetch
 
-UIには「取得元の条件を確認して利用する」旨の短い注意文を表示してよいが、`rights_basis`、確認checkbox、毎回の同意記録は必須にしない。本文削除用の明示Purgeは提供する。
+UIに短い注意文は表示可。ただし `rights_basis`、確認checkbox、毎回の同意recordは必須にしない。明示Purgeを提供する。
 
 ## 5. SourceAdapter契約
-
-Adapterは「取得したresource」と「解析用に抽出した作品構造」の両方を返す。これによりraw snapshot保存と本文抽出結果が分離される。
 
 ```python
 @dataclass(frozen=True)
@@ -106,99 +102,104 @@ class SourceAdapter(Protocol):
     async def import_work(self, request: SourceRequest) -> ImportBundle: ...
 ```
 
-AdapterはDBへ書き込まない。`IngestionService` がbundleを永続化する。
+AdapterはDBへ書かない。
 
-## 6. SnapshotとReference catalog
+## 6. Snapshot / Catalog
 
-`FetchedResource.payload` は元resourceのbytesを保持する。HTML/TXTはUTF-8 bytes、EPUBは元zip bytesを保存してよい。hashはbytesに対して計算する。
+`FetchedResource.payload` は元resource bytes。hashもbytesに対して計算する。
 
-`SourceSnapshot` はimmutable。一方、`ReferenceWork` / `ReferenceEpisode` は「現在の取得状態を示すcatalog projection」であり、refresh時にtitle、order、latest snapshot pointerを更新してよい。過去本文は既存TextRevisionで保持する。
+`SourceSnapshot` はimmutable。`ReferenceWork` / `ReferenceEpisode` はcurrent catalog projectionなのでrefresh時にtitle/order/latest snapshot pointerを更新可能。過去本文はTextRevisionで保持する。
 
-episodeごとの `resource_external_key` から、どのsnapshotを元に `raw_text` を抽出したか追跡できること。
+`ImportedEpisode.resource_external_key` から元Snapshotを特定する。EPUBでは複数episodeが同じ元EPUB resource keyを参照してよい。
 
-## 7. HTTP取得共通仕様
+## 7. HTTP共通仕様
 
-`source_fetcher.py` は `httpx.AsyncClient` を使う。`httpx` をAPI runtime dependencyへ追加する。
-
-初期値:
+`httpx.AsyncClient`。
 
 ```text
 connect timeout: 10 sec
 read timeout: 30 sec
 max redirects: 5
-max response bytes per page: 5 MiB
-retry: 429, 502, 503, 504 を最大2回
-retry backoff: 1 sec, 3 sec
-concurrency per import: 1
-minimum interval between same-host requests: 1.0 sec
+max response bytes/page: 5 MiB
+retry: 429,502,503,504 最大2回
+backoff: 1 sec, 3 sec
+concurrency/import: 1
+same-host minimum interval: 1.0 sec
 ```
 
-User-Agentは `NovelProduction-StyleAnalysis/1.0 (local analysis)`。
+User-Agent: `NovelProduction-StyleAnalysis/1.0 (local analysis)`。
 
-各Adapterが許可hostを持ち、redirect後もhostを再検証する。host allowlistを通る場合に追加のprivate-IP判定等は重ねない。
+Adapterのhost allowlistをredirect後も検証する。固定host Adapterに重複したprivate-IP判定は追加しない。
 
 ## 8. なろうAdapter
 
-許可hostは `ncode.syosetu.com` と `api.syosetu.com`。
+許可host: `ncode.syosetu.com`, `api.syosetu.com`。
 
-- locatorからNコードを正規化する。
-- 作品メタデータ・掲載話数は取得可能な範囲で公式APIを利用する。
-- 本文はユーザー指定作品の公開episode pageだけを逐次取得する。
-- 目次からepisode URLを抽出し、表示順を `order_index` に保存する。
-- 前書き・本文・後書きを分離し、`raw_text` には本文だけを入れる。
-- HTML本文要素が一意に特定できなければ `SOURCE_PARSE_ERROR`。
+- Nコード正規化
+- metadata/掲載話数は取得可能な範囲で公式API利用
+- 公開episode pageだけ逐次取得
+- episode URL/order保持
+- 前書き/本文/後書き分離、`raw_text` は本文のみ
+- 本文要素一意特定不能は `SOURCE_PARSE_ERROR`
 
-CSS class名1個だけへ依存せず、fixtureで確認した少数のselector候補を優先順位付きで実装する。
+fixture根拠のある少数selector候補だけ実装する。
 
 ## 9. カクヨムAdapter
 
-許可hostは `kakuyomu.jp`。
+許可host: `kakuyomu.jp`。
 
-- 作品URLからwork IDを抽出する。
-- 公開episode一覧を取得し、本文pageを順番に取得する。
-- ログイン要求・有料表示・本文取得不能pageは迂回しない。
-- title、author、episode title、order、URLを保持する。
-- 本文要素を一意に特定できなければ `SOURCE_PARSE_ERROR`。
+- work ID抽出
+- 公開episode一覧/本文を順番に取得
+- login/有料/本文取得不能を迂回しない
+- title/author/episode title/order/URL保持
+- 本文一意特定不能は `SOURCE_PARSE_ERROR`
 
-## 10. ローカルファイルAdapter
+## 10. Local Adapter
 
 ### text
 
-- UTF-8/UTF-8 BOMを受理する。
-- その他encodingは自動推測せず `SOURCE_ENCODING_ERROR`。
-- 1 fileを1episode、filename stemをtitleとする。
+UTF-8/UTF-8 BOM。その他encodingは `SOURCE_ENCODING_ERROR`。1 file=1 episode。
 
 ### html_file
 
-- network resourceを追加取得しない。
-- script/style/nav/formを除外し、主要本文候補を抽出する。
-- 主要本文候補が特定できなければ `SOURCE_PARSE_ERROR`。
+追加network取得なし。script/style/nav/form除外。主要本文特定不能はparse error。
 
 ### epub
 
-- DRMなしEPUBのみ。
-- `ebooklib` をAPI runtime dependencyへ追加する。
-- spine順をepisode順とする。
-- navigation、cover等を本文episodeから除外する。
-- chapter titleがなければ `Episode {n}`。
-- snapshot payloadには元EPUB bytesを保存する。
+DRMなし。`ebooklib` 使用。spine順。navigation/cover除外。title fallback `Episode {n}`。Snapshotには元EPUB bytesを保存。
 
-## 11. Import transaction
+## 11. Import job / transaction
+
+`style_imports` と `style_jobs` のqueue recordはfetch開始前に短いtransactionで作成する。これがjob statusの正本になる。
 
 network fetch中はDB transactionを開き続けない。
 
-処理順:
+成功時:
 
-1. Adapterがfetch/parseして `ImportBundle` を生成
-2. DB transaction開始
-3. Source/Snapshotをinsertまたは再利用
-4. ReferenceWork/ReferenceEpisode catalogをupsert
-5. episodeごとにTextRevisionを作成または既存hashを再利用
-6. import statusをsucceededに更新してcommit
+1. queued import/job作成・commit
+2. workerがimport/jobをrunningへ更新・commit
+3. Adapterがfetch/parseして `ImportBundle` 生成
+4. catalog persistence transaction開始
+5. Source/Snapshot insert/reuse
+6. ReferenceWork/ReferenceEpisode upsert
+7. episode TextRevision作成/reuse
+8. import/job succeededへ更新してcommit
 
-fetch途中で失敗した場合はReference catalogを部分更新しない。診断用の部分resource保存はv1では行わず、再実行で取り直す。これにより中間状態を減らす。
+fetch/parse失敗時はcatalog persistenceを開始せず、import/jobだけfailedへ更新する。部分Reference catalogや部分Snapshotを残さない。
 
-## 12. API操作
+### Refresh時episode order更新
+
+`style_reference_episodes` は `(reference_work_id,order_index)` unique。既存episodeをreorderする場合は1 transaction内で:
+
+1. 対象workの既存 `order_index` に十分大きいtemporary offsetを加える
+2. external_episode_idで各episodeをfinal orderへupdate/insert
+3. 今回sourceから消えたepisodeをReferenceEpisode catalogからDELETE
+
+削除ReferenceEpisodeに属するStyle Document/TextRevisionはcascadeする。一方、既に保存済み `SourceSnapshot` はSourceの取得履歴として残し、Reference Work全体をPurgeした時にSourceとともに削除する。refreshのたびに過去Snapshotを個別GCしない。
+
+このrefresh処理にepisodeごとの確認dialogは設けない。
+
+## 12. API
 
 ```text
 POST /projects/{project_id}/style-analysis/imports
@@ -210,9 +211,9 @@ POST /projects/{project_id}/style-analysis/reference-works/{work_id}/refresh
 DELETE /projects/{project_id}/style-analysis/reference-works/{work_id}
 ```
 
-network importはpersisted jobを使い `202 Accepted` を返す。
+network importは202 + job ID。
 
-## 13. エラーコード
+## 13. Error code
 
 ```text
 SOURCE_LOCATOR_INVALID
@@ -226,31 +227,28 @@ SOURCE_ACCESS_RESTRICTED
 SOURCE_IMPORT_INCOMPLETE
 ```
 
-外部HTML本文をerror messageへ含めない。
+本文をerror messageへ含めない。
 
-## 14. テスト
+## 14. Test
 
-必須fixture:
-
-- なろう目次/複数episode/前書き後書き
-- なろうDOM欠損
-- カクヨム複数episode
-- カクヨム本文要素欠損
+- Narou index/episode/前後書き
+- Narou DOM欠損
+- Kakuyomu複数episode/本文欠損
 - redirect host逸脱
 - 429 retry
-- response size超過
-- UTF-8 BOM text
-- 非UTF-8 text拒否
-- EPUB spine順とbinary snapshot hash
+- size超過
+- UTF-8 BOM/非UTF-8
+- EPUB spine/binary hash
+- failed fetchでcatalog未更新
+- refresh reorder unique collisionなし
+- sourceから消えたepisodeのDocument cascade + Snapshot保持
 
-adapter fixtureではtitle、episode数、order、本文hash、resource hashを検証する。
+## 15. Codex禁止事項
 
-## 15. Codex実装時の禁止事項
-
-- 001〜005 migrationを変更しない。
-- 汎用Web crawlerを作らない。
-- headless browser依存を追加しない。
-- CAPTCHA、ログイン、有料壁を回避しない。
-- 取得失敗を空本文で成功扱いしない。
-- MCP toolを追加しない。
-- fixture根拠のない大量fallback selectorを追加しない。
+- 001〜005変更
+- 汎用crawler/headless browser
+- access restriction回避
+- 空本文success
+- MCP tool追加
+- fixture根拠なしfallback大量追加
+- network fetch中の長時間DB transaction
