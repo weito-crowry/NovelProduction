@@ -26,19 +26,20 @@ docs/features/fiction-style-analysis/
    └─ 14-testing-and-evaluation.md
 ```
 
-- [basic-design.md](basic-design.md): 上位の責務・データフロー・Runtime方針。
+- [basic-design.md](basic-design.md): 上位責務、Current Revision、Registry、Runtime、Corpus/Profileの基本設計。
 - [detailed-design/README.md](detailed-design/README.md): 詳細設計一覧、確定事項、SA-A〜SA-H、Codex実装運用。
 
 ## 設計方針
 
 - Source/Revision/Run/Version/Dependencyを追跡可能にする。
+- Current Text/StructureはStyleDocumentの明示Pointerで管理する。
 - Stable IdentityとRunごとの推論を分離する。
 - Reference WorkではEntity/Term RegistryをEpisode横断で管理する。
+- Manual Entity/Term/AliasをStyle Analysis内で作成可能にする。
 - Analyzer入力へ影響するHuman DecisionはState Fingerprintで追跡する。
-- 再解析で人手修正を破壊しない。
 - Unknown/Low-confidenceを正常状態として扱い、Reviewを必須化しない。
 - JobはProject-local DBへ永続化し、単一Workerで処理する。
-- 実装判断をCodexへ残さないため、DB/API/UI/Testの契約を詳細設計で具体化する。
+- 実装判断をCodexへ残さないため、DB/API/UI/Test契約を詳細設計で具体化する。
 
 ## 実装境界
 
@@ -49,8 +50,8 @@ docs/features/fiction-style-analysis/
 
 ## ステータス
 
-- 基本設計: v0.3 Draft
-- 詳細設計: v0.3 Self-review反映版
+- 基本設計: v0.4 Draft
+- 詳細設計: v0.4 Self-review反映版
 - 実装: 未着手
 
 実装開始時は `detailed-design/README.md` のSA-A〜SA-Hを基準に、ChatGPT側でPhase Scopeを確定してCodex Lunaへ具体的に指示する。

@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-Canonical Textを、後段の意味解析・文体計測が参照できる安定構造へ分解する。本文文字列は変更せず、Scene境界の改善は新しい `StructureRevision` として表現する。
+Canonical Textを後段解析が参照できる安定構造へ分解する。本文文字列は変更せず、Automatic/Semantic/Manualの差は `StructureRevision` として履歴化する。
 
 上位仕様は `../basic-design.md`。
 
@@ -31,73 +31,66 @@ fingerprint
 created_at
 ```
 
-- `automatic`: 決定論的parserによるbase構造。
-- `semantic`: 06/09のScene Boundary Analyzer結果をmaterializeした構造。
-- `manual`: ユーザーsplit/mergeを反映した構造。
+- Automatic: 決定論的Base構造
+- Semantic: Boundary Analyzer結果をMaterialize
+- Manual: User Split/Merge
 
-既存revisionはupdateしない。semantic/manual revisionはparentを必ず持つ。
+既存RevisionはUpdateしない。Semantic/ManualはParent必須。Semantic生成元AnalysisRunは12 `style_structure_analysis_sources` で追跡する。
 
-semantic revisionの生成元AnalysisRunは12の `style_structure_analysis_sources` で1対1に記録する。StructureRevision自身へ循環FKを追加しない。
+## 4. Current Structure Pointer
 
-## 4. Fingerprint
+各 `style_documents` は `current_structure_revision_id nullable` を持つ。これは「Corpus集約や通常表示で現在採用するStructure」を明示するPointerであり、Latest RevisionをQueryで推測しない。
 
-### automatic
+Pointer更新規則:
 
-```text
-hash(
-  text_revision.canonical_sha256,
-  segmenter_id,
-  segmenter_version,
-  deterministic config
-)
-```
+1. 新TextRevision作成時: `current_structure_revision_id=NULL`。
+2. `analyze` でStructure未指定:
+   - Deterministic: Final Automatic RevisionをCurrentに設定。
+   - Full: Semantic境界が適用されればSemantic、適用なしならAutomaticをCurrentに設定。
+3. `analyze` でStructureを明示指定: 解析対象として使うだけでCurrent Pointerは変更しない。
+4. Current StructureからManual Split/Merge: 新Manual RevisionをCurrentに設定。
+5. Userが既存Revisionを明示選択する `select current structure` 操作: 同DocumentのCurrent TextRevisionに属するRevisionだけ設定可能。
+6. Reference Refresh / Project Draft CaptureでCurrent Textが変わった場合: Current StructureをNULLへClear。
 
-### semantic
+Current PointerはLogical FKとして12/Serviceで所属整合を検証する。
 
-```text
-hash(
-  parent_structure.fingerprint,
-  boundary_analysis_run.fingerprint,
-  sorted(applied_after_block_ids),
-  policy_version
-)
-```
+## 5. Fingerprint
 
-confidence値そのものはStructure形状を変えないためfingerprintへ入れない。適用されたBlock境界集合を正本とする。
-
-### manual
+Automatic:
 
 ```text
-hash(
-  parent_structure.fingerprint,
-  operation,
-  operation arguments
-)
+hash(canonical_sha256, segmenter_id, segmenter_version, config)
 ```
 
-splitなら `after_block_id`、mergeならleft/right scene IDsをoperation argumentsへ含める。
+Semantic:
 
-## 5. 階層
+```text
+hash(parent fingerprint, boundary run fingerprint, sorted applied_after_block_ids, policy_version)
+```
+
+Manual:
+
+```text
+hash(parent fingerprint, operation, operation args)
+```
+
+## 6. 階層 / Order
 
 ```text
 TextRevision
-  └─ StructureRevision
-      ├─ Scene
-      │   └─ Block
-      │       └─ Sentence
-      └─ Scene外Separator Block
+ -> StructureRevision
+    -> Scene
+       -> Block
+          -> Sentence
 ```
 
-すべてCanonical Textの `[start_cp,end_cp)` spanを持つ。
+- Scene Order: Revision内1..N
+- Block Order: Revision全体Global 1..N
+- Paragraph Index: Revision全体の元Paragraph順
+- Sentence Order: Block内1..N
+- 全SpanはCanonical `[start_cp,end_cp)`
 
-### order_index
-
-- `Scene.order_index`: StructureRevision内1..N。
-- `Block.order_index`: **StructureRevision全体**で本文順1..N。
-- `Block.paragraph_index`: StructureRevision全体で元paragraph順1..N。同paragraphを複数Blockへ分割しても同値。
-- `Sentence.order_index`: Block内1..N。
-
-## 6. Block type
+## 7. Block Type
 
 ```text
 dialogue
@@ -108,138 +101,94 @@ separator
 unknown
 ```
 
-`action / description / exposition / psychology / transition` は06 semantic annotation。
+Action/Description/Exposition/Psychology/Transitionは06 Semantic Annotation。
 
-Blockは原則paragraph単位。ただし同paragraph中に明確な会話括弧と地の文が混在する場合は分割する。
+`「...」` はDialogue候補。Nested Quoteは外側を1Block。Unmatched QuoteはWarning付きで継続する。`『』` や括弧だけでDialogue/Monologueを断定しない。
 
-## 7. Quote scanner
+## 8. Heading / Separator / Sentence
 
-stack based scanner。
+HeadingはAdapter Hintまたは明確な短い章節Pattern。短い文だけではHeadingにしない。
 
-主会話括弧: `「 」`。
-補助括弧: `『 』`, `（ ）`, `( )`。
+Separatorは独立した記号中心Paragraphを認識し `scene_id=NULL` で保持可能。
 
-- `「...」` はdialogue候補。
-- `『...』` 単独は会話と断定しない。
-- `（...）` を自動monologueにしない。
-- unmatched `「` はparagraph末までdialogue候補 + warning。
-- nested quoteは外側を1dialogue Block。
-- multiline dialogueは閉じ括弧まで1Block可。
+Sentence終端は `。！？!?`。終端直後の閉じ括弧を同Sentenceに含める。
 
-## 8. Monologue
+## 9. Automatic Scene
 
-source metadataで明示された場合だけ `monologue`。その他はnarrationとして構造化し、06 `psychology` へ渡す。
+Automatic Revisionでは明示境界だけを使う。
 
-## 9. Heading
+1. Separator
+2. Adapter Scene-break Hint
+3. 本文途中Heading
 
-- adapter heading hint
-- 独立行40 code points以下かつ `第...章/話/節` 等pattern
-- 数字/漢数字 + 短いtitleの明確な形式
+明示境界がなければEpisode全体1 Sceneでよい。
 
-短い文というだけではheadingにしない。
+## 10. Scene Boundary Candidate
 
-## 10. Separator
-
-初期pattern:
-
-```text
-***
-＊＊＊＊＊
-＊ ＊ ＊
----
-――――
-◇
-◆
-◇◇◇
-◆◆◆
-†
-```
-
-独立paragraph、記号中心、32 code points以下。adapter hintがあればpattern外も可。
-
-## 11. Sentence split
-
-終端: `。！？!?`。
-終端後の `」』）)]】` は同Sentence。
-`……` / `――` は単独終端にしない。
-
-残り文字列も最後のSentenceとする。
-
-## 12. Automatic Scene
-
-base `automatic` revisionでは明示境界のみ。
-
-1. separator Block
-2. adapter scene-break hint
-3. 本文途中heading
-
-明示境界なしならepisode全体1 Sceneでよい。Semantic Boundary Analyzerの安定入力用baseであり、最終粒度ではない。
-
-separatorは `scene_id=NULL`。
-
-## 13. Scene Boundary Candidate契約
-
-06 `scene-boundary-detector` の出力は `style_annotations` へ次の形で保存する。
+06 `scene-boundary-detector` はAutomatic Base Scene内のBlock境界だけを返す。
 
 ```text
 annotation_type = scene_boundary_candidate
 subject_type = block
 subject_id = after_block_id
 analysis_run_id = boundary run
-confidence = candidate confidence
-value_json = {
-  "base_structure_revision_id": 7,
-  "reasons": ["time_shift", "location_shift"]
-}
+confidence
+value_json = {base_structure_revision_id, reasons}
 ```
 
-candidateの `subject_id` は「このBlockの直後で切る」という意味。任意offsetは受けない。
+任意Character Offsetは受けない。
 
-## 14. Semantic Scene materialization
+## 11. Semantic Materialization
 
-09 `AnalysisPolicy.scene_boundary_auto_apply` 以上のcandidateだけを対象に新 `semantic` StructureRevisionを作る。
+09 AnalysisPolicy `scene_boundary_auto_apply` 以上のCandidateだけを適用する。
 
-materialize手順:
+1. Boundary RunがBase Automatic Revision入力か検証
+2. 同RunのCandidateのみ読む
+3. Threshold以上Block IDをSort/Dedupe
+4. Invalid/既存境界重複を除外
+5. 新規境界があればSemantic Revision生成
+6. `style_structure_analysis_sources` へ生成元Run Link
+7. Shape同一ならBaseをReuse
 
-1. boundary AnalysisRunがbase StructureRevisionを入力にしていることを検証。
-2. 同Runの `scene_boundary_candidate` annotationだけを読む。
-3. threshold以上の `after_block_id` を抽出。
-4. 存在しないBlock、既存明示境界と重なるcandidateを除外しwarning。
-5. Block IDを本文順にsort・dedupe。
-6. 1件以上新規境界があればsemantic revision生成。
-7. `style_structure_analysis_sources` へ `(new_structure_revision_id, boundary_analysis_run_id)` を保存。
-8. applied Block IDsをfingerprintへ含める。
-9. shapeがbaseと同一ならsemantic revisionを作らずbaseをreuse。
+Materialize後、Structure未指定Full AnalysisならFinal RevisionをCurrent Pointerへ設定する。
 
-LLMはStructure rowを直接書き込まない。
+## 12. Manual Split / Merge / Select
 
-`scene_boundary_candidate_min` 以上/auto apply未満はproposalとして残る。ReviewQueueへの自動投入はしない。
+Split:
 
-## 15. Scene最小条件
+- Block境界だけ
+- `after_block_id`
+- Current StructureをParentに新Manual Revision
 
-- analyzable Block >=1。
-- empty Sceneなし。
-- 連続separatorは1境界。
-- headingだけのSceneは作らず次Scene先頭。
+Merge:
 
-## 16. Manual split/merge
+- 隣接Sceneだけ
+- Current StructureをParentに新Manual Revision
 
-現在のeffective StructureRevisionをparentに新 `manual` revisionを作る。
+成功時は新Manual RevisionをCurrent Pointerへ設定する。
 
-### split
+Select Current:
 
-- Block境界だけ。
-- `after_block_id` 指定。
+- Existing StructureRevision IDを指定
+- 同DocumentかつDocumentのCurrent TextRevisionに所属すること
+- Structure内容は変更せずPointerだけ更新
+- Pointer変更後、Aggregate/Lint等のCurrent Structure依存結果は再計算対象
 
-### merge
+## 13. Validation
 
-- 隣接Sceneだけ。
-- 間separatorはBlockとして残す。
-- merged Scene spanはseparatorを跨いでよい。
+永続化前に:
 
-Manual revisionを明示してfull analysisした場合、09はScene Boundary Analyzerを再適用しない。
+- Scene/Block/Sentence Order連続
+- SpanがText内
+- Sibling Block非重複
+- Block/Sentence Text == Canonical Slice
+- Scene所属BlockがScene Span内
+- Semantic Source Run整合
+- Current Structure Pointerが同Document/Current Text Lineage
 
-## 17. Warning
+不一致は `STRUCTURE_INVARIANT_ERROR`。
+
+## 14. Warning
 
 ```text
 unclosed_dialogue_quote
@@ -250,52 +199,32 @@ mapping_boundary_mismatch
 semantic_boundary_invalid
 ```
 
-warningは診断情報。全件ReviewItemへ送らない。
+Warningを全件ReviewItemへ送らない。
 
-## 18. Validation
+## 15. Test
 
-- Scene order 1..N。
-- Block global order 1..N。
-- Sentence order Block内1..N。
-- span `start < end`。
-- Canonical Text長内。
-- sibling Block非重複。
-- Block/Sentence text == canonical slice。
-- Scene所属Block spanはScene span内。
-- semantic source linkのAnalysisRunは `scene-boundary-detector` かつparent StructureRevision入力。
+- Narration/Dialogue混在
+- Nested/Unmatched/Multiline Quote
+- Separator/Heading/Sentence
+- Emoji Offset
+- Block Global Order
+- Candidate Annotation
+- Semantic Source Link/Fingerprint
+- Threshold Materialization
+- Manual Split/Merge
+- New TextRevisionでCurrent Structure Clear
+- Omitted AnalyzeでCurrent Structure設定
+- Explicit Structure AnalyzeでCurrent Pointer不変
+- Manual OperationでCurrent Pointer更新
+- Select CurrentのLineage Validation
+- Revision不変性
 
-不一致は `STRUCTURE_INVARIANT_ERROR` でrollback。
+## 16. Codex禁止事項
 
-## 19. Version
-
-```text
-segmenter_id = japanese-fiction-structure
-segmenter_version = 1
-```
-
-quote/heading/separator/sentence rule変更はversion更新。Boundary threshold変更はAnalysisPolicy versionで表現する。
-
-## 20. Test
-
-- narration/dialogue混在
-- nested/unmatched/multiline quote
-- separator/heading
-- sentence終端/emoji offset
-- Block global order + scene_id NULL
-- candidate Annotation contract
-- semantic source AnalysisRun link
-- semantic fingerprint applied IDs依存
-- threshold以上materialize
-- threshold未満proposal
-- manual split/merge
-- manual full analysisでBoundary skip
-- revision不変性
-
-## 21. Codex禁止事項
-
-- LLMから任意character offsetでSceneを切らない。
-- Block typeへsemantic分類を混ぜない。
-- parent StructureRevisionをupdateしない。
-- `start/end` を本文検索で後付け推定しない。
-- boundary proposalを全件ReviewItem化しない。
-- semantic Structureの生成元AnalysisRun provenanceを省略しない。
+- LLMから任意Character OffsetでScene Split
+- Block TypeへSemantic分類混入
+- Parent Revision Update
+- Start/Endを本文検索で後付け推測
+- Boundary Proposal全件Review化
+- Current Structureを単純Latest Revisionで推測
+- Explicit Structure AnalyzeだけでCurrent Pointerを勝手に変更

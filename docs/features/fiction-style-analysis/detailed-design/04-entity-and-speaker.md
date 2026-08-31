@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-人物・組織・場所等のEntity候補、本文中Mention、作品内同一性、会話BlockのSpeakerを抽出する。Reference作品ではEpisodeを跨いで同じ実体を追跡する。
+人物・組織・場所等のMention候補、Work/Document内のStable Entity Identity、本文中のEntity Resolution、Dialogue Speakerを抽出する。Reference作品ではEpisodeを跨いで同じ実体を追跡する。
 
 上位仕様は `../basic-design.md`。
 
@@ -22,9 +22,9 @@ CORE/src/novel_core/style_analysis/
 
 LLM通信は09 `SemanticModelClient` 経由。
 
-## 3. Entity Scope
+## 3. Entity Scope / Stable Identity
 
-Entityは次のどちらか一方へ所属する。
+Entityは次のどちらか一方に所属する。
 
 ```text
 reference_work_id  # Reference作品全Episode共通
@@ -33,9 +33,7 @@ document_id        # Project Draft等の単独Document
 
 両方NULL/両方非NULLは禁止。
 
-## 4. Entity Identity
-
-Entity RowはStable Identity。
+Entity Row:
 
 ```text
 id
@@ -61,6 +59,8 @@ event
 other
 ```
 
+Stable Identity Rowは再解析でUpdateしない。
+
 Effective Correction Field:
 
 ```text
@@ -69,21 +69,54 @@ entity.canonical_name string
 entity.entity_type    enum
 ```
 
-10 ManualOverrideで修正する。Identity Row自体を再解析でUpdateしない。
+10 ManualOverrideで修正する。`entity.enabled=false` は誤抽出Identityを履歴ごと削除せずCurrent解析から除外するCorrection Path。
 
 Disabled EntityはResolver/Speaker/Participant/Current Relation/Character Metricから除外する。
 
-## 5. Mention ExtractionはRegistry非依存
+## 4. Manual Entity Creation
 
-`entity-mention-extractor` はCache可能なDocument Analyzerとし、**既存Entity Registryを入力にしない。**
+ModelがEntityを見落とした場合、ユーザーは新しいManual Entityを直接作成できる。
+
+Service:
+
+```python
+EntityService.create_manual_entity(
+    *,
+    reference_work_id: int | None,
+    document_id: int | None,
+    entity_type: str,
+    canonical_name: str,
+) -> Entity
+```
+
+Validation:
+
+- Scopeはexactly one。
+- Reference Work/DocumentがCurrent Projectに存在すること。
+- `entity_type` は本書enum。
+- `canonical_name` はtrim後1〜200文字。
+- 同名Entityが既に存在しても禁止しない。同名別人物/別組織を許容する。
+
+生成Row:
+
+```text
+origin = manual
+created_by_run_id = NULL
+```
+
+Manual Entity作成はReviewItemを要求しない。Registry Stateが変わるため09 `entity_registry` State Fingerprintが変化する。
+
+既存DocumentのResolutionへ反映したい場合、UI/APIは対象DocumentのFull Analysis再実行を提供する。作成時にWork全Episodeを自動再解析しない。
+
+## 5. Mention ExtractorはEntity Registry非依存
+
+`entity-mention-extractor` はCache可能なDocument Analyzerであり、既存Entity Registryを入力にしない。
 
 入力:
 
 - Scene Text
 - Block ID/type/span
 - 直前Scene末尾最大3Blockの本文Context
-
-既存Entity名/Alias一覧をPromptへ渡さない。
 
 出力:
 
@@ -95,7 +128,7 @@ Disabled EntityはResolver/Speaker/Participant/Current Relation/Character Metric
       "surface": "田中",
       "start_in_block": 4,
       "end_in_block": 6,
-      "entity_type": "person",
+      "entity_type_candidate": "person",
       "canonical_name_candidate": "田中",
       "mention_type": "proper_name",
       "confidence": 0.93
@@ -104,7 +137,7 @@ Disabled EntityはResolver/Speaker/Participant/Current Relation/Character Metric
 }
 ```
 
-Persist:
+PersistするMention RowはResolverに必要な候補情報を失わない。
 
 ```text
 style_mentions
@@ -116,45 +149,51 @@ style_mentions
   end_cp
   surface
   mention_type
+  entity_type_candidate
+  canonical_name_candidate
   confidence
   analysis_run_id
 ```
+
+`entity_type_candidate` はEntity Type enum。`canonical_name_candidate` はtrim後1〜200文字。
 
 Mention RowはEntity IDを持たない。
 
 Offset Validation:
 
-1. 指定位置一致 -> 採用
-2. 不一致 -> 同Block内一意完全一致を1回検索
+1. 指定位置とSurface一致 -> 採用
+2. 不一致 -> 同Block内の一意完全一致を1回だけ検索
 3. 0件/複数件 -> そのMentionだけDrop + Warning
 
 ## 6. Entity Resolver
 
 `entity-resolver` はMention Extractor Runに依存し、Current Entity Registryを読む。
 
-Reference Document:
+Scope:
 
 ```text
-同 reference_work_id のEnabled Entity Registry
+Reference Document -> same reference_work_id
+Project Document   -> same document_id
 ```
 
-Project Document:
+Resolverは09で `cacheable=false`。Full Analysis実行ごとにCurrent Registryを入力にする。入力Registryは `registry_input_fingerprint` へ記録する。
+
+候補生成にはMention Rowの:
 
 ```text
-同 document_id のEnabled Entity Registry
+surface
+mention_type
+entity_type_candidate
+canonical_name_candidate
 ```
 
-Resolverは09で `cacheable=false`。Full Analysisを実行するたびにCurrent Registryを入力として再実行する。
-
-入力Registryの内容は09 `registry_input_fingerprint` へ記録し、Historical RunのProvenanceとする。
+を必ず渡す。
 
 自動統合条件:
 
-1. Enabled EntityのEffective Canonical Name完全一致。ただし同名Enabled Entityが複数なら自動選択しない
-2. Confirmed/Manual Alias完全一致。ただし一致候補複数なら自動選択しない
-3. Model同一判定 >= `AnalysisPolicy.entity_resolution_auto_merge`
-
-初期0.90。
+1. Enabled EntityのEffective Canonical Name完全一致。ただし同名候補複数なら自動選択しない。
+2. Confirmed/Manual Alias完全一致。ただし一致候補複数なら自動選択しない。
+3. Model同一判定 >= `AnalysisPolicy.entity_resolution_auto_merge`。
 
 自動統合しない:
 
@@ -164,7 +203,7 @@ Resolverは09で `cacheable=false`。Full Analysisを実行するたびにCurren
 - 同名/同Alias候補複数
 - Disabled Entity
 
-新Entityを作るのはProper Name/Alias候補で既存候補なし、またはModelが明確に別実体と判断した場合。
+Proper Name/Alias候補で既存候補なし、またはModelが明確に別実体と判断した場合は新 `origin=inferred` Entityを作成できる。Pronoun/Role Titleだけから新Entityを作らない。
 
 ## 7. Resolution Output
 
@@ -179,7 +218,9 @@ confidence
 analysis_run_id = entity-resolver run
 ```
 
-未解決はAnnotationを作らなくてよい。Effective Mention Entityは10:
+未解決はAnnotationなしでよい。
+
+Effective Mention Entity:
 
 ```text
 ManualOverride mention.entity_id
@@ -188,21 +229,19 @@ ManualOverride mention.entity_id
 > Unknown
 ```
 
-Resolverが新Entity/EntityAliasを作成する場合、そのIdentity/Aliasの `created_by_run_id` / `analysis_run_id` をResolver Runへ紐付ける。
+Resolverが新Entity/Aliasを作成する場合、生成RunをProvenanceとして保持する。
 
-## 8. Work Registryのv1整合モデル
+## 8. Reference Work Registry整合モデル
 
-Reference WorkのEntity RegistryはIncremental Stable Registryとする。
+Reference WorkのEntity RegistryはIncremental Stable Registry。
 
-- Work全体解析JobはEpisode Order順にResolverを実行する
-- ResolverはCache不可なので再実行時はその時点のRegistryを読む
-- 後続Episodeで新しいInferred Entityが追加されても、既に完了した前Episode Runを自動で全再解析しない
-- Work全体解析を再実行すれば全EpisodeをOrder順に再Resolverする
-- 各Resolver Runに `registry_input_fingerprint` を残すため、どのRegistry状態で解決したか追跡できる
+- Work一括解析JobはEpisode Order順にResolverを実行。
+- ResolverはCache不可。
+- 後続Episodeで新Entityが増えても前Episodeを即時自動再解析しない。
+- Work一括解析を再実行すれば全Episode ResolverをOrder順に再実行。
+- 各Resolver RunにRegistry Input Fingerprintを保存。
 
-これはv1の明示的なEventual Consistency方針。全Episode追加ごとに全過去Episodeを自動再解析する仕組みは作らない。
-
-Manual/Confirmed Correctionは09 State Fingerprint対象なので、影響AnalyzerをStale判定できる。
+これはv1のEventual Consistency方針。
 
 ## 9. Alias
 
@@ -229,23 +268,32 @@ title
 role
 ```
 
-- Inferred AliasはAuto Merge根拠にしない
-- 10 InferenceReviewでConfirmed、またはManual AliasだけをMerge根拠にする
-- 誤ったInferred AliasはConfirmedされなければ影響しないため専用Disable機構はv1で作らない
+Manual Alias Service:
+
+```python
+EntityService.add_manual_alias(entity_id, alias, alias_kind)
+```
+
+Validation:
+
+- Entityが存在しCurrent Project内。
+- Alias trim後1〜200文字。
+- Alias Kindはenum。
+- 同一Entity/Alias/Kindの重複Manual追加はIdempotentに既存Rowを返してよい。
+
+Rules:
+
+- Inferred AliasだけではAuto Merge根拠にしない。
+- Confirmed Inferred AliasまたはManual AliasだけをResolution根拠にする。
+- Manual Aliasは `origin=manual`, `analysis_run_id=NULL`。
 
 ## 10. Speaker Attribution
 
-対象 `block_type=dialogue`。
-
-Dependency:
-
-```text
-entity-resolver
-```
+対象 `block_type=dialogue`。Dependencyは `entity-resolver`。
 
 候補:
 
-1. 同SceneのEffective Mention EntityのうちEnabled Person
+1. 同SceneのEffective Mention EntityのEnabled Person
 2. 前後2BlockのEffective Mention Entity
 3. 直前Dialogue Effective SpeakerがEnabledならそのEntity
 4. Enabled Scene Participant
@@ -288,32 +336,24 @@ Speaker Annotation:
 annotation_type = speaker
 subject_type = block
 subject_id = block_id
-value_json = {
-  "entity_id": 3,
-  "reason_code": "explicit_speech_tag",
-  "evidence_block_ids": [14,16]
-}
+value_json = {entity_id, reason_code, evidence_block_ids}
 confidence
 analysis_run_id
 ```
 
-Annotation EntityがDisabledならEffective SpeakerはUnknown。
+AnnotationがDisabled Entityを指す場合、Effective SpeakerはUnknown。
 
-## 11. Scene Participant
+## 11. Scene Participant / Relation
 
-Enabled Person Entityが:
+Participant:
 
 - Scene内Effective Mention
 - Effective Speaker
 - Model非発話参加者 >= `participant_effective`
 
-のいずれかならParticipant。
+のEnabled Person Entity。
 
-Participant推論はSpeaker AnalyzerまたはRelation Analyzerの補助OutputとしてAnnotation保存してよい。専用Analyzerを増やさない。
-
-## 12. Relation
-
-v1:
+Relation Type:
 
 ```text
 speaks_to
@@ -327,11 +367,9 @@ subordinate
 other
 ```
 
-`entity-relation-extractor` は `entity-resolver` に依存する。
+`entity-relation-extractor` はSpeaker Attributionに依存する。Relation RowはRun Provenanceを持つ。Disabled Entityを含むRelationはEffective一覧から除外する。
 
-Relation RowはRun Provenanceを持つ。Disabled Entityを含むRelationはEffective一覧から除外しRaw表示だけ可能。
-
-## 13. Project Character Link
+## 12. Project Character Link
 
 ```text
 style_entity_id
@@ -342,80 +380,68 @@ analysis_run_id nullable
 created_at
 ```
 
-v1はManual Linkだけでよい。
+v1はManual Linkだけでよい。名前一致自動Link禁止。
 
-Project人物別比較に使うのはEnabled EntityかつManual/Confirmed Effective Linkだけ。名前一致自動Link禁止。
+## 13. Human State Dependency
 
-## 14. Human State Dependency
-
-09 `entity_registry` State Fingerprintには次だけを含める。
+09 `entity_registry` State Fingerprint:
 
 - Manual Entity Identity
 - Active `entity.enabled/name/type` Override
 - Manual Alias
-- Inferred Aliasの最新Confirm/Reject Review
+- Inferred Alias最新Confirm/Reject
 
-Inferred Entity RegistryそのものはCurrent Validity State Fingerprintへ入れず、Resolver Runの `registry_input_fingerprint` へ入れる。
+`mention_resolution` State:
 
-09 `mention_resolution` StateにはActive `mention.entity_id` Overrideを含める。
+- 指定Structure内Active `mention.entity_id` Override
 
-Speaker/RelationはこれらState FingerprintをCurrent判定に使う。
+Inferred RegistryのCurrent全量はResolver `registry_input_fingerprint` に保存し、後続Episode追加だけで過去Runを全Staleにしない。
 
-## 15. Prompt / Version
+## 14. Review方針
 
-```text
-entity-mention-extractor v1
-entity-resolver v1
-speaker-attribution v1
-entity-relation-extractor v1
-```
-
-PromptはVersion付きResource。
-
-## 16. Review方針
-
-Low Confidenceや候補複数だけを理由にReviewItemを自動生成しない。
+Low Confidence/候補複数だけでReviewItemを自動生成しない。
 
 Semantics画面から:
 
-- Entity Disable
-- Name/Type修正
+- Manual Entity作成
+- Manual Alias追加
+- Entity Disable/Name/Type修正
 - Mention Resolution修正
 - Speaker修正
 - Alias Confirm/Reject
 
-をDirect操作可能。
+を直接操作可能。
 
-## 17. Test
+## 15. Test
 
-- Mention ExtractorがEntity Registry非依存
+- Mention ExtractorがRegistry非依存
+- Mention Candidate Type/Canonical Name永続化
 - Mention RowにEntity IDなし
-- Resolver AnnotationでEntity Mapping
-- Reference Work Episode跨ぎResolver
-- Resolver `cacheable=false`
-- Registry Input Fingerprint記録
-- 同名Enabled Entity複数でAuto選択しない
-- Entity Identity再解析Updateなし
-- Entity Enabled/Name/Type Override
-- Disabled EntityをResolver/Speakerから除外
+- ResolverがCandidate Fieldsを使用
+- Resolver AnnotationでMapping
+- Resolver Cache不可/Registry Fingerprint
+- Work Episode跨ぎResolution
+- 同名候補複数で強制選択なし
+- Manual Entity作成 / Same-name許容
+- Manual Alias追加 / Idempotent重複
+- Manual Entity追加でEntity Registry State変更
+- Disabled Entity除外
 - Inferred AliasのみではMergeなし
 - Confirmed/Manual Alias Resolution
-- Explicit Speech Attribution
-- Turn-takingだけではEffectiveにしない
-- 3人会話Unknown
-- Work全体再解析でEpisode Order順Resolver
+- Explicit Speaker / Ambiguous Unknown
+- Work一括再解析Episode Order
 
-## 18. Codex禁止事項
+## 16. Codex禁止事項
 
 - Mention Extractorへ既存Entity Registryを入力
-- Mention RowのEntity IDをUpdate
-- Entity ResolverをFingerprint Cache Hitで省略
+- Mention Candidate Fieldsを捨てる
+- Mention RowへEntity IDを戻す
+- Entity ResolverをCache Hitで省略
 - 全DialogueへSpeaker強制割当
-- Surname/同名複数候補から強制Merge
+- 同名候補複数から強制Merge
 - Entity Identity Rowを再解析でUpdate
 - Disabled EntityをCurrent候補へ含める
 - Inferred AliasだけでAuto Merge
+- Manual Entity作成を既存Authoring Character作成と結合
 - Existing Character Tableへ推論Write
-- World/Canon自動更新
-- Provider SDKをCOREへ追加
 - AmbiguityだけでReviewItem量産

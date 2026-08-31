@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-複数作品・episode・SceneのMeasurementを集約し、比較可能なCorpus統計と執筆時のStyleProfileへ変換する。実測値・集約値・目標Ruleを分離し、Profileのstable identityとimmutable Versionも分離する。
+Reference Work/EpisodeのMeasurementをCorpusとして集約し、比較可能な統計とStyleProfileへ変換する。Membership、Current入力選択、集約単位、Countの意味を一意に定義する。
 
 上位仕様は `../basic-design.md`。
 
@@ -18,32 +18,43 @@ CORE/src/novel_core/style_analysis/
   profile_service.py
 ```
 
-## 3. Corpus
+## 3. Corpus / Membership
 
 ```text
-id
-name
-description
-created_at
-updated_at
+style_corpora:
+  id, name, description, created_at, updated_at
+
+style_corpus_work_memberships:
+  corpus_id, reference_work_id, include_all_episodes, created_at
+
+style_corpus_episode_memberships:
+  corpus_id, reference_episode_id, membership_mode = include | exclude
 ```
 
-Work membership:
+Effective Episode集合は `CorpusRepository.list_effective_episode_ids(corpus_id)` だけで解決する。
 
-```text
-corpus_id
-reference_work_id
-include_all_episodes
-created_at
-```
+### include_all_episodes=true
 
-Episode単位overrideは `style_corpus_episode_memberships`。
+- WorkのCurrent Catalog EpisodeをDefault Included。
+- `exclude` Overrideを除外。
+- `include` Overrideは結果上冗長。UIは通常作らない。
 
-1 Reference Workは複数Corpusへ所属可。
+### include_all_episodes=false
+
+- Default Excluded。
+- `include` OverrideだけIncluded。
+- `exclude` Overrideは結果上冗長。UIは通常作らない。
+
+Validation:
+
+- Episode Overrideには同CorpusのWork Membershipが必要。
+- 別Work EpisodeはReject。
+- Work Membership削除時、そのWork配下Overrideも同Transactionで削除。
+- RefreshでEpisode削除時はFK Cascade。
+
+Aggregate/API/UIはこのResolverを共用する。
 
 ## 4. Aggregate
-
-Measurementを直接StyleRuleへ変換しない。
 
 ```text
 id
@@ -54,40 +65,64 @@ metric_name
 metric_version
 statistic
 value_real
-sample_count
 source_measurement_count
+sample_count
 work_count
+skipped_target_count
 fingerprint
 created_at
 ```
 
-`statistic`:
+Statistic:
 
 ```text
-mean
-median
-p10
-p25
-p75
-p90
-stddev
-min
-max
+mean | median | p10 | p25 | p75 | p90 | stddev | min | max
 ```
 
-## 5. Aggregate単位
+## 5. 観測単位
 
-AggregateはMeasurement rowを観測単位として等重みで集約する。
+v1はMeasurement Rowを1観測として等重みでPoolする。
 
-- episode scope: Episode Measurementを1観測
-- scene filter: Scene Measurementを1観測
-- character scope: Character Measurementを1観測
+- Episode: 1 Episode Measurement = 1観測
+- Scene: 1 Scene Measurement = 1観測
+- Character: 1 Character Measurement = 1観測
 
-Raw sentence等へ遡って再poolしない。長い作品だけが自動的に重くならないようにする。
+これはWork等重みではない。Episode/Scene数が多いWorkは多くの観測を提供する。v1ではWork Weight/User Weightを導入しない。UIは `work_count` と `source_measurement_count` を表示する。
 
-将来Work weightを導入する場合はAggregate policy versionを変える。
+## 6. Count定義
 
-## 6. Aggregate scope/filter
+### source_measurement_count
+
+Statisticへ実際に使ったMeasurement Row数。
+
+### sample_count
+
+入力Measurementの `sample_count` 合計。Underlying Sentence/Utterance/Term等の量を示す診断値で、Aggregate Weightには使わない。
+
+### work_count
+
+入力Measurement由来のDistinct Reference Work数。
+
+### skipped_target_count
+
+Effective Membership内だがCurrent Text/Structure/Measurement不足で当該Metricへ寄与しなかったTarget数。
+
+## 7. Current入力選択
+
+Reference Episodeを使う条件:
+
+1. Effective Membershipに含まれる。
+2. Episodeに属するStyleDocumentがある。
+3. `document.current_text_revision_id` がある。
+4. `document.current_structure_revision_id` があり、そのCurrent TextRevision所属。
+5. 09 Current AnalysisRun Resolverで対象Metric GroupのCurrent Runが解決できる。
+6. Metric Name/Version一致Measurementがある。
+
+不足TargetはSkipする。Latest Structureや古いSucceeded RunへFallbackしない。
+
+Scene/Character AggregateもCurrent Document/Text/Structure/Run配下だけを使う。
+
+## 8. Aggregate Scope / Filter
 
 ```text
 reference_work
@@ -96,41 +131,35 @@ scene_label
 character
 ```
 
-`scene_label` は `scope_id` に親Work/Corpus ID、`filter_json` にtaxonomy条件を入れる。
+Scene LabelはParent Work/Corpusを `scope_id`、Taxonomy条件を `filter_json` に保存する。任意SQLは保存しない。
 
-```json
-{
-  "scene.function": "daily",
-  "scene.pace": "medium"
-}
+## 9. 統計式
+
+- Mean/Pstdev: Python `statistics` 相当
+- Percentile: 07共通Utility
+- 1観測のPstdev = 0
+- 0観測ならAggregate Rowなし
+
+Measurement `value_*` を等重みで計算し、Measurement `sample_count` でWeighted計算しない。
+
+## 10. Fingerprint
+
+Canonical SHA-256入力:
+
+```text
+aggregate_policy_version
+scope_type / scope_id
+canonical filter_json
+metric_name / metric_version
+sorted effective membership episode IDs for corpus scope
+sorted input measurement IDs
 ```
 
-任意SQLは保存しない。
+Measurement RowはImmutableなのでID集合をProvenanceとして使う。同Fingerprint RowはReuse可能。
 
-## 7. Aggregate input
+## 11. Profile生成Sample Policy
 
-- current effective StructureRevisionのMeasurement
-- Metric version一致
-- Corpus membership内
-- Semantic Metricは07でcompleteと判定されたscopeのみ
-- 同一target/metric/versionで複数runがある場合は09のeffective run選択に従う
-
-Partial Semantic Runの成功Sceneから生成されたScene Measurementは利用可能。Document全体の不完全Metricは07で作らない。
-
-Reference Work purge後はCorpus membershipが消えるため、以後の再集約では対象外になる。過去Aggregate rowは履歴値として残してよい。
-
-## 8. 統計式
-
-- mean/pstdev: Python `statistics` 相当
-- percentile: 07共通utility
-- sample 1件のpstdev = 0
-- sample 0件はAggregate rowなし
-
-## 9. Profile生成のsample policy
-
-固定値は09 `AnalysisPolicy` を正本にする。
-
-初期default:
+09 AnalysisPolicyが正本。
 
 ```text
 profile_min_episode_measurements = 5
@@ -139,81 +168,39 @@ profile_min_character_utterances = 10
 profile_min_term_samples = 5
 ```
 
-不足時はCorpus由来Ruleを自動生成しない。これは処理停止用の安全チェックではなく、自動生成条件である。UIからManual Ruleは作成可能。
+不足時はCorpus由来Ruleを自動生成しない。Manual Ruleは作成可能。
 
-## 10. Profile identity / Version
-
-### StyleProfile
-
-Stable mutable identity/meta:
+## 12. Profile Identity / Version
 
 ```text
-id
-name
-description
-source_corpus_id nullable
-status = draft | active | archived
-active_version_id nullable
-created_at
-updated_at
+StyleProfile:
+  id
+  name
+  description
+  source_corpus_id nullable
+  status = draft | active | archived
+  active_version_id nullable
+  created_at
+  updated_at
+
+StyleProfileVersion:
+  id
+  profile_id
+  version_no
+  parent_version_id nullable
+  created_at
+
+StyleRule:
+  profile_version_id
+  scope_selector_json
+  metric_name / metric_version
+  preferred_value / min_value / max_value
+  weight / enabled / severity_policy / source_kind
 ```
 
-`active_version_id` は同Profileに属する `StyleProfileVersion.id` のみ許可する。DBの単純FKだけでは同一Profile所属を保証できないため、ProfileServiceで検証する。
+Version/RuleはImmutable。`status=active` なら同Profile所属 `active_version_id` 必須。New VersionだけでActive Versionを変更しない。
 
-意味:
-
-- `draft`: `active_version_id` はNULLでよい
-- `active`: `active_version_id` 必須
-- `archived`: `active_version_id` は最後に採用していたVersionを保持してよい
-
-### StyleProfileVersion
-
-Immutable snapshot:
-
-```text
-id
-profile_id
-version_no
-parent_version_id nullable
-created_at
-```
-
-UNIQUE `(profile_id, version_no)`。
-
-### StyleRule
-
-`profile_version_id` に所属する。
-
-Profile name/status/active versionを変更しても過去Rule snapshotを変更しない。
-
-## 11. StyleRule
-
-```text
-id
-profile_version_id
-scope_selector_json
-metric_name
-metric_version
-preferred_value nullable
-min_value nullable
-max_value nullable
-weight
-enabled
-severity_policy
-source_kind
-created_at
-```
-
-`source_kind`:
-
-```text
-corpus_generated
-manual
-```
-
-weight 0.0〜5.0、default 1.0。
-
-## 12. Corpusからのdefault Rule
+## 13. Corpus Default Rule
 
 ```text
 preferred = median
@@ -221,13 +208,11 @@ min = p25
 max = p75
 ```
 
-Ratioは0〜1へclamp。
+Ratioは0〜1 Clamp。P25=P75でもRangeを勝手に広げない。
 
-p25=p75でもrangeを勝手に広げない。11がMetricDefinitionのzero-width toleranceを使う。
+## 14. Scope Selector
 
-## 13. scope selector
-
-許可key:
+許可:
 
 ```text
 global
@@ -239,147 +224,67 @@ scene.interaction
 character_id
 ```
 
-複数条件AND、配列内OR。
+複数条件AND、配列内OR。Cross-work Characterを名前一致で自動対応しない。
 
-外部Reference CharacterをProject Characterへ名前一致で自動対応しない。
+## 15. Corpus Compare
 
-## 14. Corpus比較
-
-2〜5 Corpus。
-
-返却:
+2〜5 Corpus。Metricごとに:
 
 ```text
 median
 p25
 p75
+source_measurement_count
 sample_count
 work_count
+skipped_target_count
 ```
 
-異なるunitを同一chart axisへ混ぜない。
+を返す。異Unitを同一Axisへ混ぜない。
 
-## 15. Profile作成・編集・Activation
+## 16. Profile作成 / 編集 / Activation
 
-### Corpusから作成
+Corpusから:
 
-1. StyleProfile identityを作る
-2. Version 1を作る
-3. Corpus AggregateからRule snapshotを作る
-4. 初期statusは `draft`
-5. `active_version_id` はNULL
+1. Profile Identity
+2. Version 1
+3. Current AggregateからRule Snapshot
+4. Status Draft
+5. Active Version NULL
 
-### Rule編集
+編集はCurrent VersionをCopyしてNew Version。Activateは `profile_id + version_no` を明示し同Profile所属を検証する。
 
-現在選択中VersionのRulesをcopyして新Versionを作る。
+## 17. Export / Import
 
-編集可能:
+ExportはVersion明示。Raw Text/Entity/Mentionを含めない。Unknown Metric RuleはDisabledでImport可能。Import後はDraft。
 
-- preferred
-- min/max
-- weight
-- enabled
-- severity_policy
+## 18. Test
 
-Metric name/version/scopeを変更したい場合は旧Ruleをdisabledにし、新Ruleを追加する。
+- include_all=true + exclude
+- include_all=false + include
+- MembershipなしEpisode Override拒否
+- Work Membership削除でOverride削除
+- Refresh Episode削除Cascade
+- Measurement Row等重み
+- Work等重みではないこと
+- source_measurement_count / sample_count / work_count分離
+- skipped_target_count
+- Document Current Text/Structure/Runだけ使用
+- Current StructureなしSkip
+- 古いRunへFallbackなし
+- Fingerprint Membership/Input Measurement IDs
+- Sample不足Auto Ruleなし / Manual Rule可
+- Profile Version / Active Version
+- New VersionでActive不変
 
-### Activate
+## 19. Codex禁止事項
 
-Activate操作は必ずVersionを明示する。
-
-```text
-profile_id
-version_no
-```
-
-ProfileServiceはそのVersionが同Profile所属であることを検証し、1 transactionで:
-
-```text
-status = active
-active_version_id = selected version id
-updated_at更新
-```
-
-とする。
-
-新Version作成だけではactive versionを自動切替しない。ユーザーが保存と同時にactivateするUIを用意する場合でも、API内部ではVersion作成→Activateの明示2操作として扱う。
-
-Archiveは `status=archived` にする。active_version_idを消す必要はない。
-
-## 16. Export / Import
-
-ExportはVersionを明示する。
-
-```json
-{
-  "schema": "novelproduction.style-profile",
-  "schema_version": 1,
-  "profile": {
-    "name": "...",
-    "description": "..."
-  },
-  "version": 3,
-  "rules": []
-}
-```
-
-Raw text、Entity/Mentionは含めない。
-
-Unknown Metric/Versionは `unsupported_rules` として返し、そのRuleをdisabledで保存してよい。Profile全体を拒否しない。
-
-Import後はdraft Profile + Versionを作る。unsupported Ruleがなくても勝手にactive化しない。
-
-## 17. Aggregate再計算
-
-Fingerprint入力:
-
-- Corpus membership
-- input Measurement IDs/fingerprints
-- Metric version
-- filter
-- aggregate policy version
-
-Aggregateはappend-only。head tableは作らずfingerprint一致rowをreuseする。
-
-## 18. API/UIへ返すCurrent Profile
-
-Profile一覧/detailでは以下を明示する。
-
-```text
-status
-active_version_no nullable
-latest_version_no
-```
-
-`latest_version_no` は表示用。LintやExportの入力をlatestへ暗黙読み替えしない。
-
-## 19. テスト
-
-- membership重複禁止
-- episode include/exclude
-- equal-weight Measurement aggregate
-- p25/median/p75
-- sample不足時auto Ruleなし
-- Manual Ruleはsample不足でも作成可
-- Profile identityとVersion分離
-- version_no uniqueness
-- Version immutable
-- active時active_version必須
-- active Versionが同Profile所属か検証
-- 新Version作成でactive Versionが勝手に切替わらない
-- archiveでVersion不変
-- scope validation
-- Exportに本文なし
-- unsupported Rule import disabled
-- Importはdraft
-- effective Measurement重複排除
-
-## 20. Codex実装時の禁止事項
-
-- Measurementを直接StyleRuleとして保存しない。
-- raw観測を勝手に再poolして長編作品へ重みを付けない。
-- sample不足を0値Ruleにしない。
-- cross-work Characterを名前一致で統合しない。
-- ProfileVersion/Ruleをupdateしない。
-- active Versionを暗黙latestへ切替しない。
-- Raw本文をProfile exportへ含めない。
+- Measurementを直接StyleRuleとして保存
+- `sample_count` をAggregate Weightとして使用
+- Measurement Row等重みをWork等重みとして実装
+- Membership規則をAPI/UIで重複実装
+- Current StructureなしでLatest StructureへFallback
+- Current TextをReferenceEpisode側Pointerから読む
+- Source Measurement CountとSample Countを同義にする
+- Cross-work Character名前一致統合
+- Active VersionをLatestへ暗黙切替
