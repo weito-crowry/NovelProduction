@@ -128,7 +128,7 @@ def _read_xml(archive: zipfile.ZipFile, path: str) -> ElementTree.Element:
     try:
         payload = archive.read(path)
         return ElementTree.fromstring(payload)
-    except (KeyError, OSError, ElementTree.ParseError) as exc:
+    except (KeyError, OSError, zipfile.BadZipFile, ElementTree.ParseError) as exc:
         raise SourceParseError(f"EPUB XML resource is invalid: {path}") from exc
 
 
@@ -214,7 +214,7 @@ def _navigation_labels(
             return labels
         try:
             payload = archive.read(nav_path)
-        except (KeyError, OSError):
+        except (KeyError, OSError, zipfile.BadZipFile):
             return labels
         soup = BeautifulSoup(payload, "html.parser")
         for anchor in soup.find_all("a"):

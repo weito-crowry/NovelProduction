@@ -255,6 +255,20 @@ def _epub_bytes(
     return output.getvalue()
 
 
+def _corrupt_zip_member(payload: bytes, member_name: str) -> bytes:
+    corrupted = bytearray(payload)
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        info = archive.getinfo(member_name)
+        data_offset = (
+            info.header_offset
+            + 30
+            + len(info.filename.encode("utf-8"))
+            + len(info.extra)
+        )
+    corrupted[data_offset] ^= 0x01
+    return bytes(corrupted)
+
+
 def test_epub3_invalid_navigation_href_falls_back_to_heading_or_episode() -> None:
     imported = get_source_adapter("epub").import_work(
         SourceRequest(
@@ -293,6 +307,30 @@ def test_missing_epub_navigation_resource_falls_back_to_heading_or_episode() -> 
             source_type="epub",
             filename="upload.epub",
             payload=_epub_bytes(nav_missing=True),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("include_nav", "member_name"),
+    [(True, "OEBPS/nav.xhtml"), (False, "OEBPS/toc.ncx")],
+)
+def test_corrupt_epub_navigation_resource_falls_back_to_heading_or_episode(
+    include_nav: bool, member_name: str
+) -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_corrupt_zip_member(
+                _epub_bytes(include_nav=include_nav), member_name
+            ),
         )
     )
 
