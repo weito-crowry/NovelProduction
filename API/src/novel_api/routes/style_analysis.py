@@ -452,6 +452,7 @@ def _job_response(job: JobRecord) -> StyleJobResponse:
         job_id=job.id,
         job_type=job.job_type,
         status=job.status,
+        progress={"current": job.progress_current, "total": job.progress_total},
         result=result if isinstance(result, dict) else {},
         warnings=warnings if isinstance(warnings, list) else [],
         error_code=job.error_code,

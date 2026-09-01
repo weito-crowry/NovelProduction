@@ -7,15 +7,19 @@ import pytest
 from fastapi.testclient import TestClient
 from novel_core.config import DatabaseConfig
 from novel_core.database import default_migration_dir, open_database
+from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisResult
 from novel_core.style_analysis.model_contracts import ModelRequest
 from novel_core.style_analysis.runtime_models import JobRecord
 
 from novel_api.app import create_app
 from novel_api.config import ApiSettings
 from novel_api.project_registry import ProjectRegistry
+from novel_api.routes.style_analysis import _job_response
 from novel_api.service_container import ProjectDescriptor, ProjectTarget
+from novel_api.style_analysis import execution as execution_module
 from novel_api.style_analysis import job_service as job_service_module
 from novel_api.style_analysis import job_worker as job_worker_module
+from novel_api.style_analysis.catalog_service import StyleAnalysisCatalogService
 from novel_api.style_analysis.execution import execute_style_job
 from novel_api.style_analysis.ingestion_service import import_source
 from novel_api.style_analysis.job_service import StyleJobService
@@ -86,6 +90,17 @@ class _WorkFakeModel:
         raise AssertionError(request.prompt_id)
 
 
+class _BlockingWorkFakeModel(_WorkFakeModel):
+    def __init__(self) -> None:
+        self.started = Event()
+        self.release = Event()
+
+    def complete_json(self, request: ModelRequest) -> dict[str, object]:
+        self.started.set()
+        assert self.release.wait(timeout=5)
+        return super().complete_json(request)
+
+
 def test_fresh_reference_work_full_analysis_does_not_nest_transactions(
     data_root: Path,
 ) -> None:
@@ -107,7 +122,8 @@ def test_fresh_reference_work_full_analysis_does_not_nest_transactions(
     )
     connection = open_database(
         DatabaseConfig(
-            db_path=project_dir / "story.db", migration_dir=default_migration_dir()
+            db_path=project_dir / "story.db",
+            migration_dir=default_migration_dir(),
         )
     )
     try:
@@ -146,8 +162,249 @@ def test_fresh_reference_work_full_analysis_does_not_nest_transactions(
         assert connection.execute(
             "SELECT COUNT(*) FROM style_structure_revisions"
         ).fetchone() == (1,)
+        document_id = connection.execute(
+            "SELECT id FROM style_documents WHERE reference_episode_id IS NOT NULL"
+        ).fetchone()[0]
+        structure_id = connection.execute(
+            "SELECT current_structure_revision_id FROM style_documents WHERE id = ?",
+            (document_id,),
+        ).fetchone()[0]
+        semantics = StyleAnalysisCatalogService(connection).get_semantics(
+            document_id, structure_id
+        )
+        assert {
+            "entities",
+            "mentions",
+            "speakers",
+            "terms",
+            "term_mentions",
+            "explanations",
+            "scenes",
+            "blocks",
+            "raw",
+            "effective",
+            "analysis_run_ids",
+            "analysis_status",
+        } <= semantics.keys()
+        assert len(semantics["analysis_run_ids"]) == 9
+        assert all(
+            output["analysis_run_id"] in semantics["analysis_run_ids"]
+            for output in semantics["raw"]
+        )
+        connection.execute(
+            "INSERT INTO style_entities "
+            "(reference_work_id, document_id, entity_type, canonical_name, origin) "
+            "VALUES (?, NULL, 'person', 'Manual Person', 'manual')",
+            (
+                connection.execute(
+                    "SELECT reference_work_id FROM style_reference_episodes "
+                    "WHERE id = (SELECT reference_episode_id FROM style_documents "
+                    "WHERE id = ?)",
+                    (document_id,),
+                ).fetchone()[0],
+            ),
+        )
+        connection.commit()
+        current_text_id, current_structure_id = connection.execute(
+            "SELECT current_text_revision_id, current_structure_revision_id "
+            "FROM style_documents WHERE id = ?",
+            (document_id,),
+        ).fetchone()
+        assert StyleAnalysisCatalogService(connection).analysis_status(
+            document_id, current_text_id, current_structure_id
+        )["semantic"] == {
+            "state": "stale",
+            "reasons": ["CURRENT_RESOLUTION_CHANGED"],
+        }
     finally:
         connection.close()
+
+
+def test_job_response_exposes_progress_dto() -> None:
+    job = JobRecord(
+        id=1,
+        job_type="analyze_document",
+        payload_json="{}",
+        status="running",
+        cancel_requested=0,
+        progress_current=2,
+        progress_total=5,
+        result_json="{}",
+        warning_json="[]",
+        created_at="now",
+        started_at="now",
+        finished_at=None,
+        error_code=None,
+        error_message=None,
+        version=1,
+    )
+    response = _job_response(job)
+    assert response.progress == {"current": 2, "total": 5}
+
+
+def test_reference_work_fails_episode_when_revision_changes_during_analysis(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = ProjectRegistry(data_root)
+    registry.create("Reference", project_id="reference")
+    project_dir = data_root / "reference"
+    target = ProjectTarget(
+        project_id="reference",
+        descriptor=ProjectDescriptor(
+            project_dir=project_dir, story_db=project_dir / "story.db"
+        ),
+    )
+    imported = import_source(
+        target,
+        source_type="text",
+        filename="reference.txt",
+        payload="Episode 1\n\n本文。".encode(),
+        media_type="text/plain",
+    )
+    connection = open_database(
+        DatabaseConfig(
+            db_path=project_dir / "story.db", migration_dir=default_migration_dir()
+        )
+    )
+    try:
+        cursor = connection.execute(
+            "INSERT INTO style_jobs (job_type, payload_json, status) VALUES "
+            "('analyze_reference_work', ?, 'running')",
+            (json.dumps({"reference_work_id": imported.reference_work_id}),),
+        )
+        assert cursor.lastrowid is not None
+        connection.commit()
+        row = connection.execute(
+            "SELECT id, job_type, payload_json, status, cancel_requested, "
+            "progress_current, progress_total, result_json, warning_json, created_at, "
+            "started_at, finished_at, error_code, error_message, version "
+            "FROM style_jobs WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        assert row is not None
+        job = StyleJobService._record_from_row(row)
+
+        class _RevisionChangingOrchestrator:
+            def __init__(
+                self, changed_connection: sqlite3.Connection, **_: object
+            ) -> None:
+                self.connection = changed_connection
+
+            def analyze_document(self, **kwargs: object) -> DocumentAnalysisResult:
+                self.connection.execute(
+                    "UPDATE style_documents SET current_text_revision_id = "
+                    "current_text_revision_id + 1"
+                )
+                self.connection.commit()
+                return DocumentAnalysisResult(
+                    status="succeeded",
+                    text_revision_id=int(kwargs["text_revision_id"]),
+                    structure_revision_id=1,
+                    run_ids=(1,),
+                    warnings=(),
+                    metrics=(),
+                )
+
+        monkeypatch.setattr(
+            execution_module,
+            "DocumentAnalysisOrchestrator",
+            _RevisionChangingOrchestrator,
+        )
+        execute_style_job(
+            connection,
+            job,
+            model_client=None,
+            model_provider=None,
+            model_id=None,
+        )
+        result = json.loads(
+            connection.execute(
+                "SELECT result_json FROM style_jobs WHERE id = ?", (job.id,)
+            ).fetchone()[0]
+        )
+        assert connection.execute(
+            "SELECT status FROM style_jobs WHERE id = ?", (job.id,)
+        ).fetchone() == ("failed",)
+        assert result["episodes"][0]["error_code"] == "DOCUMENT_REVISION_CHANGED"
+    finally:
+        connection.close()
+
+
+def test_reference_work_cancellation_during_model_call_marks_job_cancelled(
+    data_root: Path,
+) -> None:
+    registry = ProjectRegistry(data_root)
+    registry.create("Reference", project_id="reference")
+    project_dir = data_root / "reference"
+    target = ProjectTarget(
+        project_id="reference",
+        descriptor=ProjectDescriptor(
+            project_dir=project_dir, story_db=project_dir / "story.db"
+        ),
+    )
+    imported = import_source(
+        target,
+        source_type="text",
+        filename="reference.txt",
+        payload="Episode 1\n\n本文。".encode(),
+        media_type="text/plain",
+    )
+    project_db = project_dir / "story.db"
+    connection = open_database(
+        DatabaseConfig(db_path=project_db, migration_dir=default_migration_dir())
+    )
+    cursor = connection.execute(
+        "INSERT INTO style_jobs (job_type, payload_json, status) VALUES "
+        "('analyze_reference_work', ?, 'running')",
+        (json.dumps({"reference_work_id": imported.reference_work_id}),),
+    )
+    assert cursor.lastrowid is not None
+    connection.commit()
+    row = connection.execute(
+        "SELECT id, job_type, payload_json, status, cancel_requested, "
+        "progress_current, progress_total, result_json, warning_json, created_at, "
+        "started_at, finished_at, error_code, error_message, version "
+        "FROM style_jobs WHERE id = ?",
+        (cursor.lastrowid,),
+    ).fetchone()
+    assert row is not None
+    job = StyleJobService._record_from_row(row)
+    connection.close()
+    model = _BlockingWorkFakeModel()
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        worker_connection = open_database(
+            DatabaseConfig(db_path=project_db, migration_dir=default_migration_dir())
+        )
+        try:
+            execute_style_job(
+                worker_connection,
+                job,
+                model_client=model,
+                model_provider="test",
+                model_id="fake",
+            )
+        except BaseException as exc:  # pragma: no cover - diagnostic guard
+            errors.append(exc)
+        finally:
+            worker_connection.close()
+
+    thread = Thread(target=run)
+    thread.start()
+    try:
+        assert model.started.wait(timeout=5)
+        cancelled = StyleJobService(data_root=data_root).cancel("reference", job.id)
+        assert cancelled.status == "running"
+        assert cancelled.cancel_requested == 1
+        model.release.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert errors == []
+        assert read_job(project_db, job.id).status == "cancelled"
+    finally:
+        model.release.set()
+        thread.join(timeout=5)
 
 
 def test_enqueue_commits_before_worker_notification(data_root: Path) -> None:

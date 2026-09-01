@@ -11,7 +11,7 @@ from novel_core.style_analysis.entity_models import (
     EntityRecord,
 )
 from novel_core.style_analysis.entity_repository import EntityRepository
-from novel_core.style_analysis.resolver_candidates import comparison_key
+from novel_core.style_analysis.resolver_candidates import comparison_key, exact_key
 
 
 class EntityService:
@@ -25,17 +25,17 @@ class EntityService:
         scope = self._scope(document_id)
         entities = self.repository.list_for_scope(**scope)
         matches: list[EntityRecord] = []
-        key = comparison_key(surface)
+        key = exact_key(surface)
         for entity in entities:
             if not self._enabled(entity.id):
                 continue
-            if comparison_key(self._effective_name(entity)) == key:
+            if exact_key(self._effective_name(entity)) == key:
                 matches.append(entity)
                 continue
             for alias in self.repository.aliases_for(entity.id):
                 if not self._alias_is_usable(alias.id, alias.origin):
                     continue
-                if comparison_key(alias.alias) == key:
+                if exact_key(alias.alias) == key:
                     matches.append(entity)
                     break
         return tuple(
@@ -93,7 +93,7 @@ class EntityService:
         analysis_run_id: int,
         source_mention_id: int,
     ) -> None:
-        if not alias or alias_kind in {"title", "role"}:
+        if not alias or alias_kind == "pronoun":
             return
         entity = self.repository.get(entity_id)
         values = [self._effective_name(entity)] + [

@@ -5,6 +5,7 @@ import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
+from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.model_contracts import ModelClient
 from novel_core.style_analysis.runtime_models import JobRecord
@@ -29,7 +30,7 @@ def execute_style_job(
     try:
         if job.job_type == "analyze_document":
             result = _document(
-                connection, payload, model_client, model_provider, model_id
+                connection, job.id, payload, model_client, model_provider, model_id
             )
             _store_result(
                 connection,
@@ -47,6 +48,8 @@ def execute_style_job(
             _work(connection, job, payload, model_client, model_provider, model_id)
         else:
             _fail(connection, job.id, "JOB_TYPE_NOT_IMPLEMENTED", job.job_type)
+    except AnalysisCancelledError:
+        _cancel(connection, job.id)
     except ValueError as exc:
         _fail(connection, job.id, str(exc), str(exc))
     except Exception as exc:
@@ -55,6 +58,7 @@ def execute_style_job(
 
 def _document(
     connection: sqlite3.Connection,
+    job_id: int,
     payload: Mapping[str, object],
     model_client: ModelClient | None,
     provider: str | None,
@@ -71,6 +75,7 @@ def _document(
         model_client=model_client,
         model_provider=provider,
         model_id=model_id,
+        cancellation_probe=lambda: _is_cancel_requested(connection, job_id),
     )
     rebuild_structure = payload.get("rebuild_structure", False)
     if not isinstance(rebuild_structure, bool):
@@ -110,6 +115,7 @@ def _work(
         model_client=model_client,
         model_provider=provider,
         model_id=model_id,
+        cancellation_probe=lambda: _is_cancel_requested(connection, job.id),
     )
     statuses: list[str] = []
     results: list[dict[str, object]] = []
@@ -125,11 +131,7 @@ def _work(
             "SELECT cancel_requested FROM style_jobs WHERE id = ?", (job.id,)
         ).fetchone()
         if state is not None and state[0]:
-            connection.execute(
-                "UPDATE style_jobs SET status='cancelled', "
-                "finished_at=CURRENT_TIMESTAMP WHERE id = ?",
-                (job.id,),
-            )
+            _cancel(connection, job.id)
             return
         current = connection.execute(
             "SELECT current_text_revision_id FROM style_documents WHERE id = ?",
@@ -151,15 +153,34 @@ def _work(
                 text_revision_id=text_revision_id,
                 preset=preset,
             )
-            statuses.append(result.status)
-            warnings.extend(result.warnings)
-            results.append(
-                {
-                    "episode_id": episode_id,
-                    "status": result.status,
-                    "analysis_run_ids": list(result.run_ids),
-                }
-            )
+            if _is_cancel_requested(connection, job.id):
+                _cancel(connection, job.id)
+                return
+            after = connection.execute(
+                "SELECT current_text_revision_id FROM style_documents WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+            if after is None or after[0] != text_revision_id:
+                statuses.append("failed")
+                warnings.append(f"DOCUMENT_REVISION_CHANGED:{episode_id}")
+                results.append(
+                    {
+                        "episode_id": episode_id,
+                        "status": "failed",
+                        "error_code": "DOCUMENT_REVISION_CHANGED",
+                        "analysis_run_ids": list(result.run_ids),
+                    }
+                )
+            else:
+                statuses.append(result.status)
+                warnings.extend(result.warnings)
+                results.append(
+                    {
+                        "episode_id": episode_id,
+                        "status": result.status,
+                        "analysis_run_ids": list(result.run_ids),
+                    }
+                )
         connection.execute(
             "UPDATE style_jobs SET progress_current = ? WHERE id = ?", (index, job.id)
         )
@@ -217,6 +238,22 @@ def _fail(connection: sqlite3.Connection, job_id: int, code: str, message: str) 
         "error_message=?, finished_at=CURRENT_TIMESTAMP WHERE id = ?",
         (code, message, job_id),
     )
+
+
+def _is_cancel_requested(connection: sqlite3.Connection, job_id: int) -> bool:
+    row = connection.execute(
+        "SELECT cancel_requested FROM style_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
+def _cancel(connection: sqlite3.Connection, job_id: int) -> None:
+    connection.execute(
+        "UPDATE style_jobs SET status = 'cancelled', "
+        "finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE id = ?",
+        (job_id,),
+    )
+    connection.commit()
 
 
 def _positive_int(value: object, code: str) -> int:

@@ -120,6 +120,15 @@ class AnalyzerProviderUnavailableError(ValidationError):
         self.args = (f"{self.code}: {message}",)
 
 
+class AnalysisCancelledError(NovelMcpError):
+    """Raised at an analysis safe point after a job cancellation request."""
+
+    code = "ANALYSIS_CANCELLED"
+
+    def __init__(self, message: str = "style analysis cancelled") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class RelationshipIntegrityError(ValidationError):
     """Raised when relationship temporal ranges are ambiguous."""
 

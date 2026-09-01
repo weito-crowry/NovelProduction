@@ -50,6 +50,11 @@ def comparison_key(value: str) -> str:
     )
 
 
+def exact_key(value: str) -> str:
+    """Normalize Unicode without changing the literal spelling or spacing."""
+    return unicodedata.normalize("NFC", value)
+
+
 def candidate_score(surface: str, candidate_values: Sequence[str]) -> float:
     source = comparison_key(surface)
     if not source:

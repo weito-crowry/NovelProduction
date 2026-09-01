@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 from test_style_analysis_migration import open_test_database
 
+from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
+from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.model_contracts import (
     ModelRequest,
     validate_model_object,
@@ -14,6 +17,7 @@ from novel_core.style_analysis.model_contracts import (
 )
 from novel_core.style_analysis.model_prompts import PROMPT_REGISTRY
 from novel_core.style_analysis.resolver_candidates import build_context_window
+from novel_core.style_analysis.term_service import TermService
 
 
 def test_semantics_migration_creates_all_sa_d_tables(tmp_path: Path) -> None:
@@ -101,6 +105,142 @@ def test_context_window_is_scene_bounded_and_subject_is_once() -> None:
     assert [block["block_id"] for block in previous] == [1]
     assert subject["block_id"] == 2
     assert [block["block_id"] for block in following] == [4]
+
+
+def test_registry_exact_match_requires_literal_canonical_or_alias_text(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        connection.execute("INSERT INTO works (slug, working_title) VALUES ('x', 'X')")
+        work_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO chapters (work_id, position, title) VALUES (?, 1, 'c')",
+            (work_id,),
+        )
+        chapter_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO episodes (work_id, chapter_id, position, title) "
+            "VALUES (?, ?, 1, 'e')",
+            (work_id, chapter_id),
+        )
+        episode_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_documents "
+            "(kind, project_work_id, project_episode_id) VALUES "
+            "('project_episode_draft', ?, ?)",
+            (work_id, episode_id),
+        )
+        document_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_entities "
+            "(document_id, entity_type, canonical_name, origin) "
+            "VALUES (?, 'person', '田 中', 'manual')",
+            (document_id,),
+        )
+        connection.execute(
+            "INSERT INTO style_terms "
+            "(document_id, canonical_label, term_type, origin) "
+            "VALUES (?, '魔法 書', 'object', 'manual')",
+            (document_id,),
+        )
+        connection.commit()
+
+        assert (
+            EntityService(connection).exact_matches(
+                document_id=document_id, surface="田中"
+            )
+            == ()
+        )
+        assert (
+            TermService(connection).exact_matches(
+                document_id=document_id, surface="魔法書"
+            )
+            == ()
+        )
+
+        orchestrator = DocumentAnalysisOrchestrator(
+            connection, model_client=None, model_provider=None, model_id=None
+        )
+        entity_state = orchestrator._entity_registry_state(document_id)
+        term_state = orchestrator._term_registry_state(document_id)
+        connection.execute(
+            "INSERT INTO style_entities "
+            "(document_id, entity_type, canonical_name, origin) "
+            "VALUES (?, 'person', '推論人物', 'inferred')",
+            (document_id,),
+        )
+        inferred_entity_id = connection.execute(
+            "SELECT last_insert_rowid()"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_entity_aliases "
+            "(entity_id, alias, alias_kind, origin) "
+            "VALUES (?, '推論別名', 'name', 'inferred')",
+            (inferred_entity_id,),
+        )
+        connection.execute(
+            "INSERT INTO style_terms "
+            "(document_id, canonical_label, term_type, origin) "
+            "VALUES (?, '推論用語', 'object', 'inferred')",
+            (document_id,),
+        )
+        inferred_term_id = connection.execute("SELECT last_insert_rowid()").fetchone()[
+            0
+        ]
+        connection.execute(
+            "INSERT INTO style_term_aliases "
+            "(term_id, alias, origin) VALUES (?, '推論別名', 'inferred')",
+            (inferred_term_id,),
+        )
+        connection.commit()
+        assert orchestrator._entity_registry_state(document_id) == entity_state
+        assert orchestrator._term_registry_state(document_id) == term_state
+
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(document_id, subject_type, subject_id, field_path, operation, "
+            "value_json) "
+            "VALUES (?, 'entity', 1, 'entity.enabled', 'set', 'false')",
+            (document_id,),
+        )
+        connection.commit()
+        assert orchestrator._entity_registry_state(document_id) != entity_state
+    finally:
+        connection.close()
+
+
+def test_pronoun_has_no_inferred_alias_kind() -> None:
+    from novel_core.style_analysis.analysis_orchestrator import _alias_kind
+
+    assert _alias_kind("proper_name") == "name"
+    assert _alias_kind("alias") == "nickname"
+    assert _alias_kind("role_title") == "role"
+    assert _alias_kind("pronoun") == "pronoun"
+
+
+def test_term_novelty_reduction_ignores_uncertain_when_one_concrete_value_remains() -> (
+    None
+):
+    from novel_core.style_analysis.analysis_orchestrator import reduce_term_novelty
+
+    assert reduce_term_novelty(("work_specific", "uncertain")) == "work_specific"
+    assert reduce_term_novelty(("work_specific", "other")) == "uncertain"
+    assert reduce_term_novelty(("uncertain", "uncertain")) == "uncertain"
+
+
+def test_orchestrator_cancellation_probe_is_a_safe_point(tmp_path: Path) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        orchestrator = DocumentAnalysisOrchestrator(
+            connection,
+            model_client=None,
+            cancellation_probe=lambda: True,
+        )
+        with pytest.raises(AnalysisCancelledError):
+            orchestrator._safe_point()
+    finally:
+        connection.close()
 
 
 class _FakeModel:
@@ -307,13 +447,29 @@ def test_full_automatic_structure_materializes_semantic_structure(
 
         assert result.status == "succeeded"
         structure = connection.execute(
-            "SELECT source_kind, parent_structure_revision_id "
+            "SELECT source_kind, parent_structure_revision_id, segmenter_id, "
+            "segmenter_version "
             "FROM style_structure_revisions WHERE id = ?",
             (result.structure_revision_id,),
         ).fetchone()
         assert structure is not None
         assert structure[0] == "semantic"
         assert structure[1] is not None
+        assert structure[2:4] == ("canonical-fiction-structure", 1)
+        configs = dict(
+            connection.execute(
+                "SELECT analyzer_id, config_json FROM style_analysis_runs "
+                "WHERE document_id = ?",
+                (document_id,),
+            ).fetchall()
+        )
+        assert configs["scene-semantic-classifier"] == '{"scene_taxonomy_version":1}'
+        assert configs["block-semantic-classifier"] == (
+            '{"block_semantic_taxonomy_version":1}'
+        )
+        assert configs["pov-classifier"] == '{"pov_taxonomy_version":1}'
+        basic_config = json.loads(configs["style-metrics-basic"])
+        assert basic_config["metric_versions"]
         assert connection.execute(
             "SELECT COUNT(*) FROM style_structure_analysis_sources "
             "WHERE structure_revision_id = ?",

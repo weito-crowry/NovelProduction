@@ -357,7 +357,7 @@ class StyleStructureService:
                     (
                         text_revision_id,
                         cast(int, next_revision[0]),
-                        "semantic-boundary-materializer",
+                        "canonical-fiction-structure",
                         1,
                         parent_structure_revision_id,
                         fingerprint,

@@ -5,7 +5,7 @@ import sqlite3
 from collections.abc import Mapping
 from typing import cast
 
-from novel_core.style_analysis.resolver_candidates import comparison_key
+from novel_core.style_analysis.resolver_candidates import comparison_key, exact_key
 from novel_core.style_analysis.term_models import TERM_TYPES, TermRecord
 from novel_core.style_analysis.term_repository import TermRepository
 
@@ -19,21 +19,21 @@ class TermService:
         self, *, document_id: int, surface: str
     ) -> tuple[TermRecord, ...]:
         terms = self.repository.list_for_scope(**self._scope(document_id))
-        key = comparison_key(surface)
+        key = exact_key(surface)
         matches: list[TermRecord] = []
         for term in terms:
             if not self._enabled(term.id):
                 continue
             if (
                 self._effective_label(term)
-                and comparison_key(self._effective_label(term)) == key
+                and exact_key(self._effective_label(term)) == key
             ):
                 matches.append(term)
                 continue
             for alias in self.repository.aliases_for(term.id):
                 if (
                     self._alias_is_usable(alias.id, alias.origin)
-                    and comparison_key(alias.alias) == key
+                    and exact_key(alias.alias) == key
                 ):
                     matches.append(term)
                     break

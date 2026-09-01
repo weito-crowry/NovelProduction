@@ -67,6 +67,7 @@ class StyleJobResponse(BaseModel):
     job_id: int
     job_type: str
     status: str
+    progress: dict[str, int | None]
     result: dict[str, Any]
     warnings: list[Any]
     error_code: str | None

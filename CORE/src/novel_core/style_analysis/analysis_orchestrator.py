@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import cast
 
+from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.analysis_runtime import (
     AnalysisRuntime,
@@ -33,12 +34,16 @@ from novel_core.style_analysis.fingerprints import (
     JsonValue,
     fingerprint_json,
 )
-from novel_core.style_analysis.metrics import calculate_basic_metrics
+from novel_core.style_analysis.metrics import (
+    BASIC_METRIC_DEFINITIONS,
+    calculate_basic_metrics,
+)
 from novel_core.style_analysis.model_contracts import (
     JsonObject as ModelJsonObject,
 )
 from novel_core.style_analysis.model_contracts import (
     ModelClient,
+    ModelRequest,
     validate_confidence,
 )
 from novel_core.style_analysis.model_prompts import get_prompt
@@ -84,6 +89,38 @@ def _json(value: object) -> str:
     )
 
 
+def reduce_term_novelty(values: Sequence[str]) -> str:
+    concrete = {value for value in values if value != "uncertain"}
+    return next(iter(concrete)) if len(concrete) == 1 else "uncertain"
+
+
+class _SafePointModelClient:
+    def __init__(self, delegate: ModelClient, safe_point: Callable[[], None]) -> None:
+        self._delegate = delegate
+        self._safe_point = safe_point
+
+    def complete_json(self, request: ModelRequest) -> ModelJsonObject:
+        self._safe_point()
+        try:
+            return self._delegate.complete_json(request)
+        finally:
+            self._safe_point()
+
+    def complete_json_validated(
+        self,
+        request: ModelRequest,
+        validator: Callable[[ModelJsonObject], ModelJsonObject],
+    ) -> ModelJsonObject:
+        self._safe_point()
+        try:
+            validated = getattr(self._delegate, "complete_json_validated", None)
+            if callable(validated):
+                return cast(ModelJsonObject, validated(request, validator))
+            return validator(self._delegate.complete_json(request))
+        finally:
+            self._safe_point()
+
+
 class DocumentAnalysisOrchestrator:
     def __init__(
         self,
@@ -93,6 +130,7 @@ class DocumentAnalysisOrchestrator:
         model_provider: str | None = None,
         model_id: str | None = None,
         policy: AnalysisPolicy | None = None,
+        cancellation_probe: Callable[[], bool] | None = None,
     ) -> None:
         import sqlite3
 
@@ -103,6 +141,12 @@ class DocumentAnalysisOrchestrator:
         self.model_provider = model_provider
         self.model_id = model_id
         self.policy = policy or AnalysisPolicy()
+        self._cancellation_probe = cancellation_probe
+        self._analysis_client = (
+            _SafePointModelClient(model_client, self._safe_point)
+            if model_client is not None
+            else None
+        )
         self.runs = AnalysisRunRepository(connection)
         self.runtime = AnalysisRuntime(self.runs)
         self._reused_run_ids: set[int] = set()
@@ -121,6 +165,7 @@ class DocumentAnalysisOrchestrator:
         preset: str = "full",
         rebuild_structure: bool = False,
     ) -> DocumentAnalysisResult:
+        self._safe_point()
         if preset not in {"deterministic", "full"}:
             raise ValueError("ANALYSIS_PRESET_INVALID")
         document = self.text.get_document(document_id)
@@ -187,6 +232,8 @@ class DocumentAnalysisOrchestrator:
                     scenes = self.structure.list_scenes(structure.id)
                     blocks = self.structure.list_blocks(structure.id)
                     sentences = self.structure.list_sentences(structure.id)
+            except AnalysisCancelledError:
+                raise
             except Exception as exc:
                 warnings.append(f"BOUNDARY_FAILED:{exc}")
 
@@ -197,8 +244,11 @@ class DocumentAnalysisOrchestrator:
                         document_id, revision.id, structure.id, scenes, blocks
                     )
                 )
+            except AnalysisCancelledError:
+                raise
             except Exception as exc:
                 warnings.append(f"SEMANTIC_FAILED:{exc}")
+        self._safe_point()
         try:
             basic_run, basic_metrics = self._basic(
                 document_id,
@@ -230,6 +280,11 @@ class DocumentAnalysisOrchestrator:
             warnings=tuple(warnings),
             metrics=tuple(metrics),
         )
+
+    def _safe_point(self) -> None:
+        self.runs.commit()
+        if self._cancellation_probe is not None and self._cancellation_probe():
+            raise AnalysisCancelledError()
 
     def _new_run(
         self,
@@ -397,11 +452,12 @@ class DocumentAnalysisOrchestrator:
                 ]
                 if len(scene_blocks) < 2:
                     continue
+                self._safe_point()
                 candidates = detect_scene_boundaries(
                     base_structure_revision_id=structure_id,
                     scene_id=scene.id,
                     blocks=scene_blocks,
-                    client=cast(ModelClient, self.client),
+                    client=cast(ModelClient, self._analysis_client),
                 )
                 for candidate in candidates:
                     self.semantic.insert_raw(
@@ -445,6 +501,7 @@ class DocumentAnalysisOrchestrator:
             mention_warnings: list[str] = []
             if not self._is_reused(mention_run):
                 for scene in scenes:
+                    self._safe_point()
                     current = [
                         block for block in all_json if block.get("scene_id") == scene.id
                     ]
@@ -462,7 +519,7 @@ class DocumentAnalysisOrchestrator:
                         scene_id=scene.id,
                         blocks=current,
                         previous_context_blocks=previous_scene,
-                        client=cast(ModelClient, self.client),
+                        client=cast(ModelClient, self._analysis_client),
                     )
                     mention_warnings.extend(mention_extracted.warnings)
                     for item in mention_extracted.items:
@@ -486,6 +543,9 @@ class DocumentAnalysisOrchestrator:
                     status="partial" if mention_warnings else "succeeded",
                     warnings=mention_warnings,
                 )
+        except AnalysisCancelledError as exc:
+            self._finish(mention_run, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(mention_run, status="failed", error=exc)
         result.append(mention_run)
@@ -543,13 +603,14 @@ class DocumentAnalysisOrchestrator:
             if not self._is_reused(term_candidate_run):
                 term_warnings: list[str] = []
                 for scene in scenes:
+                    self._safe_point()
                     current = [
                         block for block in all_json if block.get("scene_id") == scene.id
                     ]
                     term_extracted = extract_term_candidates(
                         scene_id=scene.id,
                         blocks=current,
-                        client=cast(ModelClient, self.client),
+                        client=cast(ModelClient, self._analysis_client),
                     )
                     term_warnings.extend(term_extracted.warnings)
                     for term_item in term_extracted.items:
@@ -576,6 +637,9 @@ class DocumentAnalysisOrchestrator:
                     status="partial" if term_warnings else "succeeded",
                     warnings=term_warnings,
                 )
+        except AnalysisCancelledError as exc:
+            self._finish(term_candidate_run, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(term_candidate_run, status="failed", error=exc)
         result.append(term_candidate_run)
@@ -668,7 +732,12 @@ class DocumentAnalysisOrchestrator:
             state_fingerprint=fingerprint_json(
                 cast(
                     JsonValue,
-                    {"scope": scope, "manual_state": self._manual_state("entity")},
+                    {
+                        "scope": scope,
+                        "entity_registry_state": self._entity_registry_state(
+                            document_id
+                        ),
+                    },
                 )
             ),
             policy_inputs=("entity_resolution_auto_merge",),
@@ -685,6 +754,7 @@ class DocumentAnalysisOrchestrator:
             for mention in self.entities.repository.list_mentions(
                 analysis_run_id=mention_run
             ):
+                self._safe_point()
                 exact = self.entities.exact_matches(
                     document_id=document_id, surface=mention.surface
                 )
@@ -740,7 +810,7 @@ class DocumentAnalysisOrchestrator:
                     next_blocks=following,
                     candidates=candidates,
                     auto_merge_threshold=self.policy.entity_resolution_auto_merge,
-                    client=cast(ModelClient, self.client),
+                    client=cast(ModelClient, self._analysis_client),
                 )
                 if decision.decision == "existing" and decision.entity_id is not None:
                     entity = self.entities.repository.get(decision.entity_id)
@@ -783,6 +853,9 @@ class DocumentAnalysisOrchestrator:
                     )
                     resolved_by_scene.setdefault(mention.scene_id, set()).add(entity.id)
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -804,7 +877,11 @@ class DocumentAnalysisOrchestrator:
             state_fingerprint=fingerprint_json(
                 cast(
                     JsonValue,
-                    {"mention_resolution": self._mention_resolution_state(dependency)},
+                    {
+                        "mention_resolution": self._mention_resolution_state(
+                            document_id, structure_id, dependency
+                        )
+                    },
                 )
             ),
         )
@@ -818,6 +895,7 @@ class DocumentAnalysisOrchestrator:
             for block in blocks:
                 if block.block_type != "dialogue":
                     continue
+                self._safe_point()
                 people = self._people_for_scene(document_id, dependency, block.scene_id)
                 previous, subject, following = self._context(block_json, block.id, 4, 4)
                 value = attribute_speaker(
@@ -825,7 +903,7 @@ class DocumentAnalysisOrchestrator:
                     subject_block=subject,
                     next_blocks=following,
                     people=people,
-                    client=cast(ModelClient, self.client),
+                    client=cast(ModelClient, self._analysis_client),
                 )
                 self.semantic.insert_raw(
                     annotation_type="speaker",
@@ -840,6 +918,9 @@ class DocumentAnalysisOrchestrator:
                     analysis_run_id=run_id,
                 )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -862,16 +943,21 @@ class DocumentAnalysisOrchestrator:
             state_fingerprint=fingerprint_json(
                 cast(
                     JsonValue,
-                    {"mention_resolution": self._mention_resolution_state(dependency)},
+                    {
+                        "mention_resolution": self._mention_resolution_state(
+                            document_id, structure_id, dependency
+                        )
+                    },
                 )
             ),
-            config={"taxonomy_version": 1},
+            config={"pov_taxonomy_version": 1},
         )
         revision = self.text.get_text_revision(document_id, text_revision_id)
         try:
             if self._is_reused(run_id):
                 return run_id
             for scene in scenes:
+                self._safe_point()
                 scene_json = [
                     self._block_json(block, revision.canonical_text)
                     for block in blocks
@@ -882,7 +968,7 @@ class DocumentAnalysisOrchestrator:
                     scene_id=scene.id,
                     blocks=scene_json,
                     people=people,
-                    client=cast(ModelClient, self.client),
+                    client=cast(ModelClient, self._analysis_client),
                 )
                 self.semantic.insert_raw(
                     annotation_type="scene.pov",
@@ -893,6 +979,9 @@ class DocumentAnalysisOrchestrator:
                     analysis_run_id=run_id,
                 )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -920,7 +1009,10 @@ class DocumentAnalysisOrchestrator:
             state_fingerprint=fingerprint_json(
                 cast(
                     JsonValue,
-                    {"scope": scope, "manual_state": self._manual_state("term")},
+                    {
+                        "scope": scope,
+                        "term_registry_state": self._term_registry_state(document_id),
+                    },
                 )
             ),
             policy_inputs=("term_resolution_auto_merge",),
@@ -942,6 +1034,7 @@ class DocumentAnalysisOrchestrator:
             resolved_by_scene: dict[int, set[int]] = {}
             novelty_by_term: dict[int, list[tuple[str, float]]] = {}
             for annotation in annotations:
+                self._safe_point()
                 if annotation.annotation_type != "term_candidate":
                     continue
                 value = json.loads(annotation.value_json)
@@ -990,7 +1083,7 @@ class DocumentAnalysisOrchestrator:
                         next_blocks=following,
                         candidates=candidates,
                         auto_merge_threshold=self.policy.term_resolution_auto_merge,
-                        client=cast(ModelClient, self.client),
+                        client=cast(ModelClient, self._analysis_client),
                     )
                     if decision.decision == "unresolved":
                         continue
@@ -1029,12 +1122,7 @@ class DocumentAnalysisOrchestrator:
                 values = novelty_by_term.setdefault(term_id, [])
                 values.append((novelty, confidence))
             for term_id, values in novelty_by_term.items():
-                novelty_values = {item[0] for item in values}
-                reduced = (
-                    next(iter(novelty_values))
-                    if len(novelty_values) == 1
-                    else "uncertain"
-                )
+                reduced = reduce_term_novelty(tuple(item[0] for item in values))
                 self.semantic.insert_raw(
                     annotation_type="term.novelty",
                     subject_type="term",
@@ -1044,6 +1132,9 @@ class DocumentAnalysisOrchestrator:
                     analysis_run_id=run_id,
                 )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -1073,6 +1164,7 @@ class DocumentAnalysisOrchestrator:
             for mention in self.terms.repository.list_mentions(
                 analysis_run_id=dependency
             ):
+                self._safe_point()
                 term = self.terms.repository.get(mention.term_id)
                 scene_blocks = [
                     block
@@ -1098,7 +1190,7 @@ class DocumentAnalysisOrchestrator:
                     mention_start_in_block=mention.start_cp - block.start_cp,
                     mention_end_in_block=mention.end_cp - block.start_cp,
                     blocks=window,
-                    client=cast(ModelClient, self.client),
+                    client=cast(ModelClient, self._analysis_client),
                 )
                 if not candidates and window_end < len(scene_blocks):
                     candidates = detect_term_explanations(
@@ -1108,21 +1200,23 @@ class DocumentAnalysisOrchestrator:
                         mention_start_in_block=mention.start_cp - block.start_cp,
                         mention_end_in_block=mention.end_cp - block.start_cp,
                         blocks=scene_blocks[window_start:],
-                        client=cast(ModelClient, self.client),
+                        client=cast(ModelClient, self._analysis_client),
                     )
                 if candidates:
                     selected = min(
                         candidates,
                         key=lambda candidate: (
+                            -int(candidate.completeness == "sufficient"),
+                            -candidate.confidence,
                             abs(
                                 self._block_start(blocks, candidate.block_id)
                                 + candidate.start_in_block
                                 - mention.start_cp
                             ),
-                            -candidate.confidence,
-                            candidate.block_id,
-                            candidate.start_in_block,
-                            candidate.end_in_block,
+                            self._block_start(blocks, candidate.block_id)
+                            + candidate.start_in_block,
+                            self._block_start(blocks, candidate.block_id)
+                            + candidate.end_in_block,
                         ),
                     )
                     self.semantic.insert_raw(
@@ -1142,6 +1236,9 @@ class DocumentAnalysisOrchestrator:
                         + selected.end_in_block,
                     )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -1159,18 +1256,19 @@ class DocumentAnalysisOrchestrator:
             document_id=document_id,
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
-            config={"taxonomy_version": 1},
+            config={"scene_taxonomy_version": 1},
         )
         try:
             if self._is_reused(run_id):
                 return run_id
             for scene in scenes:
+                self._safe_point()
                 result = classify_scene(
                     scene_id=scene.id,
                     blocks=[
                         block for block in blocks if block.get("scene_id") == scene.id
                     ],
-                    client=cast(ModelClient, self.client),
+                    client=cast(ModelClient, self._analysis_client),
                 )
                 for axis in ("function", "tone"):
                     values = result[axis]
@@ -1199,6 +1297,9 @@ class DocumentAnalysisOrchestrator:
                         analysis_run_id=run_id,
                     )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -1216,13 +1317,14 @@ class DocumentAnalysisOrchestrator:
             document_id=document_id,
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
-            config={"taxonomy_version": 1},
+            config={"block_semantic_taxonomy_version": 1},
         )
         try:
             if self._is_reused(run_id):
                 return run_id
+            self._safe_point()
             for block_id, value in classify_narration_blocks(
-                blocks=list(block_json), client=cast(ModelClient, self.client)
+                blocks=list(block_json), client=cast(ModelClient, self._analysis_client)
             ):
                 self.semantic.insert_raw(
                     annotation_type="block.semantic_primary",
@@ -1233,6 +1335,9 @@ class DocumentAnalysisOrchestrator:
                     analysis_run_id=run_id,
                 )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="failed", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
         return run_id
@@ -1252,7 +1357,12 @@ class DocumentAnalysisOrchestrator:
             document_id=document_id,
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
-            reuse=False,
+            config={
+                "metric_versions": {
+                    name: definition.version
+                    for name, definition in sorted(BASIC_METRIC_DEFINITIONS.items())
+                }
+            },
         )
         try:
             measurements = calculate_basic_metrics(
@@ -1279,40 +1389,170 @@ class DocumentAnalysisOrchestrator:
             self._finish(run_id, status="failed", error=exc)
             raise
 
-    def _manual_state(self, subject_type: str) -> list[dict[str, object]]:
+    def _entity_registry_state(self, document_id: int) -> list[dict[str, object]]:
+        scope = self.entities._scope(document_id)
+        scope_field, scope_value = next(iter(scope.items()))
+        state: dict[str, list[dict[str, object]]] = {
+            "manual_entities": [],
+            "manual_aliases": [],
+            "manual_overrides": [],
+            "inferred_alias_reviews": [],
+        }
+        for entity in self.entities.repository.list_for_scope(**scope):
+            if entity.origin == "manual":
+                state["manual_entities"].append(
+                    {
+                        "entity_id": entity.id,
+                        "entity_type": entity.entity_type,
+                        "canonical_name": entity.canonical_name,
+                    }
+                )
+            for alias in self.entities.repository.aliases_for(entity.id):
+                if alias.origin == "manual":
+                    state["manual_aliases"].append(
+                        {
+                            "alias_id": alias.id,
+                            "entity_id": alias.entity_id,
+                            "alias": alias.alias,
+                            "alias_kind": alias.alias_kind,
+                        }
+                    )
+                else:
+                    review = self.connection.execute(
+                        "SELECT review_status, analysis_run_id FROM "
+                        "style_inference_reviews WHERE subject_type = 'entity_alias' "
+                        "AND subject_id = ? AND field_path IN "
+                        "('entity_alias.alias', 'alias') "
+                        f"AND {scope_field} = ? "
+                        "ORDER BY created_at DESC, id DESC LIMIT 1",
+                        (alias.id, scope_value),
+                    ).fetchone()
+                    if review is not None:
+                        state["inferred_alias_reviews"].append(
+                            {
+                                "alias_id": alias.id,
+                                "entity_id": alias.entity_id,
+                                "review_status": str(review[0]),
+                                "analysis_run_id": int(review[1]),
+                            }
+                        )
+        state["manual_overrides"] = self._scoped_manual_overrides(
+            "entity", scope_field, scope_value
+        )
+        return [
+            {key: sorted(values, key=lambda item: tuple(map(repr, item.values())))}
+            for key, values in sorted(state.items())
+        ]
+
+    def _term_registry_state(self, document_id: int) -> list[dict[str, object]]:
+        scope = self.terms._scope(document_id)
+        scope_field, scope_value = next(iter(scope.items()))
+        state: dict[str, list[dict[str, object]]] = {
+            "manual_terms": [],
+            "manual_aliases": [],
+            "manual_overrides": [],
+            "inferred_alias_reviews": [],
+        }
+        for term in self.terms.repository.list_for_scope(**scope):
+            if term.origin == "manual":
+                state["manual_terms"].append(
+                    {
+                        "term_id": term.id,
+                        "canonical_label": term.canonical_label,
+                        "term_type": term.term_type,
+                    }
+                )
+            for alias in self.terms.repository.aliases_for(term.id):
+                if alias.origin == "manual":
+                    state["manual_aliases"].append(
+                        {
+                            "alias_id": alias.id,
+                            "term_id": alias.term_id,
+                            "alias": alias.alias,
+                        }
+                    )
+                else:
+                    review = self.connection.execute(
+                        "SELECT review_status, analysis_run_id FROM "
+                        "style_inference_reviews WHERE subject_type = 'term_alias' "
+                        "AND subject_id = ? AND field_path IN "
+                        "('term_alias.alias', 'alias') "
+                        f"AND {scope_field} = ? "
+                        "ORDER BY created_at DESC, id DESC LIMIT 1",
+                        (alias.id, scope_value),
+                    ).fetchone()
+                    if review is not None:
+                        state["inferred_alias_reviews"].append(
+                            {
+                                "alias_id": alias.id,
+                                "term_id": alias.term_id,
+                                "review_status": str(review[0]),
+                                "analysis_run_id": int(review[1]),
+                            }
+                        )
+        state["manual_overrides"] = self._scoped_manual_overrides(
+            "term", scope_field, scope_value
+        )
+        return [
+            {key: sorted(values, key=lambda item: tuple(map(repr, item.values())))}
+            for key, values in sorted(state.items())
+        ]
+
+    def _scoped_manual_overrides(
+        self, subject_type: str, scope_field: str, scope_value: int
+    ) -> list[dict[str, object]]:
         rows = self.connection.execute(
             "SELECT subject_id, field_path, operation, value_json "
             "FROM style_manual_overrides WHERE subject_type = ? "
-            "ORDER BY subject_id, field_path, created_at, id",
-            (subject_type,),
+            f"AND {scope_field} = ? ORDER BY subject_id, field_path, created_at, id",
+            (subject_type, scope_value),
         ).fetchall()
         return [
             {
                 "subject_id": int(row[0]),
                 "field_path": str(row[1]),
                 "operation": str(row[2]),
-                "value_json": str(row[3]),
+                "value_json": row[3],
             }
             for row in rows
         ]
 
-    def _mention_resolution_state(self, run_id: int) -> list[dict[str, object]]:
-        state: list[dict[str, object]] = []
-        for annotation in self.semantic.repository.list_for_run(run_id):
-            if annotation.annotation_type != "mention.entity_resolution":
-                continue
-            try:
-                value = json.loads(annotation.value_json)
-            except json.JSONDecodeError:
-                value = None
-            state.append(
-                {
-                    "mention_id": annotation.subject_id,
-                    "value": value,
-                    "confidence": annotation.confidence,
-                }
-            )
-        return state
+    def _mention_resolution_state(
+        self, document_id: int, structure_id: int, run_id: int
+    ) -> list[dict[str, object]]:
+        scope = self.entities._scope(document_id)
+        scope_field, scope_value = next(iter(scope.items()))
+        state: dict[int, dict[str, object]] = {}
+        override_rows = self.connection.execute(
+            "SELECT subject_id, field_path, operation, value_json "
+            "FROM style_manual_overrides WHERE subject_type = 'mention' "
+            "AND field_path = 'mention.entity_id' AND structure_revision_id = ? "
+            f"AND {scope_field} = ? ORDER BY created_at, id",
+            (structure_id, scope_value),
+        ).fetchall()
+        for row in override_rows:
+            state[int(row[0])] = {
+                "mention_id": int(row[0]),
+                "manual_override": {
+                    "field_path": str(row[1]),
+                    "operation": str(row[2]),
+                    "value_json": row[3],
+                },
+            }
+        review_rows = self.connection.execute(
+            "SELECT subject_id, field_path, review_status "
+            "FROM style_inference_reviews WHERE subject_type = 'mention' "
+            "AND field_path = 'mention.entity_resolution' AND analysis_run_id = ? "
+            f"AND {scope_field} = ? ORDER BY created_at, id",
+            (run_id, scope_value),
+        ).fetchall()
+        for row in review_rows:
+            item = state.setdefault(int(row[0]), {"mention_id": int(row[0])})
+            item["inference_review"] = {
+                "field_path": str(row[1]),
+                "review_status": str(row[2]),
+            }
+        return [state[key] for key in sorted(state)]
 
     def _people_for_scene(
         self, document_id: int, resolution_run_id: int, scene_id: int | None
@@ -1392,5 +1632,5 @@ def _alias_kind(mention_type: str) -> str:
         "proper_name": "name",
         "alias": "nickname",
         "role_title": "role",
-        "pronoun": "title",
+        "pronoun": "pronoun",
     }.get(mention_type, "name")
