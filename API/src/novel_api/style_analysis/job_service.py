@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from novel_core.config import DatabaseConfig
 from novel_core.database import default_migration_dir, open_database
@@ -29,6 +28,23 @@ _JOB_TYPES = frozenset(
 )
 _ANALYSIS_JOB_TYPES = frozenset(("analyze_document", "analyze_reference_work"))
 _TERMINAL_STATUSES = frozenset(("succeeded", "partial", "failed", "cancelled"))
+
+
+class DatabaseCursor(Protocol):
+    @property
+    def lastrowid(self) -> int | None: ...
+
+    def fetchone(self) -> Sequence[object] | None: ...
+
+
+class DatabaseConnection(Protocol):
+    def execute(
+        self, statement: str, parameters: tuple[object, ...] = ()
+    ) -> DatabaseCursor: ...
+
+    def commit(self) -> None: ...
+
+    def close(self) -> None: ...
 
 
 class StyleJobService:
@@ -65,11 +81,11 @@ class StyleJobService:
                 (job_type, payload_json),
             )
             if cursor.lastrowid is None:
-                raise sqlite3.IntegrityError("job insert did not return an id")
+                raise RuntimeError("job insert did not return an id")
             connection.commit()
             job = self._get_from_connection(connection, cursor.lastrowid)
             if job is None:
-                raise sqlite3.IntegrityError("job retrieval failed")
+                raise RuntimeError("job retrieval failed")
 
         if self._notify is not None:
             self._notify(project_id)
@@ -121,11 +137,11 @@ class StyleJobService:
                 (original.job_type, payload_json),
             )
             if cursor.lastrowid is None:
-                raise sqlite3.IntegrityError("retry job insert did not return an id")
+                raise RuntimeError("retry job insert did not return an id")
             connection.commit()
             retried = self._get_from_connection(connection, cursor.lastrowid)
             if retried is None:
-                raise sqlite3.IntegrityError("retry job retrieval failed")
+                raise RuntimeError("retry job retrieval failed")
             return retried
 
     def set_status(self, project_id: str, job_id: int, status: JobStatus) -> JobRecord:
@@ -167,7 +183,7 @@ class StyleJobService:
             return self._require_from_connection(connection, job_id)
 
     @contextmanager
-    def _open_connection(self, project_id: str) -> Iterator[sqlite3.Connection]:
+    def _open_connection(self, project_id: str) -> Iterator[DatabaseConnection]:
         project_dir = self._registry.resolve_path(project_id)
         connection = open_database(
             DatabaseConfig(
@@ -187,7 +203,7 @@ class StyleJobService:
 
     @staticmethod
     def _get_from_connection(
-        connection: sqlite3.Connection, job_id: int
+        connection: DatabaseConnection, job_id: int
     ) -> JobRecord | None:
         row = connection.execute(
             f"SELECT {_JOB_COLUMNS} FROM style_jobs WHERE id = ?", (job_id,)
@@ -196,7 +212,7 @@ class StyleJobService:
 
     @staticmethod
     def _require_from_connection(
-        connection: sqlite3.Connection, job_id: int
+        connection: DatabaseConnection, job_id: int
     ) -> JobRecord:
         job = StyleJobService._get_from_connection(connection, job_id)
         if job is None:
@@ -204,7 +220,7 @@ class StyleJobService:
         return job
 
     @staticmethod
-    def _record_from_row(row: sqlite3.Row | tuple[object, ...]) -> JobRecord:
+    def _record_from_row(row: Sequence[object]) -> JobRecord:
         return JobRecord(
             id=cast(int, row[0]),
             job_type=cast(JobType, row[1]),

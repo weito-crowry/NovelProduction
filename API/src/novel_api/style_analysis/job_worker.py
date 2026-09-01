@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -12,9 +11,9 @@ from novel_core.database import default_migration_dir, open_database
 from novel_core.style_analysis.runtime_models import JobRecord
 
 from novel_api.project_registry import ProjectRegistry
-from novel_api.style_analysis.job_service import StyleJobService
+from novel_api.style_analysis.job_service import DatabaseConnection, StyleJobService
 
-JobExecutor = Callable[[sqlite3.Connection, JobRecord], None]
+JobExecutor = Callable[[DatabaseConnection, JobRecord], None]
 
 
 class StyleAnalysisWorker:
@@ -134,23 +133,24 @@ class StyleAnalysisWorker:
                 (job.id,),
             )
             connection.commit()
-            running = StyleJobService._record_from_row(
-                connection.execute(
-                    "SELECT id, job_type, payload_json, status, cancel_requested, "
-                    "progress_current, progress_total, result_json, warning_json, "
-                    "created_at, started_at, finished_at, error_code, error_message, "
-                    "version FROM style_jobs WHERE id = ?",
-                    (job.id,),
-                ).fetchone()
-            )
+            running_row = connection.execute(
+                "SELECT id, job_type, payload_json, status, cancel_requested, "
+                "progress_current, progress_total, result_json, warning_json, "
+                "created_at, started_at, finished_at, error_code, error_message, "
+                "version FROM style_jobs WHERE id = ?",
+                (job.id,),
+            ).fetchone()
+            assert running_row is not None
+            running = StyleJobService._record_from_row(running_row)
             try:
                 assert self._executor is not None
                 self._executor(connection, running)
-                cancelled = connection.execute(
+                cancel_row = connection.execute(
                     "SELECT cancel_requested FROM style_jobs WHERE id = ?",
                     (job.id,),
-                ).fetchone()[0]
-                final_status = "cancelled" if cancelled else "succeeded"
+                ).fetchone()
+                assert cancel_row is not None
+                final_status = "cancelled" if cancel_row[0] else "succeeded"
                 connection.execute(
                     "UPDATE style_jobs SET status = ?, "
                     "finished_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -199,7 +199,7 @@ class StyleAnalysisWorker:
             self._enqueue_ready(project_id)
 
     @contextmanager
-    def _open_project_connection(self, project_id: str) -> Iterator[sqlite3.Connection]:
+    def _open_project_connection(self, project_id: str) -> Iterator[DatabaseConnection]:
         project_dir = self._registry.resolve_path(project_id)
         connection = open_database(
             DatabaseConfig(
