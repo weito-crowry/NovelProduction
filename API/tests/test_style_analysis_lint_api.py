@@ -177,7 +177,7 @@ def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
             "VALUES (?, 1, 0, 2)",
             (structure_id,),
         )
-        int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        scene_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
         connection.execute(
             "UPDATE style_documents SET current_structure_revision_id = ? WHERE id = ?",
             (structure_id, document_id),
@@ -197,8 +197,8 @@ def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
             "INSERT INTO style_measurements "
             "(analysis_run_id, structure_revision_id, target_type, target_id, "
             "metric_name, metric_version, value_int, sample_count) "
-            "VALUES (?, ?, 'document', ?, 'text.char_count', 1, 15, 1)",
-            (metric_run_id, structure_id, document_id),
+            "VALUES (?, ?, 'scene', ?, 'text.char_count', 1, 15, 1)",
+            (metric_run_id, structure_id, scene_id),
         )
         profile = ProfileService(connection).create_manual(
             name="Progress Profile",
@@ -216,7 +216,7 @@ def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
                     "severity_policy": "standard",
                 },
                 {
-                    "target_scope": "document",
+                    "target_scope": "scene",
                     "scope_selector": {},
                     "metric_name": "text.char_count",
                     "metric_version": 1,
@@ -236,6 +236,7 @@ def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
                 "structure_revision_id": structure_id,
                 "profile_id": profile.profile.id,
                 "profile_version_no": profile.version.version_no,
+                "scene_id": scene_id,
             }
         )
         cursor = connection.execute(
@@ -272,8 +273,9 @@ def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
             model_provider=None,
             model_id=None,
         )
-        status, current, total, result_json = connection.execute(
-            "SELECT status, progress_current, progress_total, result_json "
+        status, current, total, result_json, warning_json = connection.execute(
+            "SELECT status, progress_current, progress_total, result_json, "
+            "warning_json "
             "FROM style_jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
@@ -286,3 +288,61 @@ def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
     result = json.loads(result_json)
     assert result["applicable_rule_count"] == 2
     assert result["missing_rule_count"] == 1
+    assert "SELECTOR_UNAVAILABLE:function" in json.loads(warning_json)
+
+    empty_connection = sqlite3.connect(project_dir / "story.db")
+    try:
+        empty_profile = ProfileService(empty_connection).create_manual(
+            name="Empty Profile", rules=()
+        )
+        empty_payload = json.dumps(
+            {
+                "document_id": document_id,
+                "text_revision_id": text_id,
+                "structure_revision_id": structure_id,
+                "profile_id": empty_profile.profile.id,
+                "profile_version_no": empty_profile.version.version_no,
+                "scene_id": scene_id,
+            }
+        )
+        empty_cursor = empty_connection.execute(
+            "INSERT INTO style_jobs (job_type, payload_json, status) "
+            "VALUES ('run_lint', ?, 'running')",
+            (empty_payload,),
+        )
+        assert empty_cursor.lastrowid is not None
+        empty_job_id = int(empty_cursor.lastrowid)
+        empty_connection.commit()
+        empty_row = empty_connection.execute(
+            "SELECT id, job_type, payload_json, status, cancel_requested, "
+            "progress_current, progress_total, result_json, warning_json, created_at, "
+            "started_at, finished_at, error_code, error_message, version "
+            "FROM style_jobs WHERE id = ?",
+            (empty_job_id,),
+        ).fetchone()
+        assert empty_row is not None
+        execute_style_job(
+            empty_connection,
+            StyleJobService._record_from_row(empty_row),
+            model_client=None,
+            model_provider=None,
+            model_id=None,
+        )
+        (
+            empty_status,
+            empty_current,
+            empty_total,
+            empty_result_json,
+        ) = empty_connection.execute(
+            "SELECT status, progress_current, progress_total, result_json "
+            "FROM style_jobs WHERE id = ?",
+            (empty_job_id,),
+        ).fetchone()
+        assert empty_status == "succeeded"
+        assert (empty_current, empty_total) == (0, 0)
+        empty_result = json.loads(empty_result_json)
+        assert empty_result["applicable_rule_count"] == 0
+        assert empty_result["missing_rule_count"] == 0
+        assert empty_result["coverage_ratio"] == 0.0
+    finally:
+        empty_connection.close()

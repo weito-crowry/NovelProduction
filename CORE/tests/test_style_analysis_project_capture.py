@@ -20,6 +20,7 @@ from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.lint_repository import LintRepository
 from novel_core.style_analysis.lint_service import StyleLintService
 from novel_core.style_analysis.profile_service import ProfileService
+from novel_core.style_analysis.semantic_repository import SemanticRepository
 from novel_core.style_analysis.structure_models import SceneRecord
 from novel_core.style_analysis.text_service import StyleTextService
 
@@ -396,9 +397,9 @@ def test_lint_progress_separates_selector_missing_from_evaluated_pairs(
             preferred_value=15,
             weight=1.0,
         )
-        available_document_rule = SimpleNamespace(
+        available_scene_rule = SimpleNamespace(
             id=2,
-            target_scope="document",
+            target_scope="scene",
             scope_selector_json="{}",
             metric_name="text.char_count",
             metric_version=1,
@@ -410,12 +411,12 @@ def test_lint_progress_separates_selector_missing_from_evaluated_pairs(
         events: list[tuple[int, int]] = []
         result = StyleLintService(connection)._candidates(
             1,
-            (unavailable_scene_rule, available_document_rule),
+            (unavailable_scene_rule, available_scene_rule),
             (SceneRecord(1, 1, 1, 0, 1),),
             None,
             [],
             [],
-            {("basic", "document", 1, "text.char_count", 1): 15.0},
+            {("basic", "scene", 1, "text.char_count", 1): 15.0},
             {},
             1,
             1,
@@ -425,5 +426,242 @@ def test_lint_progress_separates_selector_missing_from_evaluated_pairs(
 
         assert result[1:3] == (2, 1)
         assert events == [(0, 2), (1, 2), (2, 2)]
+    finally:
+        connection.close()
+
+
+def test_lint_selector_and_character_applicability_matrix(tmp_path: Path) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        service = StyleLintService(connection)
+        scene = SceneRecord(1, 1, 1, 0, 1)
+
+        def rule(
+            rule_id: int,
+            target_scope: str,
+            selector: str,
+            metric_name: str = "text.char_count",
+        ) -> SimpleNamespace:
+            return SimpleNamespace(
+                id=rule_id,
+                target_scope=target_scope,
+                scope_selector_json=selector,
+                metric_name=metric_name,
+                metric_version=1,
+                min_value=10,
+                max_value=20,
+                preferred_value=15,
+                weight=1.0,
+            )
+
+        def evaluate(
+            rules: tuple[SimpleNamespace, ...],
+            states: list[dict[str, object]],
+            links: list[dict[str, object]],
+            measurements: dict[tuple[str, str, int, str, int], float],
+        ) -> tuple[list[tuple[object, ...]], int, int, list[str]]:
+            return service._candidates(
+                1,
+                rules,
+                (scene,),
+                None,
+                states,
+                links,
+                measurements,
+                {},
+                1,
+                1,
+                None,
+                None,
+            )
+
+        matching = evaluate(
+            (rule(1, "scene", '{"function":["exposition"]}'),),
+            [{"scene_id": 1, "axis": "function", "effective_value": ["exposition"]}],
+            [],
+            {("basic", "scene", 1, "text.char_count", 1): 15.0},
+        )
+        assert matching[1:3] == (1, 0)
+
+        non_matching = evaluate(
+            (rule(2, "scene", '{"function":["exposition"]}'),),
+            [{"scene_id": 1, "axis": "function", "effective_value": ["action"]}],
+            [],
+            {},
+        )
+        assert non_matching[1:3] == (0, 0)
+
+        same_specificity = evaluate(
+            (
+                rule(3, "scene", '{"function":["exposition"]}'),
+                rule(4, "scene", '{"function":["exposition"]}'),
+            ),
+            [{"scene_id": 1, "axis": "function", "effective_value": ["exposition"]}],
+            [],
+            {("basic", "scene", 1, "text.char_count", 1): 15.0},
+        )
+        assert same_specificity[1:3] == (2, 0)
+
+        character_not_applicable = evaluate(
+            (
+                rule(
+                    5,
+                    "character",
+                    '{"project_character_id":11}',
+                    "speaker.utterance_count",
+                ),
+            ),
+            [],
+            [],
+            {},
+        )
+        assert character_not_applicable[1:3] == (0, 0)
+
+        character_missing = evaluate(
+            (
+                rule(
+                    6,
+                    "character",
+                    '{"project_character_id":11}',
+                    "speaker.utterance_count",
+                ),
+            ),
+            [],
+            [{"project_character_id": 11, "style_entity_id": 12}],
+            {},
+        )
+        assert character_missing[1:3] == (1, 1)
+        assert character_missing[3] == ["METRIC_UNAVAILABLE:speaker.utterance_count"]
+    finally:
+        connection.close()
+
+
+def test_lint_fingerprint_tracks_only_referenced_effective_axes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        connection.execute("INSERT INTO works (slug, working_title) VALUES ('w', 'W')")
+        work_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        connection.execute(
+            "INSERT INTO chapters (work_id, position, title) VALUES (?, 1, 'C')",
+            (work_id,),
+        )
+        chapter_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        connection.execute(
+            "INSERT INTO episodes (work_id, chapter_id, position, title) "
+            "VALUES (?, ?, 1, 'E')",
+            (work_id, chapter_id),
+        )
+        episode_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        connection.execute(
+            "INSERT INTO style_documents (kind, project_work_id, project_episode_id) "
+            "VALUES ('project_episode_draft', ?, ?)",
+            (work_id, episode_id),
+        )
+        document_id = int(
+            connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        )
+        digest = "d" * 64
+        connection.execute(
+            "INSERT INTO style_text_revisions "
+            "(document_id, revision_no, project_draft_id, raw_text, canonical_text, "
+            "raw_sha256, canonical_sha256, normalization_input_fingerprint, "
+            "normalizer_id, normalizer_version) "
+            "VALUES (?, 1, 1, '本文', '本文', ?, ?, ?, 'test', 1)",
+            (document_id, digest, digest, digest),
+        )
+        connection.execute(
+            "INSERT INTO style_structure_revisions "
+            "(text_revision_id, revision_no, segmenter_id, segmenter_version, "
+            "source_kind, fingerprint) VALUES (1, 1, 'test', 1, 'manual', ?)",
+            (digest,),
+        )
+        structure_id = int(
+            connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        )
+        connection.execute(
+            "UPDATE style_documents SET current_text_revision_id = 1, "
+            "current_structure_revision_id = ? WHERE id = ?",
+            (structure_id, document_id),
+        )
+        connection.execute(
+            "INSERT INTO style_scenes "
+            "(structure_revision_id, order_index, start_cp, end_cp) "
+            "VALUES (?, 1, 0, 2)",
+            (structure_id,),
+        )
+        scene_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        classifier_run_id = AnalysisRunRepository(connection).insert_run(
+            document_id=document_id,
+            analyzer_id="scene-semantic-classifier",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=structure_id,
+            status="succeeded",
+            fingerprint="e" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        profile = ProfileService(connection).create_manual(
+            name="Fingerprint Profile",
+            rules=(
+                {
+                    "target_scope": "scene",
+                    "scope_selector": {"function": ["exposition"]},
+                    "metric_name": "text.char_count",
+                    "metric_version": 1,
+                    "preferred_value": 15,
+                    "min_value": 10,
+                    "max_value": 20,
+                    "weight": 1.0,
+                    "enabled": True,
+                    "severity_policy": "standard",
+                },
+            ),
+        )
+        service = StyleLintService(connection)
+        monkeypatch.setattr(
+            CurrentRunResolver,
+            "resolve",
+            lambda self, *args: (
+                SimpleNamespace(id=classifier_run_id)
+                if args[-1] == "scene-semantic-classifier"
+                else None
+            ),
+        )
+
+        def context() -> dict[str, object]:
+            return service._context(
+                document_id=document_id,
+                text_revision_id=1,
+                structure_revision_id=structure_id,
+                profile_id=profile.profile.id,
+                profile_version_no=profile.version.version_no,
+                scene_id=None,
+            )
+
+        unknown = context()
+        SemanticRepository(connection).insert_annotation(
+            annotation_type="scene.tone",
+            subject_type="scene",
+            subject_id=scene_id,
+            value_json='{"label":"calm"}',
+            confidence=1.0,
+            analysis_run_id=classifier_run_id,
+        )
+        unreferenced_axis = context()
+        assert unreferenced_axis["fingerprint"] == unknown["fingerprint"]
+
+        SemanticRepository(connection).insert_annotation(
+            annotation_type="scene.function",
+            subject_type="scene",
+            subject_id=scene_id,
+            value_json='{"labels":[{"label":"exposition"}]}',
+            confidence=1.0,
+            analysis_run_id=classifier_run_id,
+        )
+        referenced_axis = context()
+        assert referenced_axis["fingerprint"] != unknown["fingerprint"]
     finally:
         connection.close()
