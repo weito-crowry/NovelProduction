@@ -54,14 +54,22 @@ export interface Corpus {
 
 export interface Aggregate {
   id: number;
+  container_type?: "corpus" | "reference_work";
+  container_id?: number;
+  measurement_target_type?: "document" | "scene";
+  filter_json?: string;
   metric_name: string;
   metric_version: number;
   statistic: string;
+  aggregate_policy_version?: number;
   value_real: number;
   source_measurement_count: number;
   sample_count: number;
+  work_count?: number;
+  skipped_target_count?: number;
   stale: boolean;
   warning_json: string;
+  created_at?: string;
 }
 
 export interface Profile {
@@ -167,11 +175,26 @@ export interface AnalysisRun {
   finished_at: string | null;
 }
 
+export interface StyleSemanticOutput {
+  id: number;
+  annotation_type: string;
+  subject_type: string;
+  subject_id: number;
+  value: unknown;
+  confidence: number | null;
+  analysis_run_id: number;
+  start_cp: number | null;
+  end_cp: number | null;
+  created_at: string;
+}
+
 export interface SemanticsView {
+  structure_revision_id: number;
   analysis_status: AnalysisStatus;
   analysis_run_ids: number[];
-  effective: unknown[];
-  outputs: unknown[];
+  effective: Record<string, unknown>;
+  outputs: StyleSemanticOutput[];
+  raw?: StyleSemanticOutput[];
 }
 
 function stylePath(projectId: string, suffix = ""): string {

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { projectQueryKeys } from "../../api/queryKeys";
 import { fetchStyleJob } from "./styleAnalysisApi";
 
-const TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["succeeded", "partial", "failed", "cancelled"]);
 
 export function useStyleJobPolling(projectId: string, jobId: number | null) {
   return useQuery({
