@@ -209,7 +209,9 @@ def _navigation_labels(
         None,
     )
     if nav_item is not None:
-        nav_path = _resolve_archive_path(opf_dir, nav_item["href"])
+        nav_path = _resolve_navigation_path(opf_dir, nav_item["href"])
+        if nav_path is None:
+            return labels
         try:
             payload = archive.read(nav_path)
         except (KeyError, OSError):
@@ -219,13 +221,19 @@ def _navigation_labels(
             href = anchor.get("href")
             label = anchor.get_text(" ", strip=True)
             if isinstance(href, str) and label:
-                labels[_resolve_archive_path(posixpath.dirname(nav_path), href)] = label
+                target_path = _resolve_navigation_path(
+                    posixpath.dirname(nav_path), href
+                )
+                if target_path is not None:
+                    labels[target_path] = label
         return labels
 
     if toc_id is None or toc_id not in manifest:
         return labels
     ncx_item = manifest[toc_id]
-    ncx_path = _resolve_archive_path(opf_dir, ncx_item["href"])
+    ncx_path = _resolve_navigation_path(opf_dir, ncx_item["href"])
+    if ncx_path is None:
+        return labels
     try:
         ncx = _read_xml(archive, ncx_path)
     except SourceParseError:
@@ -244,10 +252,19 @@ def _navigation_labels(
         label = "".join(label_element.itertext()).strip()
         content_src = content.get("src")
         if label and isinstance(content_src, str):
-            labels[_resolve_archive_path(posixpath.dirname(ncx_path), content_src)] = (
-                label
+            target_path = _resolve_navigation_path(
+                posixpath.dirname(ncx_path), content_src
             )
+            if target_path is not None:
+                labels[target_path] = label
     return labels
+
+
+def _resolve_navigation_path(base_dir: str, href: str) -> str | None:
+    try:
+        return _resolve_archive_path(base_dir, href)
+    except SourceParseError:
+        return None
 
 
 def _first_heading(payload: bytes) -> str | None:

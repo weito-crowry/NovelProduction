@@ -4,12 +4,16 @@ import io
 import sqlite3
 import zipfile
 from pathlib import Path
+from threading import Barrier, Thread
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from novel_api.service_container import ProjectDescriptor, ProjectTarget
+from novel_api.style_analysis.adapters.base import ImportedEpisode, ImportedWork
 from novel_api.style_analysis.adapters.text import TextSourceAdapter
+from novel_api.style_analysis.ingestion_service import import_source
 
 
 def _create_project(client: TestClient, project_id: str) -> None:
@@ -278,6 +282,159 @@ def test_malformed_source_is_all_or_nothing_and_does_not_create_job(
         assert connection.execute(
             "SELECT COUNT(*) FROM style_reference_works"
         ).fetchone() == (0,)
+        assert connection.execute("SELECT COUNT(*) FROM style_jobs").fetchone() == (0,)
+    finally:
+        connection.close()
+
+
+def test_duplicate_import_race_converges_to_one_catalog(
+    project_factory: Any,
+    data_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_factory("reference")
+    target = ProjectTarget(
+        project_id="reference",
+        descriptor=ProjectDescriptor(
+            project_dir=data_root / "reference",
+            story_db=data_root / "reference" / "story.db",
+        ),
+    )
+    payload = b"race-source"
+    parse_barrier = Barrier(2)
+    original_import_work = TextSourceAdapter.import_work
+
+    def synchronized_import_work(self: TextSourceAdapter, request: Any) -> ImportedWork:
+        imported = original_import_work(self, request)
+        parse_barrier.wait(timeout=5)
+        return imported
+
+    monkeypatch.setattr(TextSourceAdapter, "import_work", synchronized_import_work)
+    outcomes: list[Any] = []
+    errors: list[BaseException] = []
+
+    def run_import() -> None:
+        try:
+            outcomes.append(
+                import_source(
+                    target,
+                    source_type="text",
+                    filename="book.txt",
+                    payload=payload,
+                    media_type="text/plain",
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [Thread(target=run_import) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert not errors
+    assert sorted(outcome.reused_existing for outcome in outcomes) == [False, True]
+    assert len({outcome.reference_work_id for outcome in outcomes}) == 1
+    connection = sqlite3.connect(target.descriptor.story_db)
+    try:
+        for table in (
+            "style_sources",
+            "style_reference_works",
+            "style_reference_episodes",
+            "style_documents",
+            "style_text_revisions",
+        ):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (
+                1,
+            )
+        assert connection.execute("SELECT COUNT(*) FROM style_jobs").fetchone() == (0,)
+    finally:
+        connection.close()
+
+
+def test_persistence_failure_on_second_episode_rolls_back_entire_import(
+    project_factory: Any,
+    data_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_factory("reference")
+    target = ProjectTarget(
+        project_id="reference",
+        descriptor=ProjectDescriptor(
+            project_dir=data_root / "reference",
+            story_db=data_root / "reference" / "story.db",
+        ),
+    )
+    imported_work = ImportedWork(
+        title="Two Episodes",
+        author_name=None,
+        metadata={},
+        episodes=(
+            ImportedEpisode(
+                external_episode_id="1",
+                title="第一話",
+                order_index=1,
+                raw_text="本文一",
+                metadata={"scene_break_offsets_raw": []},
+            ),
+            ImportedEpisode(
+                external_episode_id="2",
+                title="第二話",
+                order_index=2,
+                raw_text="本文二",
+                metadata={"scene_break_offsets_raw": []},
+            ),
+        ),
+    )
+    original_import_work = TextSourceAdapter.import_work
+
+    def two_episode_import_work(self: TextSourceAdapter, request: Any) -> ImportedWork:
+        original_import_work(self, request)
+        return imported_work
+
+    monkeypatch.setattr(TextSourceAdapter, "import_work", two_episode_import_work)
+    import novel_core.style_analysis.text_service as text_service_module
+
+    original_insert = text_service_module.StyleTextService.insert_reference_revision
+    calls = 0
+
+    def fail_on_second_revision(self: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected second episode persistence failure")
+        return original_insert(self, **kwargs)
+
+    monkeypatch.setattr(
+        text_service_module.StyleTextService,
+        "insert_reference_revision",
+        fail_on_second_revision,
+    )
+
+    with pytest.raises(RuntimeError, match="second episode"):
+        import_source(
+            target,
+            source_type="text",
+            filename="book.txt",
+            payload=b"two-episode-source",
+            media_type="text/plain",
+        )
+
+    connection = sqlite3.connect(target.descriptor.story_db)
+    try:
+        for table in (
+            "style_sources",
+            "style_source_snapshots",
+            "style_reference_works",
+            "style_reference_episodes",
+            "style_documents",
+            "style_text_revisions",
+        ):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (
+                0,
+            )
         assert connection.execute("SELECT COUNT(*) FROM style_jobs").fetchone() == (0,)
     finally:
         connection.close()

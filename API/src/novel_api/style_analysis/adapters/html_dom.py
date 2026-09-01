@@ -78,6 +78,8 @@ def extract_html_document(payload: bytes | str) -> HtmlExtraction:
     def walk(node: object) -> None:
         nonlocal boundary_pending
         if isinstance(node, NavigableString):
+            if _is_formatting_whitespace(node, root):
+                return
             append_content(str(node))
             return
         if not isinstance(node, Tag):
@@ -112,6 +114,37 @@ def extract_html_document(payload: bytes | str) -> HtmlExtraction:
         scene_break_offsets_raw=tuple(sorted(set(scene_break_offsets))),
         title=_document_title(soup),
     )
+
+
+def _is_formatting_whitespace(node: NavigableString, root: Tag) -> bool:
+    if str(node).strip():
+        return False
+    parent = node.parent
+    if not isinstance(parent, Tag):
+        return False
+    if parent is not root and parent.name.lower() not in _BLOCK_ELEMENTS:
+        return False
+
+    previous = _significant_sibling(node, reverse=True)
+    following = _significant_sibling(node, reverse=False)
+    neighbors = tuple(
+        sibling for sibling in (previous, following) if sibling is not None
+    )
+    if not neighbors:
+        return True
+    return all(
+        isinstance(sibling, Tag) and sibling.name.lower() in _BLOCK_ELEMENTS
+        for sibling in neighbors
+    )
+
+
+def _significant_sibling(node: NavigableString, *, reverse: bool) -> object | None:
+    siblings = node.previous_siblings if reverse else node.next_siblings
+    for sibling in siblings:
+        if isinstance(sibling, NavigableString) and not str(sibling).strip():
+            continue
+        return sibling
+    return None
 
 
 def _select_content_root(soup: BeautifulSoup) -> Tag:

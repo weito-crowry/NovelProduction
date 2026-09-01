@@ -10,11 +10,13 @@ import pytest
 from novel_core.config import DatabaseConfig
 from novel_core.database import open_database
 from novel_core.errors import ValidationError
+from novel_core.style_analysis.fingerprints import fingerprint_json
 from novel_core.style_analysis.source_models import (
     SourceEpisodeInput,
     SourceWorkInput,
 )
 from novel_core.style_analysis.source_repository import StyleSourceRepository
+from novel_core.style_analysis.text_service import StyleTextService
 
 MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
@@ -102,8 +104,93 @@ def test_insert_import_persists_catalog_documents_and_current_text(
         assert all(episode.style_document_id is not None for episode in episodes)
         assert [episode.current_text_revision_id for episode in episodes] == [1, 2]
         assert [episode.current_text for episode in episodes] == ["本文一", "本文二"]
-        assert json.loads(episodes[1].document_metadata_json) == {
-            "structure_hints": {"scene_break_offsets_cp": [2]}
+        metadata = json.loads(episodes[1].document_metadata_json)
+        assert metadata["structure_hints_raw"] == {"scene_break_offsets_raw": [2]}
+        assert "structure_hints" not in json.loads(episodes[1].document_metadata_json)
+    finally:
+        connection.close()
+
+
+def test_sa_b_bridge_uses_provisional_identity_and_retains_raw_hints(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path)
+    try:
+        inserted = StyleSourceRepository(connection).insert_import(
+            source_type="text",
+            external_work_id=hashlib.sha256(b"source").hexdigest(),
+            original_filename="book.txt",
+            adapter_id="style-source-text",
+            adapter_version=1,
+            payload=b"source",
+            media_type="text/plain",
+            source_metadata={},
+            work=source_work(),
+        )
+        connection.commit()
+
+        rows = connection.execute(
+            "SELECT raw_text, canonical_text, normalization_input_fingerprint, "
+            "normalizer_id, normalizer_version, metadata_json "
+            "FROM style_text_revisions ORDER BY id"
+        ).fetchall()
+        assert [row[3] for row in rows] == ["sa-b-provisional-raw-bridge"] * 2
+        assert [row[4] for row in rows] == [1, 1]
+        assert all(row[0] == row[1] for row in rows)
+        second_metadata = json.loads(rows[1][5])
+        assert second_metadata["structure_hints_raw"] == {
+            "scene_break_offsets_raw": [2]
+        }
+        assert second_metadata["normalization_input"]["normalizer_id"] == (
+            "sa-b-provisional-raw-bridge"
+        )
+        assert second_metadata["normalization_input"]["normalizer_version"] == 1
+        assert fingerprint_json(second_metadata["normalization_input"]) == rows[1][2]
+        assert "structure_hints" not in second_metadata
+        assert inserted.work.id > 0
+    finally:
+        connection.close()
+
+
+def test_sa_b_provisional_revision_reuses_same_input_but_not_changed_hint(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path)
+    try:
+        repository = StyleSourceRepository(connection)
+        inserted = repository.insert_import(
+            source_type="text",
+            external_work_id=hashlib.sha256(b"source").hexdigest(),
+            original_filename="book.txt",
+            adapter_id="style-source-text",
+            adapter_version=1,
+            payload=b"source",
+            media_type="text/plain",
+            source_metadata={},
+            work=source_work(),
+        )
+        connection.commit()
+
+        episode = repository.list_reference_episodes(inserted.work.id)[1]
+        assert episode.style_document_id is not None
+        service = StyleTextService(connection)
+        reused = service.insert_reference_revision(
+            document_id=episode.style_document_id,
+            source_snapshot_id=episode.latest_snapshot_id,
+            raw_text="本文二",
+            structure_hints_raw=[2],
+        )
+        changed = service.insert_reference_revision(
+            document_id=episode.style_document_id,
+            source_snapshot_id=episode.latest_snapshot_id,
+            raw_text="本文二",
+            structure_hints_raw=[1],
+        )
+
+        assert reused.id == episode.current_text_revision_id
+        assert changed.id != reused.id
+        assert json.loads(changed.metadata_json)["structure_hints_raw"] == {
+            "scene_break_offsets_raw": [1]
         }
     finally:
         connection.close()

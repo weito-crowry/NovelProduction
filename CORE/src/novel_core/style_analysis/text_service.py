@@ -26,8 +26,8 @@ _TEXT_REVISION_COLUMNS = (
     "normalization_input_fingerprint, normalizer_id, normalizer_version, "
     "metadata_json, created_at"
 )
-_REFERENCE_NORMALIZER_ID = "canonical-japanese-fiction"
-_REFERENCE_NORMALIZER_VERSION = 1
+_PROVISIONAL_NORMALIZER_ID = "sa-b-provisional-raw-bridge"
+_PROVISIONAL_NORMALIZER_VERSION = 1
 
 
 class StyleTextService:
@@ -99,8 +99,8 @@ class StyleTextService:
         }
         fingerprint_input: JsonObject = {
             "raw_sha256": raw_sha256,
-            "normalizer_id": _REFERENCE_NORMALIZER_ID,
-            "normalizer_version": _REFERENCE_NORMALIZER_VERSION,
+            "normalizer_id": _PROVISIONAL_NORMALIZER_ID,
+            "normalizer_version": _PROVISIONAL_NORMALIZER_VERSION,
             "structure_hints_raw": structure_hints,
         }
         normalization_input_fingerprint = fingerprint_json(fingerprint_input)
@@ -125,7 +125,8 @@ class StyleTextService:
             (document_id,),
         ).fetchone()[0]
         metadata: JsonObject = {
-            "structure_hints": {"scene_break_offsets_cp": cast(JsonValue, offsets)}
+            "normalization_input": fingerprint_input,
+            "structure_hints_raw": structure_hints,
         }
         cursor = self._connection.execute(
             "INSERT INTO style_text_revisions "
@@ -143,8 +144,8 @@ class StyleTextService:
                 raw_sha256,
                 raw_sha256,
                 normalization_input_fingerprint,
-                _REFERENCE_NORMALIZER_ID,
-                _REFERENCE_NORMALIZER_VERSION,
+                _PROVISIONAL_NORMALIZER_ID,
+                _PROVISIONAL_NORMALIZER_VERSION,
                 _json(metadata),
             ),
         )

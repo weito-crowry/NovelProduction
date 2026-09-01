@@ -122,6 +122,39 @@ def test_html_adapter_root_precedence(markup: str, expected: str) -> None:
     assert imported.episodes[0].raw_text == expected
 
 
+@pytest.mark.parametrize("root", ["body", "article", "main"])
+def test_html_adapter_ignores_pretty_printed_block_indentation(root: str) -> None:
+    if root == "body":
+        content = "<p>A</p>\n    <p>B</p>"
+    else:
+        content = f"<{root}>\n      <p>A</p>\n      <p>B</p>\n    </{root}>"
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file",
+            filename="book.html",
+            payload=f"<html>\n  <body>\n    {content}\n  </body>\n</html>".encode(),
+        )
+    )
+
+    assert imported.episodes[0].raw_text == "A\n\nB"
+
+
+def test_html_adapter_preserves_inline_whitespace_and_drops_empty_paragraph() -> None:
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file",
+            filename="book.html",
+            payload=(
+                b"<html><body><p>A <em>B</em> C</p>"
+                b"<p>   </p><p><span>D</span> <span>E</span></p>"
+                b"</body></html>"
+            ),
+        )
+    )
+
+    assert imported.episodes[0].raw_text == "A B C\n\nD E"
+
+
 def test_html_adapter_rejects_missing_body_and_empty_content() -> None:
     adapter = get_source_adapter("html_file")
 
@@ -153,8 +186,22 @@ def test_html_adapter_preserves_br_line_feeds_at_document_edges() -> None:
     assert imported.episodes[0].raw_text == "\nbody\n"
 
 
-def _epub_bytes(*, bad_href: str | None = None) -> bytes:
+def _epub_bytes(
+    *,
+    bad_href: str | None = None,
+    nav_href: str = "chapter-1.xhtml",
+    include_nav: bool = True,
+    nav_missing: bool = False,
+    ncx_src: str = "chapter-1.xhtml",
+) -> bytes:
     href = bad_href or "chapter-1.xhtml"
+    nav_item = (
+        '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" '
+        'properties="nav"/>'
+        if include_nav
+        else ""
+    )
+    nav_spine_itemref = '<itemref idref="nav"/>' if include_nav else ""
     container = (
         '<?xml version="1.0"?>'
         '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
@@ -167,8 +214,8 @@ def _epub_bytes(*, bad_href: str | None = None) -> bytes:
         <dc:title>EPUB Book</dc:title><dc:creator>Author</dc:creator>
       </metadata>
       <manifest>
-        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
-              properties="nav"/>
+        {nav_item}
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
         <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"
               properties="cover-image"/>
         <item id="one" href="{href}" media-type="application/xhtml+xml"/>
@@ -176,23 +223,29 @@ def _epub_bytes(*, bad_href: str | None = None) -> bytes:
         <item id="three" href="chapter-3.xhtml" media-type="application/xhtml+xml"/>
       </manifest>
       <spine toc="ncx">
-        <itemref idref="nav"/><itemref idref="cover"/>
+        {nav_spine_itemref}<itemref idref="cover"/>
         <itemref idref="one"/><itemref idref="two"/><itemref idref="three"/>
       </spine>
     </package>"""
     files = {
         "META-INF/container.xml": container,
         "OEBPS/content.opf": opf,
-        "OEBPS/nav.xhtml": (
-            '<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav '
-            'epub:type="toc"><ol><li><a href="chapter-1.xhtml">第一章</a>'
-            "</li></ol></nav></body></html>"
-        ),
         "OEBPS/cover.xhtml": "<html><body><h1>Cover</h1></body></html>",
         "OEBPS/chapter-1.xhtml": "<html><body><p>一</p></body></html>",
         "OEBPS/chapter-2.xhtml": "<html><body><h1>第二章</h1><p>二</p></body></html>",
         "OEBPS/chapter-3.xhtml": "<html><body><p>三</p></body></html>",
+        "OEBPS/toc.ncx": f"""<?xml version="1.0"?>
+        <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>
+          <navPoint><navLabel><text>第一章NCX</text></navLabel>
+            <content src="{ncx_src}"/></navPoint>
+        </navMap></ncx>""",
     }
+    if include_nav and not nav_missing:
+        files["OEBPS/nav.xhtml"] = (
+            '<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav '
+            f'<ol><li><a href="{nav_href}">第一章</a>'
+            "</li></ol></nav></body></html>"
+        )
     if bad_href is not None:
         files.pop("OEBPS/chapter-1.xhtml", None)
     output = io.BytesIO()
@@ -200,6 +253,54 @@ def _epub_bytes(*, bad_href: str | None = None) -> bytes:
         for name, content in files.items():
             archive.writestr(name, content)
     return output.getvalue()
+
+
+def test_epub3_invalid_navigation_href_falls_back_to_heading_or_episode() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_epub_bytes(nav_href="../../escape.xhtml"),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+def test_epub2_invalid_navigation_src_falls_back_to_heading_or_episode() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_epub_bytes(include_nav=False, ncx_src="../../escape.xhtml"),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+def test_missing_epub_navigation_resource_falls_back_to_heading_or_episode() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_epub_bytes(nav_missing=True),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
 
 
 def test_epub_adapter_reads_metadata_spine_nav_and_title_fallbacks() -> None:
