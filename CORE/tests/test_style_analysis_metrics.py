@@ -116,6 +116,66 @@ def test_basic_metric_char_count_excludes_unicode_whitespace() -> None:
     )
 
 
+def test_dialogue_utterance_length_excludes_outer_quotes_and_whitespace() -> None:
+    scenes = (SceneRecord(1, 10, 1, 0, 7),)
+    blocks = (BlockRecord(11, 10, 1, 1, 1, "dialogue", 0, 7),)
+    results = calculate_basic_metrics(
+        document_id=1,
+        canonical_text="「 A  B 」",
+        scenes=scenes,
+        blocks=blocks,
+        sentences=(SentenceRecord(21, 11, 1, 0, 7),),
+    )
+    utterance_p50 = next(
+        result
+        for result in results
+        if result.metric_name == "dialogue.utterance_len.p50"
+    )
+    assert utterance_p50.value == 3.0
+
+
+def test_dialogue_turn_bridge_uses_nonwhitespace_metric_length() -> None:
+    text = "「x」" + ("A" * 40) + (" " * 10) + "「y」"
+    scenes = (SceneRecord(1, 10, 1, 0, len(text)),)
+    blocks = (
+        BlockRecord(11, 10, 1, 1, 1, "dialogue", 0, 3),
+        BlockRecord(12, 10, 1, 2, 1, "narration", 3, 53),
+        BlockRecord(13, 10, 1, 3, 1, "dialogue", 53, 56),
+    )
+    results = calculate_basic_metrics(
+        document_id=1,
+        canonical_text=text,
+        scenes=scenes,
+        blocks=blocks,
+        sentences=(),
+    )
+    turn_p50 = next(
+        result for result in results if result.metric_name == "dialogue.turn_count.p50"
+    )
+    assert turn_p50.value == 2.0
+
+    long_text = "「x」" + ("A" * 41) + (" " * 10) + "「y」"
+    long_scene = (SceneRecord(1, 10, 1, 0, len(long_text)),)
+    long_blocks = (
+        BlockRecord(11, 10, 1, 1, 1, "dialogue", 0, 3),
+        BlockRecord(12, 10, 1, 2, 1, "narration", 3, 54),
+        BlockRecord(13, 10, 1, 3, 1, "dialogue", 54, 57),
+    )
+    long_results = calculate_basic_metrics(
+        document_id=1,
+        canonical_text=long_text,
+        scenes=long_scene,
+        blocks=long_blocks,
+        sentences=(),
+    )
+    long_turn_p50 = next(
+        result
+        for result in long_results
+        if result.metric_name == "dialogue.turn_count.p50"
+    )
+    assert long_turn_p50.value == 1.0
+
+
 def test_turn_count_terminates_at_scene_and_structural_boundaries() -> None:
     scenes = (
         SceneRecord(1, 10, 1, 0, 3),

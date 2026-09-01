@@ -182,7 +182,7 @@ def _scope_metrics(
             target_type, target_id, "dialogue.utterance_len", utterance_lengths
         )
     )
-    turn_counts = _turn_counts(ordered_blocks)
+    turn_counts = _turn_counts(ordered_blocks, text)
     result.extend(
         _percentiles(target_type, target_id, "dialogue.turn_count", turn_counts)
     )
@@ -242,15 +242,15 @@ def _percentile(values: list[int], quantile: float) -> float:
 
 def _outer_quote_length(value: str) -> int:
     if value.startswith("「") and value.endswith("」") and len(value) >= 2:
-        return len(value) - 2
-    return len(value)
+        return _metric_char_count(value[1:-1])
+    return _metric_char_count(value)
 
 
 def _metric_char_count(value: str) -> int:
     return sum(not character.isspace() for character in value)
 
 
-def _turn_counts(blocks: tuple[BlockRecord, ...]) -> list[int]:
+def _turn_counts(blocks: tuple[BlockRecord, ...], text: str) -> list[int]:
     counts: list[int] = []
     current = 0
     current_scene: int | None = None
@@ -266,7 +266,7 @@ def _turn_counts(blocks: tuple[BlockRecord, ...]) -> list[int]:
         bridged = (
             block.block_type == "narration"
             and current > 0
-            and block.end_cp - block.start_cp <= 40
+            and _metric_char_count(text[block.start_cp : block.end_cp]) <= 40
             and index + 1 < len(blocks)
             and blocks[index + 1].block_type == "dialogue"
             and blocks[index + 1].scene_id == block.scene_id

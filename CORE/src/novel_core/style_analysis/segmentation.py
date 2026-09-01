@@ -153,7 +153,7 @@ def _paragraph_blocks(
                 paragraph_index, "heading", offset, offset + len(paragraph), paragraph
             )
         ]
-    if _is_separator(paragraph):
+    if _is_separator(paragraph) and "「" not in paragraph:
         return [
             _block(
                 paragraph_index, "separator", offset, offset + len(paragraph), paragraph

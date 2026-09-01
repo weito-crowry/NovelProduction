@@ -59,6 +59,12 @@ def test_sentence_splitter_keeps_closing_quote_on_sentence() -> None:
     assert draft.blocks[0].end_cp == dialogue_sentences[0].end_cp
 
 
+def test_quoted_symbol_only_paragraphs_take_dialogue_precedence() -> None:
+    draft = build_automatic_structure("「……」\n\n「……", [])
+    assert [block.block_type for block in draft.blocks] == ["dialogue", "dialogue"]
+    assert "unmatched_dialogue_quote" in draft.warnings
+
+
 def test_automatic_structure_is_persisted_and_reused(tmp_path: Path) -> None:
     connection = open_test_database(tmp_path)
     try:

@@ -150,6 +150,12 @@ def test_nfc_alignment_handles_repeated_precomposed_character() -> None:
     assert result.segments
 
 
+def test_nfc_alignment_maps_combining_sequence_and_raw_boundary() -> None:
+    assert normalize_text("a\u0301a", []).canonical_text == "áa"
+    result = normalize_text("e\u0301é", [2])
+    assert result.scene_break_offsets_cp == (1,)
+
+
 def test_normalization_empty_and_code_point_limit_errors() -> None:
     with pytest.raises(ValidationError, match="TEXT_EMPTY"):
         normalize_text("\x00\n\n", [])
