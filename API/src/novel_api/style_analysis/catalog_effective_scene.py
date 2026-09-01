@@ -7,6 +7,9 @@ from novel_core.style_analysis.runtime_models import AnalysisPolicy
 from novel_core.style_analysis.semantic_metric_support import (
     EffectiveValue,
     latest_override,
+    resolve_block_semantic,
+    resolve_speaker,
+    resolve_term_mention_explanation,
 )
 from novel_core.style_analysis.semantic_scene import resolve_scene_semantics
 
@@ -116,6 +119,7 @@ def append_unknown_effective_values(
     effective: dict[str, list[dict[str, object]]],
     structure_revision_id: int,
 ) -> None:
+    policy = AnalysisPolicy()
     scenes = catalog._connection.execute(
         "SELECT id FROM style_scenes WHERE structure_revision_id = ? ORDER BY id",
         (structure_revision_id,),
@@ -145,10 +149,7 @@ def append_unknown_effective_values(
             }
             if active_override(catalog._connection, "scene", scene_id, annotation_type):
                 value = effective_scene_output(
-                    catalog._connection,
-                    synthetic,
-                    AnalysisPolicy(),
-                    structure_revision_id,
+                    catalog._connection, synthetic, policy, structure_revision_id
                 )
             else:
                 value = {**synthetic, "source": "unknown"}
@@ -170,10 +171,7 @@ def append_unknown_effective_values(
             )
             if has_pov_override:
                 pov = effective_scene_output(
-                    catalog._connection,
-                    synthetic_pov,
-                    AnalysisPolicy(),
-                    structure_revision_id,
+                    catalog._connection, synthetic_pov, policy, structure_revision_id
                 )
             else:
                 pov = {**synthetic_pov, "source": "unknown"}
@@ -183,17 +181,96 @@ def append_unknown_effective_values(
         "WHERE structure_revision_id = ? ORDER BY id",
         (structure_revision_id,),
     ).fetchall()
-    existing_blocks = {item.get("subject_id") for item in effective["blocks"]}
+    existing_speakers = {item.get("subject_id") for item in effective["speakers"]}
     for block_id, block_type in blocks:
-        if block_type == "narration" and block_id not in existing_blocks:
-            effective["blocks"].append(
+        if block_type != "dialogue" or block_id in existing_speakers:
+            continue
+        result = resolve_speaker(
+            catalog._connection,
+            int(block_id),
+            0,
+            None,
+            policy.speaker_effective,
+        )
+        effective["speakers"].append(
+            output_with_effective(
                 {
-                    "annotation_type": "block.semantic_primary",
+                    "annotation_type": "speaker",
                     "subject_type": "block",
                     "subject_id": block_id,
                     "value": None,
                     "confidence": None,
                     "analysis_run_id": None,
-                    "source": "unknown",
-                }
+                },
+                annotation_type="speaker",
+                subject_type="block",
+                subject_id=int(block_id),
+                result=result,
+                value={
+                    "speaker_entity_id": result.value
+                    if isinstance(result.value, int)
+                    else None
+                },
             )
+        )
+    existing_blocks = {item.get("subject_id") for item in effective["blocks"]}
+    for block_id, block_type in blocks:
+        if block_type == "narration" and block_id not in existing_blocks:
+            result = resolve_block_semantic(
+                catalog._connection,
+                int(block_id),
+                0,
+                None,
+                policy.block_semantic_effective,
+            )
+            effective["blocks"].append(
+                output_with_effective(
+                    {
+                        "annotation_type": "block.semantic_primary",
+                        "subject_type": "block",
+                        "subject_id": block_id,
+                        "value": None,
+                        "confidence": None,
+                        "analysis_run_id": None,
+                    },
+                    annotation_type="block.semantic_primary",
+                    subject_type="block",
+                    subject_id=int(block_id),
+                    result=result,
+                    value=result.value,
+                )
+            )
+    term_mentions = catalog._connection.execute(
+        "SELECT id FROM style_term_mentions "
+        "WHERE structure_revision_id = ? ORDER BY id",
+        (structure_revision_id,),
+    ).fetchall()
+    existing_explanations = {
+        item.get("subject_id") for item in effective["explanations"]
+    }
+    for (mention_id,) in term_mentions:
+        if mention_id in existing_explanations:
+            continue
+        result = resolve_term_mention_explanation(
+            catalog._connection,
+            int(mention_id),
+            None,
+            policy.term_explanation_effective,
+        )
+        effective["explanations"].append(
+            output_with_effective(
+                {
+                    "annotation_type": "term_explanation",
+                    "subject_type": "term_mention",
+                    "subject_id": mention_id,
+                    "value": None,
+                    "confidence": None,
+                    "analysis_run_id": None,
+                },
+                annotation_type="term_explanation",
+                subject_type="term_mention",
+                subject_id=int(mention_id),
+                result=result,
+                value=result.value,
+            )
+        )

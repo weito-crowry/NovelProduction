@@ -187,6 +187,16 @@ class StyleAnalysisReviewMixin:
                 "preset": "metrics",
             }
         if record.reference_work_id is not None:
+            row = self._connection.execute(
+                "SELECT COUNT(*), SUM(CASE WHEN sd.current_text_revision_id IS NULL "
+                "OR sd.current_structure_revision_id IS NULL THEN 1 ELSE 0 END) "
+                "FROM style_reference_episodes re "
+                "JOIN style_documents sd ON sd.reference_episode_id = re.id "
+                "WHERE re.reference_work_id = ?",
+                (record.reference_work_id,),
+            ).fetchone()
+            if row is None or row[0] == 0 or row[1] != 0:
+                return None
             return "analyze_reference_work", {
                 "reference_work_id": record.reference_work_id,
                 "preset": "metrics",

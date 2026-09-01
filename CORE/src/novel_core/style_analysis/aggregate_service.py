@@ -425,7 +425,6 @@ class AggregateService:
                 if semantic_run is not None
                 else self._scene_structure_revision(scene_id)
             ),
-            low_confidence_as_unclear=True,
         )
         state: list[dict[str, JsonValue]] = []
         unavailable: list[str] = []

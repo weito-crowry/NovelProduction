@@ -31,7 +31,6 @@ def resolve_scene_semantics(
     structure_revision_id: int,
     scene_threshold: float = 0.80,
     pov_threshold: float = 0.80,
-    low_confidence_as_unclear: bool = False,
 ) -> dict[str, EffectiveValue]:
     resolved = {
         annotation_type: _resolve_axis(
@@ -42,7 +41,6 @@ def resolve_scene_semantics(
             raw_annotations.get(annotation_type),
             structure_revision_id,
             scene_threshold,
-            low_confidence_as_unclear,
         )
         for annotation_type in _SCENE_AXES
     }
@@ -81,7 +79,6 @@ def _resolve_axis(
     raw: tuple[object, object, object] | None,
     structure_revision_id: int,
     threshold: float,
-    low_confidence_as_unclear: bool,
 ) -> EffectiveValue:
     field_path = annotation_type
     override, stale = _current_override(
@@ -121,17 +118,15 @@ def _resolve_axis(
     if review != "confirmed" and (
         confidence_value is None or confidence_value < threshold
     ):
-        if not low_confidence_as_unclear:
-            return EffectiveValue(
-                None,
-                "unknown",
-                confidence=confidence_value,
-                analysis_run_id=run_id,
-                stale_override=stale,
-            )
         value = _unclear_value(annotation_type, confidence_value)
     else:
-        value = _normalize_raw(annotation_type, raw_value, confidence_value, threshold)
+        value = _normalize_raw(
+            annotation_type,
+            raw_value,
+            confidence_value,
+            threshold,
+            confirmed=review == "confirmed",
+        )
         if value is None:
             return EffectiveValue(
                 None,
@@ -165,7 +160,6 @@ def _resolve_pov(
         raw,
         structure_revision_id,
         threshold,
-        False,
     )
     if base.source == "unknown" and base.value is None:
         base_value: dict[str, object] = {}
@@ -258,6 +252,8 @@ def _normalize_raw(
     value: object,
     confidence_value: float | None,
     threshold: float,
+    *,
+    confirmed: bool = False,
 ) -> dict[str, object] | None:
     if not isinstance(value, dict):
         return None
@@ -272,9 +268,12 @@ def _normalize_raw(
             and item.get("label") != "unclear"
             and isinstance(item.get("label"), str)
             and (
-                confidence_value is None
-                or (confidence(item.get("confidence", confidence_value)) or 0.0)
-                >= threshold
+                confirmed
+                or (
+                    confidence_value is None
+                    or (confidence(item.get("confidence", confidence_value)) or 0.0)
+                    >= threshold
+                )
             )
         ]
         return {

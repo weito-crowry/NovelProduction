@@ -107,7 +107,8 @@ def _work(
     )
     preset = str(payload.get("preset", "full"))
     rows = connection.execute(
-        "SELECT re.id, sd.id, sd.current_text_revision_id "
+        "SELECT re.id, sd.id, sd.current_text_revision_id, "
+        "sd.current_structure_revision_id "
         "FROM style_reference_episodes re "
         "JOIN style_documents sd ON sd.reference_episode_id = re.id "
         "WHERE re.reference_work_id = ? ORDER BY re.order_index",
@@ -134,7 +135,12 @@ def _work(
         (total, job.id),
     )
     connection.commit()
-    for index, (episode_id, document_id, text_revision_id) in enumerate(rows, start=1):
+    for index, (
+        episode_id,
+        document_id,
+        text_revision_id,
+        structure_revision_id,
+    ) in enumerate(rows, start=1):
         state = connection.execute(
             "SELECT cancel_requested FROM style_jobs WHERE id = ?", (job.id,)
         ).fetchone()
@@ -142,10 +148,16 @@ def _work(
             _cancel(connection, job.id)
             return
         current = connection.execute(
-            "SELECT current_text_revision_id FROM style_documents WHERE id = ?",
+            "SELECT current_text_revision_id, current_structure_revision_id "
+            "FROM style_documents WHERE id = ?",
             (document_id,),
         ).fetchone()
-        if current is None or current[0] != text_revision_id:
+        structure_matches = preset != "metrics" or (
+            current is not None
+            and current[1] is not None
+            and current[1] == structure_revision_id
+        )
+        if current is None or current[0] != text_revision_id or not structure_matches:
             statuses.append("failed")
             warnings.append(f"DOCUMENT_REVISION_CHANGED:{episode_id}")
             results.append(
@@ -159,6 +171,9 @@ def _work(
             result = orchestrator.analyze_document(
                 document_id=document_id,
                 text_revision_id=text_revision_id,
+                structure_revision_id=(
+                    structure_revision_id if preset == "metrics" else None
+                ),
                 preset=preset,
                 rebuild_structure=rebuild_structure,
             )
@@ -166,10 +181,20 @@ def _work(
                 _cancel(connection, job.id)
                 return
             after = connection.execute(
-                "SELECT current_text_revision_id FROM style_documents WHERE id = ?",
+                "SELECT current_text_revision_id, current_structure_revision_id "
+                "FROM style_documents WHERE id = ?",
                 (document_id,),
             ).fetchone()
-            if after is None or after[0] != text_revision_id:
+            after_structure_matches = preset != "metrics" or (
+                after is not None
+                and after[1] is not None
+                and after[1] == structure_revision_id
+            )
+            if (
+                after is None
+                or after[0] != text_revision_id
+                or not after_structure_matches
+            ):
                 statuses.append("failed")
                 warnings.append(f"DOCUMENT_REVISION_CHANGED:{episode_id}")
                 results.append(

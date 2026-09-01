@@ -6,6 +6,8 @@ import pytest
 from test_style_analysis_semantic_metrics import _fixture
 
 from novel_core.services.character_service import CharacterService
+from novel_core.style_analysis import review_service_core
+from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.review_service import ReviewService
 from novel_core.style_analysis.term_service import TermService
@@ -106,10 +108,15 @@ def test_manual_override_is_append_only_and_revert_falls_back(
 
 
 def test_inference_review_requires_registered_current_raw_annotation(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     connection, _, _, blocks = _fixture(tmp_path)
     try:
+        monkeypatch.setattr(
+            review_service_core.CurrentRunResolver,
+            "resolve",
+            lambda resolver, *args: resolver.runs.get_run(2),
+        )
         service = ReviewService(connection)
         review = service.create_inference_review(
             analysis_run_id=2,
@@ -133,6 +140,39 @@ def test_inference_review_requires_registered_current_raw_annotation(
                 subject_type="scene",
                 subject_id=1,
                 field_path="scene.function",
+                review_status="confirmed",
+            )
+    finally:
+        connection.close()
+
+
+def test_inference_review_rejects_historical_run_even_with_matching_raw_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection, document_id, _, blocks = _fixture(tmp_path)
+    try:
+        historical_id = AnalysisRunRepository(connection).insert_run(
+            document_id=document_id,
+            analyzer_id="speaker-attribution",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="a" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:01+00:00",
+        )
+        monkeypatch.setattr(
+            review_service_core.CurrentRunResolver,
+            "resolve",
+            lambda resolver, *args: resolver.runs.get_run(2),
+        )
+        with pytest.raises(ValueError, match="INFERENCE_REVIEW_SOURCE_NOT_FOUND"):
+            ReviewService(connection).create_inference_review(
+                analysis_run_id=historical_id,
+                subject_type="block",
+                subject_id=blocks[0].id,
+                field_path="block.speaker",
                 review_status="confirmed",
             )
     finally:

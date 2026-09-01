@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.review_models import (
     InferenceReviewRecord,
     ManualOverrideRecord,
@@ -255,16 +256,25 @@ class ReviewService(ReviewValidationMixin):
             self._validate_alias_review(subject_type, subject_id, analysis_run_id, info)
         else:
             run = self._connection.execute(
-                "SELECT analyzer_id, structure_revision_id FROM style_analysis_runs "
+                "SELECT document_id, analyzer_id, text_revision_id, "
+                "structure_revision_id FROM style_analysis_runs "
                 "WHERE id = ?",
                 (analysis_run_id,),
             ).fetchone()
-            if run is None or run[0] != INFERENCE_ANALYZERS[raw_type]:
+            if run is None or run[1] != INFERENCE_ANALYZERS[raw_type]:
                 raise ValueError("INFERENCE_REVIEW_SOURCE_NOT_FOUND")
             if (
                 info.structure_revision_id is not None
-                and int(run[1]) != info.structure_revision_id
+                and int(run[3]) != info.structure_revision_id
             ):
+                raise ValueError("INFERENCE_REVIEW_SOURCE_NOT_FOUND")
+            current_run = CurrentRunResolver(self._connection).resolve(
+                int(run[0]),
+                int(run[2]),
+                int(run[3]),
+                str(run[1]),
+            )
+            if current_run is None or current_run.id != analysis_run_id:
                 raise ValueError("INFERENCE_REVIEW_SOURCE_NOT_FOUND")
             annotation = self._connection.execute(
                 "SELECT value_json FROM style_annotations WHERE analysis_run_id = ? "

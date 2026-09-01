@@ -19,6 +19,9 @@ from novel_api.project_registry import ProjectRegistry
 from novel_api.routes.style_analysis import _job_response
 from novel_api.schemas.style_analysis import ProfileRuleRequest
 from novel_api.style_analysis import catalog_current as catalog_current_module
+from novel_api.style_analysis.catalog_effective_scene import (
+    append_unknown_effective_values,
+)
 from novel_api.style_analysis.catalog_service import StyleAnalysisCatalogService
 from novel_api.style_analysis.job_service import StyleJobService
 
@@ -285,6 +288,82 @@ def test_effective_semantics_includes_current_mention_resolution_and_novelty() -
         assert effective["mentions"][0]["entity_id"] == 5
         assert effective["terms"][0]["novelty"] == "work_specific"
         assert effective["terms"][0]["source"] == "inferred"
+    finally:
+        connection.close()
+
+
+def test_effective_values_synthesize_manual_results_when_raw_rows_are_missing(
+    data_root: Path,
+) -> None:
+    connection, document_id, _, first = _create_reference_analysis(data_root)
+    try:
+        work_id = connection.execute(
+            "SELECT reference_work_id FROM style_reference_episodes "
+            "WHERE id = (SELECT reference_episode_id FROM style_documents WHERE id=?)",
+            (document_id,),
+        ).fetchone()[0]
+        scene_id, narration_id = connection.execute(
+            "SELECT s.id, b.id FROM style_scenes s JOIN style_blocks b "
+            "ON b.scene_id=s.id WHERE s.structure_revision_id=? "
+            "AND b.block_type='narration' ORDER BY b.id LIMIT 1",
+            (first.structure_revision_id,),
+        ).fetchone()
+        dialogue_cursor = connection.execute(
+            "INSERT INTO style_blocks "
+            "(structure_revision_id, scene_id, order_index, paragraph_index, "
+            "block_type, start_cp, end_cp) VALUES (?, ?, 99, 99, 'dialogue', 0, 1)",
+            (first.structure_revision_id, scene_id),
+        )
+        assert dialogue_cursor.lastrowid is not None
+        dialogue_id = int(dialogue_cursor.lastrowid)
+        catalog = StyleAnalysisCatalogService(connection)
+        entity = catalog.create_entity(
+            reference_work_id=work_id,
+            document_id=None,
+            entity_type="person",
+            canonical_name="手動人物",
+        )
+        catalog.create_override(
+            subject_type="block",
+            subject_id=dialogue_id,
+            field_path="block.speaker_entity_id",
+            operation="set",
+            value=entity.id,
+            reference_work_id=work_id,
+            structure_revision_id=first.structure_revision_id,
+        )
+        catalog.create_override(
+            subject_type="block",
+            subject_id=narration_id,
+            field_path="block.semantic_primary",
+            operation="set",
+            value="action",
+            reference_work_id=work_id,
+            structure_revision_id=first.structure_revision_id,
+        )
+        effective = {
+            "entities": [],
+            "mentions": [],
+            "terms": [],
+            "term_novelty": [],
+            "speakers": [],
+            "explanations": [],
+            "scenes": [],
+            "scene_axes": [],
+            "pov": [],
+            "blocks": [],
+        }
+        append_unknown_effective_values(catalog, effective, first.structure_revision_id)
+        speaker = next(
+            item for item in effective["speakers"] if item["subject_id"] == dialogue_id
+        )
+        block = next(
+            item for item in effective["blocks"] if item["subject_id"] == narration_id
+        )
+        assert speaker["value"] == {"speaker_entity_id": entity.id}
+        assert speaker["source"] == "manual"
+        assert block["value"] == "action"
+        assert block["source"] == "manual"
     finally:
         connection.close()
 

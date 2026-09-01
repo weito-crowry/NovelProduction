@@ -92,13 +92,14 @@ def resolve_block_semantic(
         override_id, operation, value_json = override
         if operation == "set":
             label = json_field(value_json, "label")
-            if label is None and isinstance(value_json, str):
-                label = value_json
+            if label is None:
+                label = value_json if isinstance(value_json, str) else None
             return EffectiveValue(
                 label if isinstance(label, str) else None,
                 "manual" if isinstance(label, str) else "unknown",
                 override_id=override_id,
             )
+        return EffectiveValue(None, "manual", override_id=override_id)
     review = review_status(
         connection, "block", block_id, "block.semantic_primary", run_id
     )
@@ -106,9 +107,7 @@ def resolve_block_semantic(
         return EffectiveValue(None, "unknown", analysis_run_id=run_id)
     label, confidence, _ = label_value(raw)
     if label is None:
-        return EffectiveValue(
-            None, "unknown", confidence=confidence, analysis_run_id=run_id
-        )
+        return EffectiveValue(None, "unknown", confidence, run_id)
     if review == "confirmed" or confidence >= threshold:
         return EffectiveValue(
             label,

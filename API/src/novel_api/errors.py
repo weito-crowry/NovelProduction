@@ -75,6 +75,14 @@ _PROJECT_NOT_FOUND = _ErrorSpec(
     404, "PROJECT_NOT_FOUND", "The requested project was not found."
 )
 _NOT_FOUND = _ErrorSpec(404, "NOT_FOUND", "The requested resource was not found.")
+_OVERRIDE_NOT_FOUND = _ErrorSpec(
+    404, "OVERRIDE_NOT_FOUND", "The requested active override was not found."
+)
+_INFERENCE_REVIEW_TARGET_INVALID = _ErrorSpec(
+    422,
+    "INFERENCE_REVIEW_TARGET_INVALID",
+    "The inference review target is invalid.",
+)
 _PROJECT_CONFLICT = _ErrorSpec(
     409, "PROJECT_CONFLICT", "The requested project already exists."
 )
@@ -195,6 +203,10 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
             return _VERSION_CONFLICT
         if code == "REVIEW_ITEM_CLOSED":
             return _REVIEW_ITEM_CLOSED
+        if code == "INFERENCE_REVIEW_TARGET_INVALID":
+            return _INFERENCE_REVIEW_TARGET_INVALID
+        if code == "OVERRIDE_NOT_FOUND":
+            return _OVERRIDE_NOT_FOUND
         if code in {
             "REVIEW_ITEM_NOT_FOUND",
             "REVIEW_SUBJECT_NOT_FOUND",
@@ -203,7 +215,6 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
             "CHARACTER_NOT_FOUND",
             "STYLE_DOCUMENT_NOT_FOUND",
             "ANALYSIS_RUN_NOT_FOUND",
-            "OVERRIDE_NOT_FOUND",
         }:
             return _NOT_FOUND
     if isinstance(exc, DocumentSchemaError):

@@ -28,6 +28,23 @@ def _import_reference(client: TestClient) -> int:
     return int(response.json()["data"]["reference_work_id"])
 
 
+def _analyze_reference(data_root: Path) -> None:
+    connection = sqlite3.connect(data_root / "reference" / "story.db")
+    try:
+        document_id, text_revision_id = connection.execute(
+            "SELECT id, current_text_revision_id FROM style_documents "
+            "WHERE reference_episode_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+        DocumentAnalysisOrchestrator(connection, model_client=None).analyze_document(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            preset="deterministic",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def test_style_review_and_manual_identity_routes_are_separate(
     client: TestClient, data_root: Path
 ) -> None:
@@ -111,6 +128,7 @@ def test_metric_only_override_enqueues_internal_metrics_job_after_commit(
 ) -> None:
     _create_project(client)
     work_id = _import_reference(client)
+    _analyze_reference(data_root)
     term_response = client.post(
         "/api/v1/projects/reference/style-analysis/terms",
         json={
@@ -158,23 +176,98 @@ def test_generic_review_confirm_and_reject_routes_do_not_exist(
     assert response.status_code == 404
 
 
+def test_metric_only_reference_work_without_structure_does_not_enqueue_job(
+    client: TestClient,
+) -> None:
+    _create_project(client)
+    work_id = _import_reference(client)
+    term_response = client.post(
+        "/api/v1/projects/reference/style-analysis/terms",
+        json={
+            "reference_work_id": work_id,
+            "canonical_label": "未解析用語",
+            "term_type": "other",
+        },
+    )
+    assert term_response.status_code == 201
+    response = client.post(
+        "/api/v1/projects/reference/style-analysis/overrides",
+        json={
+            "subject_type": "term",
+            "subject_id": term_response.json()["data"]["id"],
+            "field_path": "term.novelty",
+            "operation": "set",
+            "value": "work_specific",
+            "reference_work_id": work_id,
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["data"]["job_id"] is None
+
+
+def test_inference_review_invalid_target_preserves_domain_error_code(
+    client: TestClient, data_root: Path
+) -> None:
+    _create_project(client)
+    _import_reference(client)
+    _analyze_reference(data_root)
+    connection = sqlite3.connect(data_root / "reference" / "story.db")
+    try:
+        scene_id = connection.execute("SELECT id FROM style_scenes LIMIT 1").fetchone()[
+            0
+        ]
+    finally:
+        connection.close()
+    response = client.post(
+        "/api/v1/projects/reference/style-analysis/inference-reviews",
+        json={
+            "analysis_run_id": 1,
+            "subject_type": "scene",
+            "subject_id": scene_id,
+            "field_path": "scene.invalid",
+            "review_status": "confirmed",
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INFERENCE_REVIEW_TARGET_INVALID"
+
+
+def test_revert_without_active_override_preserves_domain_error_code(
+    client: TestClient,
+) -> None:
+    _create_project(client)
+    work_id = _import_reference(client)
+    entity_response = client.post(
+        "/api/v1/projects/reference/style-analysis/entities",
+        json={
+            "reference_work_id": work_id,
+            "entity_type": "person",
+            "canonical_name": "未変更人物",
+        },
+    )
+    assert entity_response.status_code == 201
+    response = client.post(
+        "/api/v1/projects/reference/style-analysis/overrides",
+        json={
+            "subject_type": "entity",
+            "subject_id": entity_response.json()["data"]["id"],
+            "field_path": "entity.canonical_name",
+            "operation": "revert",
+            "reference_work_id": work_id,
+        },
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "OVERRIDE_NOT_FOUND"
+
+
 def test_manual_scene_correction_uses_selector_only_classification(
     client: TestClient, data_root: Path
 ) -> None:
     _create_project(client)
     work_id = _import_reference(client)
+    _analyze_reference(data_root)
     connection = sqlite3.connect(data_root / "reference" / "story.db")
     try:
-        document_id, text_revision_id = connection.execute(
-            "SELECT id, current_text_revision_id FROM style_documents "
-            "WHERE reference_episode_id IS NOT NULL LIMIT 1"
-        ).fetchone()
-        DocumentAnalysisOrchestrator(connection, model_client=None).analyze_document(
-            document_id=document_id,
-            text_revision_id=text_revision_id,
-            preset="deterministic",
-        )
-        connection.commit()
         document_id, structure_id, scene_id = connection.execute(
             "SELECT d.id, d.current_structure_revision_id, s.id "
             "FROM style_documents d JOIN style_scenes s "

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from typing import Any
 
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.model_contracts import JsonObject as ModelJsonObject
 from novel_core.style_analysis.semantic_metric_support import (
+    enabled_person,
     resolve_entity_name,
     resolve_entity_type,
+    resolve_mention_entity,
     resolve_term_label,
     resolve_term_type,
 )
@@ -284,32 +285,45 @@ class AnalysisStateMixin:
     ) -> list[ModelJsonObject]:
         if scene_id is None:
             return []
+        structure_row = self.connection.execute(
+            "SELECT structure_revision_id FROM style_analysis_runs WHERE id = ?",
+            (resolution_run_id,),
+        ).fetchone()
+        if structure_row is None:
+            return []
+        raw_by_mention = {
+            int(annotation.subject_id): (
+                annotation.value_json,
+                annotation.confidence,
+                None,
+            )
+            for annotation in self.semantic.repository.list_for_run(resolution_run_id)
+            if annotation.annotation_type == "mention.entity_resolution"
+        }
         entity_ids: set[int] = set()
-        for annotation in self.semantic.repository.list_for_run(resolution_run_id):
-            if annotation.annotation_type != "mention.entity_resolution":
-                continue
-            try:
-                value = json.loads(annotation.value_json)
-            except json.JSONDecodeError:
-                continue
-            entity_id = value.get("entity_id") if isinstance(value, dict) else None
+        mention_rows = self.connection.execute(
+            "SELECT id, scene_id FROM style_mentions "
+            "WHERE structure_revision_id = ? ORDER BY id",
+            (structure_row[0],),
+        ).fetchall()
+        for mention_id, mention_scene_id in mention_rows:
+            entity_id = resolve_mention_entity(
+                self.connection,
+                int(mention_id),
+                resolution_run_id,
+                raw_by_mention.get(int(mention_id)),
+            ).value
             if not isinstance(entity_id, int) or isinstance(entity_id, bool):
                 continue
-            try:
-                mention = self.entities.repository.get_mention(annotation.subject_id)
-            except ValueError:
-                continue
-            if mention.scene_id == scene_id:
+            if mention_scene_id == scene_id and enabled_person(
+                self.connection, entity_id
+            ):
                 entity_ids.add(entity_id)
         people: list[ModelJsonObject] = []
         for entity_id in sorted(entity_ids):
             try:
                 entity = self.entities.repository.get(entity_id)
             except ValueError:
-                continue
-            if resolve_entity_type(
-                self.connection, entity.id
-            ).value != "person" or not self.entities._enabled(entity.id):
                 continue
             people.append(
                 {
