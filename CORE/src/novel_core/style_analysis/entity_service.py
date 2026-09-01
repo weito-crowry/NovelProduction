@@ -176,7 +176,14 @@ class EntityService:
         for entity in entities:
             if not self._enabled(entity.id):
                 continue
-            if entity_type != "other" and entity.entity_type != entity_type:
+            from novel_core.style_analysis.semantic_metric_support import (
+                resolve_entity_type,
+            )
+
+            effective_type = resolve_entity_type(self._connection, entity.id).value
+            if not isinstance(effective_type, str):
+                continue
+            if entity_type != "other" and effective_type != entity_type:
                 continue
             aliases = [
                 alias.alias
@@ -186,7 +193,7 @@ class EntityService:
             rows.append(
                 {
                     "entity_id": entity.id,
-                    "entity_type": entity.entity_type,
+                    "entity_type": effective_type,
                     "canonical_name": self._effective_name(entity),
                     "aliases": aliases,
                     "same_scene": entity.id in same_scene_ids,
@@ -284,7 +291,7 @@ class EntityService:
         row = self._connection.execute(
             "SELECT review_status FROM style_inference_reviews "
             "WHERE subject_type = 'entity_alias' AND subject_id = ? "
-            "AND field_path IN ('entity_alias.alias', 'alias') "
+            "AND field_path = 'entity_alias.acceptance' "
             "ORDER BY created_at DESC, id DESC LIMIT 1",
             (alias_id,),
         ).fetchone()

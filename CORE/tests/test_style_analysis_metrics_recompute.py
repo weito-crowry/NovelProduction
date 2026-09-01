@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from test_style_analysis_semantic_metrics import _fixture
 
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
@@ -33,5 +34,25 @@ def test_internal_metrics_preset_recomputes_semantic_metrics_without_full_analys
             in {"entity-resolver", "speaker-attribution"}
             for run_id in result.run_ids
         )
+    finally:
+        connection.close()
+
+
+def test_internal_metrics_preset_requires_explicit_structure_revision(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, _, _ = _fixture(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="STRUCTURE_REVISION_REQUIRED"):
+            DocumentAnalysisOrchestrator(
+                connection, model_client=None
+            ).analyze_document(
+                document_id=document_id,
+                text_revision_id=1,
+                preset="metrics",
+            )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM style_analysis_runs"
+        ).fetchone() == (3,)
     finally:
         connection.close()

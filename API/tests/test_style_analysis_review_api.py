@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 
 
 def _create_project(client: TestClient) -> None:
@@ -155,3 +156,47 @@ def test_generic_review_confirm_and_reject_routes_do_not_exist(
         "/api/v1/projects/reference/style-analysis/review-items/1/confirm"
     )
     assert response.status_code == 404
+
+
+def test_manual_scene_correction_uses_selector_only_classification(
+    client: TestClient, data_root: Path
+) -> None:
+    _create_project(client)
+    work_id = _import_reference(client)
+    connection = sqlite3.connect(data_root / "reference" / "story.db")
+    try:
+        document_id, text_revision_id = connection.execute(
+            "SELECT id, current_text_revision_id FROM style_documents "
+            "WHERE reference_episode_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+        DocumentAnalysisOrchestrator(connection, model_client=None).analyze_document(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            preset="deterministic",
+        )
+        connection.commit()
+        document_id, structure_id, scene_id = connection.execute(
+            "SELECT d.id, d.current_structure_revision_id, s.id "
+            "FROM style_documents d JOIN style_scenes s "
+            "ON s.structure_revision_id=d.current_structure_revision_id "
+            "WHERE d.kind='reference_episode' LIMIT 1"
+        ).fetchone()
+    finally:
+        connection.close()
+    response = client.post(
+        "/api/v1/projects/reference/style-analysis/overrides",
+        json={
+            "subject_type": "scene",
+            "subject_id": scene_id,
+            "field_path": "scene.function",
+            "operation": "set",
+            "value": ["action"],
+            "reference_work_id": work_id,
+            "structure_revision_id": structure_id,
+        },
+    )
+    assert response.status_code == 201
+    assert (
+        response.json()["data"]["correction_class"]
+        == "aggregate_lint_recompute_required"
+    )

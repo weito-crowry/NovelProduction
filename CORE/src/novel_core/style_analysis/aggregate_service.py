@@ -8,7 +8,6 @@ from novel_core.errors import ValidationError
 from novel_core.style_analysis.aggregate_calculations import (
     _STATISTICS,
     _canonical_filter_json,
-    _effective_axis_values,
     _filter_state_fingerprint,
     _input_fingerprint,
     _metric_version,
@@ -31,6 +30,10 @@ from novel_core.style_analysis.corpus_repository import CorpusRepository
 from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.fingerprints import JsonValue
 from novel_core.style_analysis.metrics import METRIC_DEFINITIONS
+from novel_core.style_analysis.semantic_scene import (
+    resolve_scene_semantics,
+    scene_axis_values,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,7 +406,7 @@ class AggregateService:
     ) -> tuple[str, tuple[dict[str, JsonValue], ...], tuple[str, ...]]:
         if not filter_value:
             return "match", (), ()
-        annotations: dict[str, tuple[object, object]] = {}
+        rows: list[tuple[object, object, object]] = []
         if semantic_run is not None:
             rows = self._connection.execute(
                 "SELECT annotation_type, value_json, confidence FROM style_annotations "
@@ -411,20 +414,33 @@ class AggregateService:
                 "AND subject_id = ?",
                 (semantic_run.id, scene_id),
             ).fetchall()
-            annotations = {str(row[0]): (row[1], row[2]) for row in rows}
+        raw_annotations = {str(row[0]): (row[1], row[2], None) for row in rows}
+        resolved = resolve_scene_semantics(
+            self._connection,
+            scene_id,
+            None if semantic_run is None else int(semantic_run.id),
+            raw_annotations,
+            structure_revision_id=(
+                int(semantic_run.structure_revision_id)
+                if semantic_run is not None
+                else self._scene_structure_revision(scene_id)
+            ),
+            low_confidence_as_unclear=True,
+        )
         state: list[dict[str, JsonValue]] = []
         unavailable: list[str] = []
         for axis, expected in sorted(filter_value.items()):
-            annotation = annotations.get(f"scene.{axis}")
-            values, source = _effective_axis_values(axis, annotation)
+            result = resolved[f"scene.{axis}"]
+            values = scene_axis_values(axis, result.value)
             state.append(
                 {
                     "scene_id": scene_id,
                     "axis": axis,
-                    "source": source,
+                    "source": result.source,
                     "effective_value": cast(JsonValue, values)
                     if values is not None
                     else None,
+                    "stale_override": result.stale_override,
                 }
             )
             if values is None:
@@ -433,3 +449,10 @@ class AggregateService:
             if not set(values).intersection(expected):
                 return "non-match", tuple(state), ()
         return "match", tuple(state), tuple(unavailable)
+
+    def _scene_structure_revision(self, scene_id: int) -> int:
+        row = self._connection.execute(
+            "SELECT structure_revision_id FROM style_scenes WHERE id = ?",
+            (scene_id,),
+        ).fetchone()
+        return int(row[0]) if row is not None else 0

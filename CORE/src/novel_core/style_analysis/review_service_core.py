@@ -159,11 +159,11 @@ class ReviewService(ReviewValidationMixin):
             value_json = _json(value)
         else:
             value_json = None
-        if operation == "revert" and not self._has_active_override(
-            subject_type, subject_id, field_path
-        ):
-            raise ValueError("OVERRIDE_NOT_FOUND")
         with self._write_transaction():
+            if operation == "revert" and not self._has_active_override(
+                subject_type, subject_id, field_path
+            ):
+                raise ValueError("OVERRIDE_NOT_FOUND")
             cursor = self._connection.execute(
                 "INSERT INTO style_manual_overrides "
                 "(document_id, reference_work_id, subject_type, subject_id, "

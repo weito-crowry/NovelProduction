@@ -6,6 +6,12 @@ from typing import Any
 
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.model_contracts import JsonObject as ModelJsonObject
+from novel_core.style_analysis.semantic_metric_support import (
+    resolve_entity_name,
+    resolve_entity_type,
+    resolve_term_label,
+    resolve_term_type,
+)
 from novel_core.style_analysis.semantic_service import SemanticService
 from novel_core.style_analysis.structure_models import BlockRecord
 from novel_core.style_analysis.term_service import TermService
@@ -102,8 +108,12 @@ class AnalysisStateMixin:
                 state["manual_entities"].append(
                     {
                         "entity_id": entity.id,
-                        "entity_type": entity.entity_type,
-                        "canonical_name": entity.canonical_name,
+                        "entity_type": resolve_entity_type(
+                            self.connection, entity.id
+                        ).value,
+                        "canonical_name": resolve_entity_name(
+                            self.connection, entity.id
+                        ).value,
                     }
                 )
             for alias in self.entities.repository.aliases_for(entity.id):
@@ -121,7 +131,7 @@ class AnalysisStateMixin:
                         "SELECT review_status, analysis_run_id FROM "
                         "style_inference_reviews WHERE subject_type = 'entity_alias' "
                         "AND subject_id = ? AND field_path IN "
-                        "('entity_alias.alias', 'alias') "
+                        "('entity_alias.acceptance') "
                         f"AND {scope_field} = ? "
                         "ORDER BY created_at DESC, id DESC LIMIT 1",
                         (alias.id, scope_value),
@@ -157,8 +167,10 @@ class AnalysisStateMixin:
                 state["manual_terms"].append(
                     {
                         "term_id": term.id,
-                        "canonical_label": term.canonical_label,
-                        "term_type": term.term_type,
+                        "canonical_label": resolve_term_label(
+                            self.connection, term.id
+                        ).value,
+                        "term_type": resolve_term_type(self.connection, term.id).value,
                     }
                 )
             for alias in self.terms.repository.aliases_for(term.id):
@@ -175,7 +187,7 @@ class AnalysisStateMixin:
                         "SELECT review_status, analysis_run_id FROM "
                         "style_inference_reviews WHERE subject_type = 'term_alias' "
                         "AND subject_id = ? AND field_path IN "
-                        "('term_alias.alias', 'alias') "
+                        "('term_alias.acceptance') "
                         f"AND {scope_field} = ? "
                         "ORDER BY created_at DESC, id DESC LIMIT 1",
                         (alias.id, scope_value),
@@ -295,7 +307,9 @@ class AnalysisStateMixin:
                 entity = self.entities.repository.get(entity_id)
             except ValueError:
                 continue
-            if entity.entity_type != "person" or not self.entities._enabled(entity.id):
+            if resolve_entity_type(
+                self.connection, entity.id
+            ).value != "person" or not self.entities._enabled(entity.id):
                 continue
             people.append(
                 {

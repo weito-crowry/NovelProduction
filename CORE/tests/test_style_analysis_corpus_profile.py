@@ -16,6 +16,7 @@ from novel_core.style_analysis.corpus_repository import CorpusRepository
 from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.model_prompts import get_prompt
 from novel_core.style_analysis.profile_service import ProfileService
+from novel_core.style_analysis.review_service import ReviewService
 from novel_core.style_analysis.semantic_repository import SemanticRepository
 from novel_core.style_analysis.source_models import SourceEpisodeInput, SourceWorkInput
 from novel_core.style_analysis.source_repository import StyleSourceRepository
@@ -392,6 +393,70 @@ def test_scene_filter_unknown_is_skipped_but_unclear_is_a_normal_value(
         assert len(unclear.aggregates) == 9
         assert all(item.skipped_target_count == 0 for item in unclear.aggregates)
         assert all(item.filter_state_fingerprint for item in unclear.aggregates)
+    finally:
+        connection.close()
+
+
+def test_scene_selector_uses_effective_manual_override(tmp_path: Path) -> None:
+    connection = open_test_database(tmp_path)
+    try:
+        work_id = import_work(connection, count=1)
+        episode = StyleSourceRepository(connection).list_reference_episodes(work_id)[0]
+        assert episode.style_document_id is not None
+        assert episode.current_text_revision_id is not None
+        assert episode.current_structure_revision_id is not None
+        scene_id = int(
+            connection.execute(
+                "SELECT id FROM style_scenes WHERE structure_revision_id = ?",
+                (episode.current_structure_revision_id,),
+            ).fetchone()[0]
+        )
+        run_id = AnalysisRunRepository(connection).insert_run(
+            document_id=episode.style_document_id,
+            analyzer_id="scene-semantic-classifier",
+            analyzer_version=1,
+            text_revision_id=episode.current_text_revision_id,
+            structure_revision_id=episode.current_structure_revision_id,
+            status="succeeded",
+            fingerprint="b" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        SemanticRepository(connection).insert_annotation(
+            annotation_type="scene.function",
+            subject_type="scene",
+            subject_id=scene_id,
+            value_json='{"labels":[{"label":"daily","confidence":1.0}]}',
+            confidence=1.0,
+            analysis_run_id=run_id,
+        )
+        ReviewService(connection).create_override(
+            subject_type="scene",
+            subject_id=scene_id,
+            field_path="scene.function",
+            operation="set",
+            value=["action"],
+            reference_work_id=work_id,
+            structure_revision_id=episode.current_structure_revision_id,
+        )
+        corpora = CorpusRepository(connection)
+        corpus = corpora.create("Effective scene")
+        corpora.add_work(corpus.id, work_id, include_all_episodes=True)
+        connection.commit()
+        result = AggregateService(connection).recompute(
+            (
+                AggregateSpec(
+                    "corpus",
+                    corpus.id,
+                    "scene",
+                    '{"scene":{"function":["action"]}}',
+                    "text.char_count",
+                    1,
+                ),
+            )
+        )
+        assert len(result.aggregates) == 9
+        assert all(item.filter_state_fingerprint for item in result.aggregates)
     finally:
         connection.close()
 

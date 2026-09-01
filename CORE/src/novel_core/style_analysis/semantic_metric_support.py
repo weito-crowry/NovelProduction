@@ -152,10 +152,14 @@ def resolve_speaker(
             return EffectiveValue(None, "manual", override_id=override_id)
         if operation == "set":
             value = json_field(value_json, "speaker_entity_id")
+            if not (
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and enabled_person(connection, value)
+            ):
+                return EffectiveValue(None, "unknown", override_id=override_id)
             return EffectiveValue(
-                value
-                if isinstance(value, int) and not isinstance(value, bool)
-                else None,
+                value,
                 "manual",
                 override_id=override_id,
             )
@@ -164,6 +168,10 @@ def resolve_speaker(
         return EffectiveValue(None, "unknown", analysis_run_id=run_id)
     entity_id, confidence, reason = speaker_value(raw)
     if entity_id is None:
+        return EffectiveValue(
+            None, "unknown", confidence=confidence, analysis_run_id=run_id
+        )
+    if not enabled_person(connection, entity_id):
         return EffectiveValue(
             None, "unknown", confidence=confidence, analysis_run_id=run_id
         )
@@ -310,7 +318,11 @@ def resolve_mention_entity(
     value = annotation_value(raw[0], "entity_id") if raw is not None else None
     return EffectiveValue(
         value if isinstance(value, int) and not isinstance(value, bool) else None,
-        "confirmed" if review == "confirmed" else "inferred",
+        "confirmed"
+        if review == "confirmed"
+        else "inferred"
+        if raw is not None
+        else "unknown",
         confidence=_confidence(raw[1]) if raw is not None else None,
         analysis_run_id=run_id,
     )
@@ -368,7 +380,7 @@ def resolve_term_mention_explanation(
         (explanation_run_id, mention_id),
     ).fetchone()
     if row is None:
-        return EffectiveValue(None, "inferred", analysis_run_id=explanation_run_id)
+        return EffectiveValue(None, "unknown", analysis_run_id=explanation_run_id)
     review = review_status(
         connection,
         "term_mention",

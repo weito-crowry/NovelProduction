@@ -172,6 +172,8 @@ class DocumentAnalysisOrchestrator(
             raise ValueError("STYLE_DOCUMENT_NOT_FOUND")
         if text_revision_id is None:
             raise ValueError("TEXT_REVISION_REQUIRED")
+        if preset == "metrics" and structure_revision_id is None:
+            raise ValueError("STRUCTURE_REVISION_REQUIRED")
         if structure_revision_id is not None and rebuild_structure:
             raise ValueError("STRUCTURE_REBUILD_CONFLICT")
         revision_id = text_revision_id

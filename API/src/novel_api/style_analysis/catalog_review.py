@@ -29,6 +29,16 @@ _METRIC_ONLY_REVIEW_FIELDS = frozenset(
         "term_mention.explanation",
     }
 )
+_SCENE_SELECTOR_FIELDS = frozenset(
+    {
+        "scene.function",
+        "scene.tone",
+        "scene.pace",
+        "scene.information_load",
+        "scene.interaction",
+    }
+)
+_DISPLAY_ONLY_FIELDS = frozenset({"scene.pov_mode", "scene.pov_entity_id"})
 
 
 class StyleAnalysisReviewMixin:
@@ -120,11 +130,13 @@ class StyleAnalysisReviewMixin:
 
     @staticmethod
     def override_correction_class(field_path: str) -> str:
-        return (
-            "metric_only_recompute"
-            if field_path in _METRIC_ONLY_OVERRIDE_FIELDS
-            else "semantic_reanalysis_required"
-        )
+        if field_path in _METRIC_ONLY_OVERRIDE_FIELDS:
+            return "metric_only_recompute"
+        if field_path in _DISPLAY_ONLY_FIELDS:
+            return "display_only"
+        if field_path in _SCENE_SELECTOR_FIELDS:
+            return "aggregate_lint_recompute_required"
+        return "semantic_reanalysis_required"
 
     def create_inference_review(
         self,
@@ -165,6 +177,8 @@ class StyleAnalysisReviewMixin:
                 (record.document_id,),
             ).fetchone()
             if row is None or row[0] is None:
+                return None
+            if row[1] is None:
                 return None
             return "analyze_document", {
                 "document_id": record.document_id,

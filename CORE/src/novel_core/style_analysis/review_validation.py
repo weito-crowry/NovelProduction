@@ -373,16 +373,10 @@ class ReviewValidationMixin:
     def _has_active_override(
         self, subject_type: str, subject_id: int, field_path: str
     ) -> bool:
-        rows = self._connection.execute(
+        row = self._connection.execute(
             "SELECT operation FROM style_manual_overrides "
             "WHERE subject_type=? AND subject_id=? AND field_path=? "
-            "ORDER BY created_at, id",
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
             (subject_type, subject_id, field_path),
-        ).fetchall()
-        active: list[str] = []
-        for (operation,) in rows:
-            if operation in {"set", "clear"}:
-                active.append(str(operation))
-            elif active:
-                active.pop()
-        return bool(active)
+        ).fetchone()
+        return row is not None and row[0] in {"set", "clear"}

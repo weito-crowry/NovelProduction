@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
-from typing import Any, cast
+from typing import Any
 
 from novel_core.style_analysis.runtime_models import AnalysisPolicy
 from novel_core.style_analysis.semantic_metric_support import (
     EffectiveValue,
     latest_override,
-    review_status,
 )
+from novel_core.style_analysis.semantic_scene import resolve_scene_semantics
 
 
 def as_int(value: object, default: int = 0) -> int:
@@ -56,140 +55,30 @@ def effective_scene_output(
 ) -> dict[str, object]:
     annotation_type = str(output["annotation_type"])
     scene_id = as_int(output.get("subject_id"))
-    field_path = {
-        "scene.function": "scene.function",
-        "scene.tone": "scene.tone",
-        "scene.pace": "scene.pace",
-        "scene.information_load": "scene.information_load",
-        "scene.interaction": "scene.interaction",
-        "scene.pov": "scene.pov_mode",
-    }[annotation_type]
-    override = active_override(connection, "scene", scene_id, field_path)
-    stale = (
-        override is not None
-        and override[3] is not None
-        and int(override[3]) != structure_revision_id
-    )
-    if stale:
-        override = None
-    raw = output.get("value")
-    confidence = output.get("confidence")
-    confidence_value = (
-        float(confidence) if isinstance(confidence, (int, float)) else None
-    )
-    review = review_status(
+    raw_annotations = {
+        annotation_type: (
+            json.dumps(output.get("value"), ensure_ascii=False, sort_keys=True),
+            output.get("confidence"),
+            output.get("start_cp"),
+        )
+    }
+    result = resolve_scene_semantics(
         connection,
-        "scene",
         scene_id,
-        annotation_type,
         as_int(output.get("analysis_run_id")),
-    )
-    if override is not None:
-        value = json.loads(str(override[2]))
-        if field_path in {"scene.function", "scene.tone"}:
-            value = {"labels": [{"label": label} for label in value]}
-        elif field_path == "scene.pov_mode":
-            value = {"pov_mode": value}
-        else:
-            value = {"label": value}
-        result = EffectiveValue(value, "manual", override_id=int(override[0]))
-    elif review == "rejected":
-        result = EffectiveValue(
-            None, "unknown", analysis_run_id=as_int(output.get("analysis_run_id"))
-        )
-        value = None
-    elif review == "confirmed" or (
-        confidence_value is not None
-        and confidence_value
-        >= (
-            policy.pov_effective
-            if annotation_type == "scene.pov"
-            else policy.scene_label_effective
-        )
-    ):
-        effective_raw = raw
-        if annotation_type in {"scene.function", "scene.tone"}:
-            labels = raw.get("labels") if isinstance(raw, dict) else None
-            accepted: list[object] = []
-            if isinstance(labels, list):
-                for label in labels:
-                    if not isinstance(label, dict) or label.get("label") == "unclear":
-                        continue
-                    label_confidence = label.get("confidence", confidence_value)
-                    if review == "confirmed" or (
-                        isinstance(label_confidence, (int, float))
-                        and not isinstance(label_confidence, bool)
-                        and label_confidence >= policy.scene_label_effective
-                    ):
-                        accepted.append(dict(label))
-            effective_raw = {
-                "labels": accepted
-                or [{"label": "unclear", "confidence": confidence_value}]
-            }
-        elif annotation_type in {
-            "scene.pace",
-            "scene.information_load",
-            "scene.interaction",
-        }:
-            effective_raw = dict(raw) if isinstance(raw, dict) else {}
-            if review != "confirmed" and (
-                confidence_value is None
-                or confidence_value < policy.scene_label_effective
-            ):
-                effective_raw["label"] = "unclear"
-        elif annotation_type == "scene.pov":
-            effective_raw = dict(raw) if isinstance(raw, dict) else {}
-            if review != "confirmed" and (
-                confidence_value is None or confidence_value < policy.pov_effective
-            ):
-                effective_raw["pov_mode"] = "unclear"
-                effective_raw["pov_entity_id"] = None
-        result = EffectiveValue(
-            effective_raw,
-            "confirmed" if review == "confirmed" else "inferred",
-            confidence=confidence_value,
-            analysis_run_id=as_int(output.get("analysis_run_id")),
-        )
-        value = effective_raw
-    else:
-        result = EffectiveValue(
-            None,
-            "unknown",
-            confidence=confidence_value,
-            analysis_run_id=as_int(output.get("analysis_run_id")),
-        )
-        value = None
-    if stale:
-        result = replace(result, stale_override=True)
+        raw_annotations,
+        structure_revision_id=structure_revision_id,
+        scene_threshold=policy.scene_label_effective,
+        pov_threshold=policy.pov_effective,
+    )[annotation_type]
     item = output_with_effective(
         output,
         annotation_type=annotation_type,
         subject_type="scene",
         subject_id=scene_id,
         result=result,
-        value=value,
+        value=result.value,
     )
-    if annotation_type == "scene.pov":
-        pov_override = active_override(
-            connection, "scene", scene_id, "scene.pov_entity_id"
-        )
-        if (
-            pov_override is not None
-            and pov_override[3] is not None
-            and int(pov_override[3]) != structure_revision_id
-        ):
-            pov_override = None
-        if pov_override is not None:
-            pov_value = (
-                json.loads(str(pov_override[2]))
-                if pov_override[2] is not None
-                else None
-            )
-            if not isinstance(item.get("value"), dict):
-                item["value"] = {}
-            cast(dict[str, object], item["value"])["pov_entity_id"] = pov_value
-            item["source"] = "manual"
-            item["override_id"] = int(pov_override[0])
     return item
 
 

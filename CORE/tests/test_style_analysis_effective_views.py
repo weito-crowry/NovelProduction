@@ -7,13 +7,20 @@ import pytest
 from test_style_analysis_semantic_metrics import _fixture
 
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
+from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.review_service import ReviewService
 from novel_core.style_analysis.semantic_metric_support import (
+    enabled_person,
     resolve_entity_enabled,
     resolve_entity_name,
     resolve_entity_type,
+    resolve_mention_entity,
+    resolve_speaker,
+    resolve_term_mention_explanation,
     resolve_term_novelty,
 )
+from novel_core.style_analysis.semantic_scene import resolve_scene_semantics
+from novel_core.style_analysis.term_service import TermService
 
 
 def test_typed_identity_resolvers_honor_manual_then_revert_to_stable_row(
@@ -36,6 +43,30 @@ def test_typed_identity_resolvers_honor_manual_then_revert_to_stable_row(
         service.create_override(
             subject_type="entity",
             subject_id=entity_id,
+            field_path="entity.canonical_name",
+            operation="set",
+            value="C",
+            document_id=document_id,
+        )
+        service.create_override(
+            subject_type="entity",
+            subject_id=entity_id,
+            field_path="entity.canonical_name",
+            operation="revert",
+            document_id=document_id,
+        )
+        assert resolve_entity_name(connection, entity_id).value == "A"
+        with pytest.raises(ValueError, match="OVERRIDE_NOT_FOUND"):
+            service.create_override(
+                subject_type="entity",
+                subject_id=entity_id,
+                field_path="entity.canonical_name",
+                operation="revert",
+                document_id=document_id,
+            )
+        service.create_override(
+            subject_type="entity",
+            subject_id=entity_id,
             field_path="entity.entity_type",
             operation="set",
             value="other",
@@ -49,7 +80,7 @@ def test_typed_identity_resolvers_honor_manual_then_revert_to_stable_row(
             value=False,
             document_id=document_id,
         )
-        assert resolve_entity_name(connection, entity_id).value == "B"
+        assert resolve_entity_name(connection, entity_id).value == "A"
         assert resolve_entity_type(connection, entity_id).value == "other"
         assert resolve_entity_enabled(connection, entity_id).value is False
         with pytest.raises(ValueError, match="OVERRIDE_CLEAR_INVALID"):
@@ -60,6 +91,257 @@ def test_typed_identity_resolvers_honor_manual_then_revert_to_stable_row(
                 operation="clear",
                 document_id=document_id,
             )
+    finally:
+        connection.close()
+
+
+def test_inferred_alias_reviews_control_entity_and_term_resolvers(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, _, _ = _fixture(tmp_path)
+    try:
+        entity_service = EntityService(connection)
+        entity_id = int(
+            connection.execute(
+                "SELECT id FROM style_entities WHERE canonical_name='A'"
+            ).fetchone()[0]
+        )
+        entity_alias = entity_service.repository.insert_alias(
+            entity_id=entity_id,
+            alias="人物別名",
+            alias_kind="name",
+            origin="inferred",
+            analysis_run_id=1,
+        )
+        term_service = TermService(connection)
+        term = term_service.create_manual_term(
+            reference_work_id=None,
+            document_id=document_id,
+            canonical_label="用語",
+            term_type="other",
+        )
+        term_alias = term_service.repository.insert_alias(
+            term_id=term.id,
+            alias="用語別名",
+            origin="inferred",
+            analysis_run_id=1,
+        )
+        connection.commit()
+        reviews = ReviewService(connection)
+        reviews.create_inference_review(
+            analysis_run_id=1,
+            subject_type="entity_alias",
+            subject_id=entity_alias.id,
+            field_path="entity_alias.acceptance",
+            review_status="confirmed",
+        )
+        reviews.create_inference_review(
+            analysis_run_id=1,
+            subject_type="term_alias",
+            subject_id=term_alias.id,
+            field_path="term_alias.acceptance",
+            review_status="confirmed",
+        )
+        assert entity_service.exact_matches(
+            document_id=document_id, surface="人物別名"
+        ) == (entity_service.repository.get(entity_id),)
+        assert term_service.exact_matches(
+            document_id=document_id, surface="用語別名"
+        ) == (term_service.repository.get(term.id),)
+        reviews.create_inference_review(
+            analysis_run_id=1,
+            subject_type="entity_alias",
+            subject_id=entity_alias.id,
+            field_path="entity_alias.acceptance",
+            review_status="rejected",
+        )
+        reviews.create_inference_review(
+            analysis_run_id=1,
+            subject_type="term_alias",
+            subject_id=term_alias.id,
+            field_path="term_alias.acceptance",
+            review_status="rejected",
+        )
+        assert (
+            entity_service.exact_matches(document_id=document_id, surface="人物別名")
+            == ()
+        )
+        assert (
+            term_service.exact_matches(document_id=document_id, surface="用語別名")
+            == ()
+        )
+    finally:
+        connection.close()
+
+
+def test_candidate_rows_use_effective_entity_and_term_types(tmp_path: Path) -> None:
+    connection, document_id, _, _ = _fixture(tmp_path)
+    try:
+        entity_service = EntityService(connection)
+        entity_id = int(
+            connection.execute(
+                "SELECT id FROM style_entities WHERE canonical_name='A'"
+            ).fetchone()[0]
+        )
+        term_service = TermService(connection)
+        term = term_service.create_manual_term(
+            reference_work_id=None,
+            document_id=document_id,
+            canonical_label="用語",
+            term_type="other",
+        )
+        reviews = ReviewService(connection)
+        reviews.create_override(
+            subject_type="entity",
+            subject_id=entity_id,
+            field_path="entity.entity_type",
+            operation="set",
+            value="organization",
+            document_id=document_id,
+        )
+        reviews.create_override(
+            subject_type="term",
+            subject_id=term.id,
+            field_path="term.term_type",
+            operation="set",
+            value="technology",
+            document_id=document_id,
+        )
+        entity_rows = entity_service.candidate_rows(
+            document_id=document_id,
+            entity_type="organization",
+            surface="",
+            same_scene_ids=set(),
+        )
+        term_rows = term_service.candidate_rows(
+            document_id=document_id,
+            term_type="technology",
+            same_scene_ids=set(),
+        )
+        assert {row["entity_id"] for row in entity_rows} == {entity_id}
+        assert entity_rows[0]["entity_type"] == "organization"
+        assert {row["term_id"] for row in term_rows} == {term.id}
+        assert term_rows[0]["term_type"] == "technology"
+    finally:
+        connection.close()
+
+
+def test_disabled_entity_is_unknown_for_speaker_effective_value(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, _, blocks = _fixture(tmp_path)
+    try:
+        entity_id = int(
+            connection.execute(
+                "SELECT id FROM style_entities WHERE canonical_name='A'"
+            ).fetchone()[0]
+        )
+        assert enabled_person(connection, entity_id)
+        ReviewService(connection).create_override(
+            subject_type="block",
+            subject_id=blocks[1].id,
+            field_path="block.speaker_entity_id",
+            operation="set",
+            value=entity_id,
+            document_id=document_id,
+            structure_revision_id=1,
+        )
+        ReviewService(connection).create_override(
+            subject_type="entity",
+            subject_id=entity_id,
+            field_path="entity.enabled",
+            operation="set",
+            value=False,
+            document_id=document_id,
+        )
+        raw = (json.dumps({"speaker_entity_id": entity_id}), 1.0, None)
+        result = resolve_speaker(connection, blocks[0].id, 2, raw, 0.85)
+        assert result.value is None
+        assert result.source == "unknown"
+        manual_result = resolve_speaker(connection, blocks[1].id, 2, None, 0.85)
+        assert manual_result.value is None
+        assert manual_result.source == "unknown"
+    finally:
+        connection.close()
+
+
+def test_scene_effective_resolver_honors_override_and_disabled_pov_entity(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, scenes, _ = _fixture(tmp_path)
+    try:
+        scene_id = scenes[0].id
+        entity_id = int(
+            connection.execute(
+                "SELECT id FROM style_entities WHERE canonical_name='A'"
+            ).fetchone()[0]
+        )
+        run_id = AnalysisRunRepository(connection).insert_run(
+            document_id=document_id,
+            analyzer_id="scene-semantic-classifier",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="8" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        raw = {
+            "scene.function": (
+                '{"labels":[{"label":"daily","confidence":1.0}]}',
+                1.0,
+                None,
+            ),
+            "scene.pov": (
+                json.dumps({"pov_mode": "third_limited", "pov_entity_id": entity_id}),
+                1.0,
+                None,
+            ),
+        }
+        reviews = ReviewService(connection)
+        reviews.create_override(
+            subject_type="scene",
+            subject_id=scene_id,
+            field_path="scene.function",
+            operation="set",
+            value=["action"],
+            document_id=document_id,
+            structure_revision_id=1,
+        )
+        reviews.create_override(
+            subject_type="entity",
+            subject_id=entity_id,
+            field_path="entity.enabled",
+            operation="set",
+            value=False,
+            document_id=document_id,
+        )
+        effective = resolve_scene_semantics(
+            connection,
+            scene_id,
+            run_id,
+            raw,
+            structure_revision_id=1,
+        )
+        assert effective["scene.function"].value == {"labels": [{"label": "action"}]}
+        assert effective["scene.function"].source == "manual"
+        assert effective["scene.pov"].value == {
+            "pov_mode": "third_limited",
+            "pov_entity_id": None,
+        }
+    finally:
+        connection.close()
+
+
+def test_missing_raw_inference_is_unknown_not_inferred(tmp_path: Path) -> None:
+    connection, document_id, _, _ = _fixture(tmp_path)
+    try:
+        mention = resolve_mention_entity(connection, 999, 1, None)
+        explanation = resolve_term_mention_explanation(connection, 999, 1, 0.85)
+        assert mention.source == "unknown"
+        assert explanation.source == "unknown"
+        assert document_id > 0
     finally:
         connection.close()
 

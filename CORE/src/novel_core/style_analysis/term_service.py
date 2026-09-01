@@ -105,9 +105,16 @@ class TermService:
     ) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         for term in self.repository.list_for_scope(**self._scope(document_id)):
-            if not self._enabled(term.id) or (
-                term_type != "other" and term.term_type != term_type
-            ):
+            if not self._enabled(term.id):
+                continue
+            from novel_core.style_analysis.semantic_metric_support import (
+                resolve_term_type,
+            )
+
+            effective_type = resolve_term_type(self._connection, term.id).value
+            if not isinstance(effective_type, str):
+                continue
+            if term_type != "other" and effective_type != term_type:
                 continue
             aliases = [
                 alias.alias
@@ -117,7 +124,7 @@ class TermService:
             rows.append(
                 {
                     "term_id": term.id,
-                    "term_type": term.term_type,
+                    "term_type": effective_type,
                     "canonical_label": self._effective_label(term),
                     "aliases": aliases,
                     "same_scene": term.id in same_scene_ids,
@@ -202,7 +209,7 @@ class TermService:
         row = self._connection.execute(
             "SELECT review_status FROM style_inference_reviews "
             "WHERE subject_type = 'term_alias' AND subject_id = ? "
-            "AND field_path IN ('term_alias.alias', 'alias') "
+            "AND field_path = 'term_alias.acceptance' "
             "ORDER BY created_at DESC, id DESC LIMIT 1",
             (alias_id,),
         ).fetchone()
