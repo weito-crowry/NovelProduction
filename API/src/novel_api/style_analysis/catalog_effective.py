@@ -45,7 +45,7 @@ def effective_outputs(
         item = dict(term)
         item["novelty"] = "uncertain"
         item["value"] = {"value": "uncertain"}
-        item["source"] = "unknown"
+        item["source"] = "default"
         effective_terms[term_id] = item
     effective: dict[str, list[dict[str, object]]] = {
         "mentions": effective_mentions,

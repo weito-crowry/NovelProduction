@@ -228,6 +228,8 @@ def resolution_state_changed(
         definition = ANALYZERS_BY_ID.get(run.analyzer_id)
         if definition is None:
             continue
+        if run.analyzer_version != definition.version:
+            return True
         if run.config_json != _canonical_json(config_for_analyzer(run.analyzer_id)):
             return True
         state = state_for_analyzer(

@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.runtime_models import JobRecord
+from novel_core.style_analysis.runtime_registry import ANALYZERS_BY_ID
 from test_style_analysis_jobs import (
-    _FailingSpeakerModel,
     _create_reference_analysis,
+    _FailingSpeakerModel,
     insert_job_row,
 )
 
 from novel_api.project_registry import ProjectRegistry
 from novel_api.routes.style_analysis import _job_response
+from novel_api.style_analysis import catalog_current as catalog_current_module
 from novel_api.style_analysis.catalog_service import StyleAnalysisCatalogService
 from novel_api.style_analysis.job_service import StyleJobService
 
@@ -251,6 +254,27 @@ def test_effective_semantics_includes_current_mention_resolution_and_novelty() -
         assert effective["mentions"][0]["value"] == {"entity_id": 5}
         assert effective["mentions"][0]["entity_id"] == 5
         assert effective["terms"][0]["novelty"] == "work_specific"
+        assert effective["terms"][0]["source"] == "inferred"
+    finally:
+        connection.close()
+
+
+def test_effective_term_without_novelty_uses_default_source() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        effective = StyleAnalysisCatalogService(connection)._effective_outputs(
+            [], terms=[{"id": 20, "canonical_label": "用語"}]
+        )
+
+        assert effective["terms"] == [
+            {
+                "id": 20,
+                "canonical_label": "用語",
+                "novelty": "uncertain",
+                "value": {"value": "uncertain"},
+                "source": "default",
+            }
+        ]
     finally:
         connection.close()
 
@@ -270,6 +294,38 @@ def test_missing_current_dependency_lineage_is_stale(data_root: Path) -> None:
         )
         orchestrator._finish(run_id)
         connection.commit()
+
+        status = StyleAnalysisCatalogService(connection).analysis_status(
+            document_id,
+            text_revision_id,
+            first.structure_revision_id,
+        )
+        assert status["semantic"] == {
+            "state": "stale",
+            "reasons": ["CURRENT_RESOLUTION_CHANGED"],
+        }
+    finally:
+        connection.close()
+
+
+def test_analyzer_version_change_marks_semantic_stale(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection, document_id, text_revision_id, first = _create_reference_analysis(
+        data_root
+    )
+    try:
+        definition = ANALYZERS_BY_ID["scene-semantic-classifier"]
+        monkeypatch.setattr(
+            catalog_current_module,
+            "ANALYZERS_BY_ID",
+            {
+                **ANALYZERS_BY_ID,
+                "scene-semantic-classifier": replace(
+                    definition, version=definition.version + 1
+                ),
+            },
+        )
 
         status = StyleAnalysisCatalogService(connection).analysis_status(
             document_id,
