@@ -87,24 +87,7 @@ def _normalize_pieces(raw_text: str) -> list[_Piece]:
         pieces[0] = _Piece("", pieces[0].raw_start, pieces[0].raw_end, "delete")
     pieces = _normalize_line_endings(pieces)
     pieces = _normalize_nfc(pieces)
-    pieces = [
-        _Piece(
-            "" if _is_removed_control(piece.text) else piece.text,
-            piece.raw_start,
-            piece.raw_end,
-            "delete" if _is_removed_control(piece.text) else piece.operation,
-        )
-        for piece in pieces
-    ]
-    pieces = [
-        _Piece(
-            " " if piece.text == "\t" else piece.text,
-            piece.raw_start,
-            piece.raw_end,
-            "replace" if piece.text == "\t" else piece.operation,
-        )
-        for piece in pieces
-    ]
+    pieces = [_remove_controls_and_replace_tabs(piece) for piece in pieces]
     pieces = _remove_line_end_spaces(pieces)
     pieces = _collapse_blank_lines(pieces)
     return _trim_blank_lines(pieces)
@@ -217,6 +200,24 @@ def _is_removed_control(value: str) -> bool:
         or 14 <= codepoint <= 31
         or codepoint == 127
     )
+
+
+def _remove_controls_and_replace_tabs(piece: _Piece) -> _Piece:
+    transformed: list[str] = []
+    changed = False
+    for character in piece.text:
+        if _is_removed_control(character):
+            changed = True
+        elif character == "\t":
+            transformed.append(" ")
+            changed = True
+        else:
+            transformed.append(character)
+    text = "".join(transformed)
+    operation: NormalizationOperation = (
+        "delete" if not text else "replace" if changed else piece.operation
+    )
+    return _Piece(text, piece.raw_start, piece.raw_end, operation)
 
 
 def _remove_line_end_spaces(pieces: list[_Piece]) -> list[_Piece]:
