@@ -13,6 +13,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from novel_core.errors import (
+    AnalyzerProviderUnavailableError,
     CanonDecisionNotFoundError,
     CanonEntityNotFoundError,
     CanonPolicyError,
@@ -177,6 +178,12 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _PROJECT_CONFLICT
     if isinstance(exc, (WorkScopeError, *_CORE_NOT_FOUND_ERRORS)):
         return _NOT_FOUND
+    if isinstance(exc, AnalyzerProviderUnavailableError):
+        return _ErrorSpec(
+            409,
+            "ANALYZER_PROVIDER_UNAVAILABLE",
+            "The style model provider is unavailable.",
+        )
     if isinstance(exc, VersionConflictError):
         return _VERSION_CONFLICT
     if isinstance(exc, DocumentSchemaError):

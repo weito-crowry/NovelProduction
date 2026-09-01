@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+import json
+
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
+from novel_core.errors import AnalyzerProviderUnavailableError
+from novel_core.style_analysis.runtime_models import JobRecord
 from novel_core.style_analysis.source_models import (
     ReferenceEpisodeRecord,
     ReferenceWorkRecord,
@@ -12,7 +25,9 @@ from novel_api.schemas.common import ProjectEnvelope
 from novel_api.schemas.style_analysis import (
     ReferenceEpisodeResponse,
     ReferenceWorkResponse,
+    StyleAnalyzeRequest,
     StyleImportResponse,
+    StyleJobResponse,
 )
 from novel_api.service_container import (
     open_project_read_services,
@@ -22,6 +37,7 @@ from novel_api.style_analysis.ingestion_service import (
     MAX_UPLOAD_BYTES,
     import_source,
 )
+from novel_api.style_analysis.job_service import StyleJobService
 
 router = APIRouter(
     prefix="/api/v1/projects/{project_id}/style-analysis",
@@ -132,6 +148,161 @@ def delete_reference_work(request: Request, project_id: str, work_id: int) -> Re
     return Response(status_code=204)
 
 
+@router.post(
+    "/documents/{document_id}/analyze",
+    response_model=ProjectEnvelope[StyleJobResponse],
+    status_code=202,
+)
+def analyze_document(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    payload: StyleAnalyzeRequest,
+) -> ProjectEnvelope[StyleJobResponse]:
+    if (
+        payload.preset == "full"
+        and request.app.state.settings.style_model_provider == "disabled"
+    ):
+        raise AnalyzerProviderUnavailableError()
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target):
+        pass
+    service = StyleJobService(
+        data_root=request.app.state.settings.data_root,
+        notify=request.app.state.style_analysis_worker.notify,
+    )
+    job = service.enqueue(
+        project_id,
+        "analyze_document",
+        {"document_id": document_id, **payload.model_dump(exclude_none=True)},
+    )
+    return envelope(project_id, _job_response(job))
+
+
+@router.post(
+    "/reference-works/{work_id}/analyze",
+    response_model=ProjectEnvelope[StyleJobResponse],
+    status_code=202,
+)
+def analyze_reference_work(
+    request: Request,
+    project_id: str,
+    work_id: int,
+    payload: StyleAnalyzeRequest,
+) -> ProjectEnvelope[StyleJobResponse]:
+    if (
+        payload.preset == "full"
+        and request.app.state.settings.style_model_provider == "disabled"
+    ):
+        raise AnalyzerProviderUnavailableError()
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target):
+        pass
+    service = StyleJobService(
+        data_root=request.app.state.settings.data_root,
+        notify=request.app.state.style_analysis_worker.notify,
+    )
+    job = service.enqueue(
+        project_id,
+        "analyze_reference_work",
+        {"reference_work_id": work_id, **payload.model_dump(exclude_none=True)},
+    )
+    return envelope(project_id, _job_response(job))
+
+
+@router.get(
+    "/jobs/{job_id}",
+    response_model=ProjectEnvelope[StyleJobResponse],
+)
+def get_style_job(
+    request: Request, project_id: str, job_id: int
+) -> ProjectEnvelope[StyleJobResponse]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target):
+        pass
+    job = StyleJobService(data_root=request.app.state.settings.data_root).get(
+        project_id, job_id
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    return envelope(project_id, _job_response(job))
+
+
+@router.post(
+    "/jobs/{job_id}/cancel",
+    response_model=ProjectEnvelope[StyleJobResponse],
+)
+def cancel_style_job(
+    request: Request, project_id: str, job_id: int
+) -> ProjectEnvelope[StyleJobResponse]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target):
+        pass
+    job = StyleJobService(data_root=request.app.state.settings.data_root).cancel(
+        project_id, job_id
+    )
+    return envelope(project_id, _job_response(job))
+
+
+@router.post(
+    "/jobs/{job_id}/retry",
+    response_model=ProjectEnvelope[StyleJobResponse],
+    status_code=202,
+)
+def retry_style_job(
+    request: Request, project_id: str, job_id: int
+) -> ProjectEnvelope[StyleJobResponse]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target):
+        pass
+    service = StyleJobService(
+        data_root=request.app.state.settings.data_root,
+        notify=request.app.state.style_analysis_worker.notify,
+    )
+    return envelope(project_id, _job_response(service.retry(project_id, job_id)))
+
+
+@router.get("/documents/{document_id}/runs")
+def list_analysis_runs(
+    request: Request, project_id: str, document_id: int
+) -> ProjectEnvelope[list[object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        return envelope(
+            project_id, list(services.style_analysis.list_analysis_runs(document_id))
+        )
+
+
+@router.get("/documents/{document_id}/annotations")
+def list_analysis_annotations(
+    request: Request, project_id: str, document_id: int
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        return envelope(
+            project_id, list(services.style_analysis.list_annotations(document_id))
+        )
+
+
+@router.get("/documents/{document_id}/boundary-proposals")
+def list_boundary_proposals(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    min_confidence: float = Query(0.60, ge=0.0, le=1.0),
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        return envelope(
+            project_id,
+            list(
+                services.style_analysis.list_boundary_proposals(
+                    document_id, min_confidence=min_confidence
+                )
+            ),
+        )
+
+
 def _work_response(record: ReferenceWorkRecord) -> ReferenceWorkResponse:
     return ReferenceWorkResponse(
         reference_work_id=record.id,
@@ -158,4 +329,18 @@ def _episode_response(record: ReferenceEpisodeRecord) -> ReferenceEpisodeRespons
             "basic": {"state": "not_analyzed", "reasons": []},
             "semantic": {"state": "not_analyzed", "reasons": []},
         },
+    )
+
+
+def _job_response(job: JobRecord) -> StyleJobResponse:
+    result = json.loads(job.result_json)
+    warnings = json.loads(job.warning_json)
+    return StyleJobResponse(
+        job_id=job.id,
+        job_type=job.job_type,
+        status=job.status,
+        result=result if isinstance(result, dict) else {},
+        warnings=warnings if isinstance(warnings, list) else [],
+        error_code=job.error_code,
+        error_message=job.error_message,
     )

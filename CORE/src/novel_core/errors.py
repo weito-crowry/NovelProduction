@@ -109,6 +109,17 @@ class ValidationError(ValueError, NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class AnalyzerProviderUnavailableError(ValidationError):
+    """Raised before a model-backed analysis job is persisted."""
+
+    code = "ANALYZER_PROVIDER_UNAVAILABLE"
+
+    def __init__(self, message: str = "style model provider is unavailable") -> None:
+        super().__init__(message)
+        self.code = type(self).code
+        self.args = (f"{self.code}: {message}",)
+
+
 class RelationshipIntegrityError(ValidationError):
     """Raised when relationship temporal ranges are ambiguous."""
 

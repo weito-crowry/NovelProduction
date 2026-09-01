@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import cast
 
@@ -106,6 +107,29 @@ class AnalysisRunRepository:
             "INSERT INTO style_structure_analysis_sources "
             "(structure_revision_id, boundary_analysis_run_id) VALUES (?, ?)",
             (structure_revision_id, boundary_analysis_run_id),
+        )
+
+    def finish_run(
+        self,
+        run_id: int,
+        *,
+        status: RunStatus,
+        finished_at: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        warning_json: str = "[]",
+    ) -> None:
+        if status == "running":
+            raise ValueError("RUN_STATUS_INVALID")
+        try:
+            json.loads(warning_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("WARNING_JSON_INVALID") from exc
+        self._connection.execute(
+            "UPDATE style_analysis_runs SET status = ?, "
+            "finished_at = COALESCE(?, CURRENT_TIMESTAMP), error_code = ?, "
+            "error_message = ?, warning_json = ? WHERE id = ?",
+            (status, finished_at, error_code, error_message, warning_json, run_id),
         )
 
     def get_run(self, run_id: int) -> AnalysisRunRecord | None:

@@ -617,6 +617,7 @@ source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "novel-production-core" },
     { name = "pydantic" },
     { name = "python-multipart" },
@@ -638,6 +639,7 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.13,<5.0" },
     { name = "fastapi", specifier = ">=0.116,<1.0" },
+    { name = "httpx", specifier = ">=0.28,<1.0" },
     { name = "novel-production-core", editable = "../CORE" },
     { name = "pydantic", specifier = ">=2.11,<3.0" },
     { name = "python-multipart", specifier = ">=0.0.20,<1.0" },

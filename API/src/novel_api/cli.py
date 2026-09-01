@@ -22,6 +22,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--dev-cors-origin", default=None)
     parser.add_argument("--webui-dist", type=Path, default=None)
+    parser.add_argument("--style-model-provider", default=None)
+    parser.add_argument("--style-model-base-url", default=None)
+    parser.add_argument("--style-model-id", default=None)
+    parser.add_argument("--style-model-api-key", default=None)
+    parser.add_argument("--style-model-timeout-seconds", type=float, default=None)
     return parser
 
 
@@ -61,6 +66,19 @@ def _resolve_webui_dist(explicit: Path | None) -> Path | None:
     return None
 
 
+def _resolve_style_value(explicit: str | None, env_name: str) -> str | None:
+    if explicit is not None:
+        return explicit
+    return os.getenv(env_name)
+
+
+def _resolve_style_timeout(explicit: float | None) -> float:
+    if explicit is not None:
+        return explicit
+    value = os.getenv("NOVEL_STYLE_MODEL_TIMEOUT_SECONDS")
+    return float(value) if value else 60.0
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     settings = ApiSettings(
@@ -69,6 +87,22 @@ def main(argv: list[str] | None = None) -> None:
         port=_resolve_port(args.port),
         dev_cors_origin=_resolve_dev_cors_origin(args.dev_cors_origin),
         webui_dist=_resolve_webui_dist(args.webui_dist),
+        style_model_provider=_resolve_style_value(
+            args.style_model_provider, "NOVEL_STYLE_MODEL_PROVIDER"
+        )
+        or "disabled",
+        style_model_base_url=_resolve_style_value(
+            args.style_model_base_url, "NOVEL_STYLE_MODEL_BASE_URL"
+        ),
+        style_model_id=_resolve_style_value(
+            args.style_model_id, "NOVEL_STYLE_MODEL_ID"
+        ),
+        style_model_api_key=_resolve_style_value(
+            args.style_model_api_key, "NOVEL_STYLE_MODEL_API_KEY"
+        ),
+        style_model_timeout_seconds=_resolve_style_timeout(
+            args.style_model_timeout_seconds
+        ),
     )
     app = create_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port)
