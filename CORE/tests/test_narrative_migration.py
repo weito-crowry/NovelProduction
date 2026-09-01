@@ -188,6 +188,7 @@ def test_phase2_migration_creates_required_tables_and_columns(
         "003_narrative.sql",
         "004_drafts.sql",
         "005_structured_drafts.sql",
+        "006_style_analysis_foundation.sql",
     )
 
     tables = {
