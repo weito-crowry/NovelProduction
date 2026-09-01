@@ -70,10 +70,13 @@ def execute_style_job(
         else:
             _fail(connection, job.id, "JOB_TYPE_NOT_IMPLEMENTED", job.job_type)
     except AnalysisCancelledError:
+        connection.rollback()
         _cancel(connection, job.id)
     except ValueError as exc:
+        connection.rollback()
         _fail(connection, job.id, str(exc), str(exc))
     except Exception as exc:
+        connection.rollback()
         _fail(connection, job.id, "WORKER_EXECUTION_FAILED", str(exc))
 
 
@@ -341,13 +344,22 @@ def _lint(
     if scene_id is not None:
         scene_id = _positive_int(scene_id, "SCENE_ID_INVALID")
     connection.execute(
-        "UPDATE style_jobs SET progress_current = 0, progress_total = 1 WHERE id = ?",
+        "UPDATE style_jobs SET progress_current = 0, progress_total = 0 WHERE id = ?",
         (job.id,),
     )
     connection.commit()
     if _is_cancel_requested(connection, job.id):
         _cancel(connection, job.id)
         raise AnalysisCancelledError()
+
+    def report_progress(current: int, total: int) -> None:
+        connection.execute(
+            "UPDATE style_jobs SET progress_current = ?, progress_total = ? "
+            "WHERE id = ?",
+            (current, total, job.id),
+        )
+        connection.commit()
+
     result = StyleLintService(cast(Any, connection)).run(
         document_id=document_id,
         text_revision_id=text_revision_id,
@@ -355,9 +367,14 @@ def _lint(
         profile_id=profile_id,
         profile_version_no=profile_version_no,
         scene_id=scene_id,
+        progress_callback=report_progress,
+        cancellation_probe=lambda: _is_cancel_requested(connection, job.id),
     )
+    if _is_cancel_requested(connection, job.id):
+        raise AnalysisCancelledError()
     connection.execute(
-        "UPDATE style_jobs SET progress_current = 1 WHERE id = ?", (job.id,)
+        "UPDATE style_jobs SET progress_current = progress_total WHERE id = ?",
+        (job.id,),
     )
     return result
 

@@ -14,8 +14,10 @@ from novel_core.document import (
     render_plain_text_projection,
     serialize_document_json,
 )
+from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
+from novel_core.style_analysis.lint_repository import LintRepository
 from novel_core.style_analysis.lint_service import StyleLintService
 from novel_core.style_analysis.profile_service import ProfileService
 from novel_core.style_analysis.text_service import StyleTextService
@@ -188,6 +190,26 @@ def test_lint_evaluates_document_range_and_persists_coverage(
             "VALUES (?, ?, 'document', ?, 'text.char_count', 1, 1, 1)",
             (run_id, structure_id, document_id),
         )
+        connection.execute(
+            "INSERT INTO style_blocks "
+            "(structure_revision_id, scene_id, order_index, paragraph_index, "
+            "block_type, start_cp, end_cp) VALUES (?, NULL, 1, 1, 'narration', 0, 1)",
+            (structure_id,),
+        )
+        connection.execute(
+            "INSERT INTO style_measurements "
+            "(analysis_run_id, structure_revision_id, target_type, target_id, "
+            "metric_name, metric_version, value_real, sample_count) "
+            "VALUES (?, ?, 'document', ?, 'sentence.len.p50', 1, 50, 1)",
+            (run_id, structure_id, document_id),
+        )
+        connection.execute(
+            "INSERT INTO style_measurements "
+            "(analysis_run_id, structure_revision_id, target_type, target_id, "
+            "metric_name, metric_version, value_real, sample_count) "
+            "VALUES (?, ?, 'document', ?, 'narration.run_len.p50', 1, 40, 1)",
+            (run_id, structure_id, document_id),
+        )
         profile = ProfileService(connection).create_manual(
             name="P",
             rules=(
@@ -195,6 +217,30 @@ def test_lint_evaluates_document_range_and_persists_coverage(
                     "target_scope": "document",
                     "scope_selector": {},
                     "metric_name": "text.char_count",
+                    "metric_version": 1,
+                    "preferred_value": 15,
+                    "min_value": 10,
+                    "max_value": 20,
+                    "weight": 1.0,
+                    "enabled": True,
+                    "severity_policy": "standard",
+                },
+                {
+                    "target_scope": "document",
+                    "scope_selector": {},
+                    "metric_name": "sentence.len.p50",
+                    "metric_version": 1,
+                    "preferred_value": 15,
+                    "min_value": 10,
+                    "max_value": 20,
+                    "weight": 1.0,
+                    "enabled": True,
+                    "severity_policy": "standard",
+                },
+                {
+                    "target_scope": "document",
+                    "scope_selector": {},
+                    "metric_name": "narration.run_len.p50",
                     "metric_version": 1,
                     "preferred_value": 15,
                     "min_value": 10,
@@ -214,7 +260,63 @@ def test_lint_evaluates_document_range_and_persists_coverage(
                 else None
             ),
         )
-        result = StyleLintService(connection).run(
+        events: list[tuple[int, int]] = []
+        service = StyleLintService(connection)
+        result = service.run(
+            document_id=document_id,
+            text_revision_id=text_id,
+            structure_revision_id=structure_id,
+            profile_id=profile.profile.id,
+            profile_version_no=profile.version.version_no,
+            progress_callback=lambda current, total: events.append((current, total)),
+        )
+        connection.commit()
+
+        assert result.run.status == "succeeded"
+        assert result.run.enabled_rule_count == 3
+        assert result.run.applicable_rule_count == 3
+        assert result.run.missing_rule_count == 0
+        assert {
+            finding.metric_name: finding.observed_value for finding in result.findings
+        } == {
+            "text.char_count": 1.0,
+            "sentence.len.p50": 50.0,
+            "narration.run_len.p50": 40.0,
+        }
+        assert events[0] == (0, 3)
+        assert events[-1] == (3, 3)
+        with pytest.raises(AnalysisCancelledError):
+            service.run(
+                document_id=document_id,
+                text_revision_id=text_id,
+                structure_revision_id=structure_id,
+                profile_id=profile.profile.id,
+                profile_version_no=profile.version.version_no,
+                cancellation_probe=lambda: True,
+            )
+        narration_finding = next(
+            finding
+            for finding in result.findings
+            if finding.metric_name == "narration.run_len.p50"
+        )
+        assert (
+            json.loads(narration_finding.evidence_json)["evidence_kind"]
+            == "narration_run"
+        )
+
+        reviewed = service.review_finding(
+            next(
+                finding
+                for finding in result.findings
+                if finding.metric_name == "text.char_count"
+            ).id,
+            "acknowledged",
+            "確認済み",
+        )
+        connection.commit()
+        assert reviewed.review_status == "acknowledged"
+
+        repeated = service.run(
             document_id=document_id,
             text_revision_id=text_id,
             structure_revision_id=structure_id,
@@ -222,12 +324,56 @@ def test_lint_evaluates_document_range_and_persists_coverage(
             profile_version_no=profile.version.version_no,
         )
         connection.commit()
+        repeated_text = next(
+            finding
+            for finding in repeated.findings
+            if finding.metric_name == "text.char_count"
+        )
+        assert repeated_text.review_status == "acknowledged"
 
-        assert result.run.status == "succeeded"
-        assert result.run.enabled_rule_count == 1
-        assert result.run.applicable_rule_count == 1
-        assert result.run.missing_rule_count == 0
-        assert result.findings[0].target_id == document_id
-        assert result.findings[0].explanation_code == "below_range"
+        third = service.run(
+            document_id=document_id,
+            text_revision_id=text_id,
+            structure_revision_id=structure_id,
+            profile_id=profile.profile.id,
+            profile_version_no=profile.version.version_no,
+        )
+        connection.commit()
+        third_text = next(
+            finding
+            for finding in third.findings
+            if finding.metric_name == "text.char_count"
+        )
+        assert third_text.review_status is None
+
+        original_insert = LintRepository.insert_finding
+
+        def fail_insert(self, values):
+            raise RuntimeError("forced finding persistence failure")
+
+        monkeypatch.setattr(LintRepository, "insert_finding", fail_insert)
+        with pytest.raises(RuntimeError, match="forced finding persistence failure"):
+            service.run(
+                document_id=document_id,
+                text_revision_id=text_id,
+                structure_revision_id=structure_id,
+                profile_id=profile.profile.id,
+                profile_version_no=profile.version.version_no,
+            )
+        connection.commit()
+        latest = connection.execute(
+            "SELECT status FROM style_lint_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert latest == ("failed",)
+        failed_run_id = int(
+            connection.execute(
+                "SELECT id FROM style_lint_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()[0]
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM style_findings WHERE lint_run_id = ?",
+            (failed_run_id,),
+        ).fetchone() == (0,)
+        monkeypatch.setattr(LintRepository, "insert_finding", original_insert)
     finally:
         connection.close()

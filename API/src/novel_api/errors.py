@@ -25,6 +25,8 @@ from novel_core.errors import (
     NarrativeNotFoundError,
     NovelMcpError,
     OrderConflictError,
+    ProjectDraftNotFoundError,
+    ProjectDraftTextProjectionError,
     RelationshipIntegrityError,
     RelationshipNotFoundError,
     TimelineEventNotFoundError,
@@ -75,6 +77,14 @@ _PROJECT_NOT_FOUND = _ErrorSpec(
     404, "PROJECT_NOT_FOUND", "The requested project was not found."
 )
 _NOT_FOUND = _ErrorSpec(404, "NOT_FOUND", "The requested resource was not found.")
+_PROJECT_DRAFT_NOT_FOUND = _ErrorSpec(
+    404, "PROJECT_DRAFT_NOT_FOUND", "The requested project draft was not found."
+)
+_PROJECT_DRAFT_TEXT_PROJECTION_FAILED = _ErrorSpec(
+    422,
+    "PROJECT_DRAFT_TEXT_PROJECTION_FAILED",
+    "The project draft could not be projected into style-analysis text.",
+)
 _OVERRIDE_NOT_FOUND = _ErrorSpec(
     404, "OVERRIDE_NOT_FOUND", "The requested active override was not found."
 )
@@ -187,6 +197,10 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _PROJECT_NOT_FOUND
     if isinstance(exc, ProjectConflictError):
         return _PROJECT_CONFLICT
+    if isinstance(exc, ProjectDraftNotFoundError):
+        return _PROJECT_DRAFT_NOT_FOUND
+    if isinstance(exc, ProjectDraftTextProjectionError):
+        return _PROJECT_DRAFT_TEXT_PROJECTION_FAILED
     if isinstance(exc, (WorkScopeError, *_CORE_NOT_FOUND_ERRORS)):
         return _NOT_FOUND
     if isinstance(exc, AnalyzerProviderUnavailableError):

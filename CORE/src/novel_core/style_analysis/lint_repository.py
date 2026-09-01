@@ -87,6 +87,15 @@ class LintRepository:
             raise sqlite3.IntegrityError("finding insert did not return an id")
         return int(cursor.lastrowid)
 
+    def finish_run(self, lint_run_id: int, status: str) -> None:
+        if status not in {"succeeded", "failed", "cancelled"}:
+            raise ValueError("LINT_RUN_STATUS_INVALID")
+        self._connection.execute(
+            "UPDATE style_lint_runs SET status = ?, "
+            "finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE id = ?",
+            (status, lint_run_id),
+        )
+
     def add_review(self, finding_id: int, status: str, note: str | None) -> int:
         cursor = self._connection.execute(
             "INSERT INTO style_finding_reviews (finding_id, status, note) "
@@ -138,6 +147,14 @@ class LintRepository:
             "WHERE finding_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
             (finding_id,),
         ).fetchone()
+        if review is None:
+            review = self._inherited_review(
+                lint_run_id=int(row[1]),
+                rule_id=int(row[2]),
+                target_type=str(row[3]),
+                target_id=int(row[4]),
+                evidence_json=str(row[14]),
+            )
         return FindingRecord(
             id=int(row[0]),
             lint_run_id=int(row[1]),
@@ -158,6 +175,58 @@ class LintRepository:
             review_status=None if review is None else str(review[0]),
             review_note=None if review is None else review[1],
         )
+
+    def _inherited_review(
+        self,
+        *,
+        lint_run_id: int,
+        rule_id: int,
+        target_type: str,
+        target_id: int,
+        evidence_json: str,
+    ) -> tuple[str, object] | None:
+        run = self._connection.execute(
+            "SELECT document_id, text_revision_id, structure_revision_id, "
+            "profile_version_id FROM style_lint_runs WHERE id = ?",
+            (lint_run_id,),
+        ).fetchone()
+        if run is None:
+            return None
+        current_evidence = _canonical_json(evidence_json)
+        if current_evidence is None:
+            return None
+        rows = self._connection.execute(
+            "SELECT f.id, f.evidence_json "
+            "FROM style_findings AS f "
+            "JOIN style_lint_runs AS previous_run "
+            "ON previous_run.id = f.lint_run_id "
+            "WHERE f.lint_run_id <> ? AND previous_run.document_id = ? "
+            "AND previous_run.text_revision_id = ? "
+            "AND previous_run.structure_revision_id = ? "
+            "AND previous_run.profile_version_id = ? AND f.rule_id = ? "
+            "AND f.target_type = ? AND f.target_id = ? "
+            "ORDER BY previous_run.created_at DESC, previous_run.id DESC, "
+            "f.created_at DESC, f.id DESC",
+            (
+                lint_run_id,
+                int(run[0]),
+                int(run[1]),
+                int(run[2]),
+                int(run[3]),
+                rule_id,
+                target_type,
+                target_id,
+            ),
+        ).fetchall()
+        for previous_finding_id, previous_evidence in rows:
+            if _canonical_json(str(previous_evidence)) == current_evidence:
+                review = self._connection.execute(
+                    "SELECT status, note FROM style_finding_reviews "
+                    "WHERE finding_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                    (int(previous_finding_id),),
+                ).fetchone()
+                return None if review is None else (str(review[0]), review[1])
+        return None
 
     def list_findings(self, lint_run_id: int) -> tuple[FindingRecord, ...]:
         rows = self._connection.execute(
@@ -186,3 +255,10 @@ def json_text(value: object) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _canonical_json(value: str) -> str | None:
+    try:
+        return json_text(json.loads(value))
+    except (TypeError, json.JSONDecodeError, ValueError):
+        return None

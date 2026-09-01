@@ -25,6 +25,24 @@ class DocumentStorageError(NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class ProjectDraftNotFoundError(NovelMcpError):
+    """Raised when a requested project draft does not exist."""
+
+    code = "PROJECT_DRAFT_NOT_FOUND"
+
+    def __init__(self, message: str = "project draft not found") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class ProjectDraftTextProjectionError(NovelMcpError):
+    """Raised when a project draft cannot be projected into style text."""
+
+    code = "PROJECT_DRAFT_TEXT_PROJECTION_FAILED"
+
+    def __init__(self, message: str = "project draft text projection failed") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class MigrationError(NovelMcpError):
     """Raised when migrations cannot be applied safely."""
 

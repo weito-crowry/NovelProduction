@@ -58,6 +58,45 @@ def test_project_episode_capture_creates_style_document(
     assert data["analysis_status"]["basic"]["state"] == "not_analyzed"
 
 
+def test_project_episode_capture_uses_explicit_draft_error_codes(
+    client, project_factory
+) -> None:
+    project_dir = project_factory("draft-errors")
+    episode_id, draft_id = create_episode_and_draft(project_dir)
+
+    missing = client.post(
+        f"/api/v1/projects/draft-errors/style-analysis/project-episodes/{episode_id}/capture",
+        json={"draft_id": draft_id + 1000},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "PROJECT_DRAFT_NOT_FOUND"
+
+    db = sqlite3.connect(project_dir / "story.db")
+    try:
+        work_id = db.execute(
+            "SELECT work_id FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()[0]
+        db.execute(
+            "INSERT INTO drafts (work_id, episode_id, revision, document_json) "
+            "VALUES (?, ?, 2, '{}')",
+            (work_id, episode_id),
+        )
+        invalid_draft_id = int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
+        db.commit()
+    finally:
+        db.close()
+
+    projection_failed = client.post(
+        f"/api/v1/projects/draft-errors/style-analysis/project-episodes/{episode_id}/capture",
+        json={"draft_id": invalid_draft_id},
+    )
+    assert projection_failed.status_code == 422
+    assert (
+        projection_failed.json()["error"]["code"]
+        == "PROJECT_DRAFT_TEXT_PROJECTION_FAILED"
+    )
+
+
 def test_lint_endpoint_enqueues_explicit_revision_contract(
     client, project_factory
 ) -> None:

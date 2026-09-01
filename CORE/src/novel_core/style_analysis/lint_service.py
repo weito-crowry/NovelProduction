@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from novel_core.errors import ValidationError
+from novel_core.errors import AnalysisCancelledError, ValidationError
 from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.fingerprints import (
     JsonObject,
     JsonValue,
     fingerprint_json,
 )
+from novel_core.style_analysis.lint_evidence import build_lint_evidence
 from novel_core.style_analysis.lint_repository import (
     FindingRecord,
     LintRepository,
@@ -65,6 +67,8 @@ class StyleLintService:
         profile_id: int,
         profile_version_no: int,
         scene_id: int | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
+        cancellation_probe: Callable[[], bool] | None = None,
     ) -> LintResult:
         context = self._context(
             document_id=document_id,
@@ -73,6 +77,8 @@ class StyleLintService:
             profile_id=profile_id,
             profile_version_no=profile_version_no,
             scene_id=scene_id,
+            progress_callback=progress_callback,
+            cancellation_probe=cancellation_probe,
         )
         run_id = self._repository.insert_run(
             (
@@ -85,7 +91,7 @@ class StyleLintService:
                 context["basic_run_id"],
                 context["semantic_run_id"],
                 context["fingerprint"],
-                "succeeded",
+                "running",
                 json_text(context["warnings"]),
                 context["enabled_count"],
                 context["applicable_count"],
@@ -93,8 +99,18 @@ class StyleLintService:
                 None,
             )
         )
-        for finding in context["findings"]:
-            self._repository.insert_finding((run_id, *finding))
+        savepoint = "style_lint_findings"
+        self._connection.execute(f"SAVEPOINT {savepoint}")
+        try:
+            for finding in context["findings"]:
+                self._repository.insert_finding((run_id, *finding))
+            self._repository.finish_run(run_id, "succeeded")
+            self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+            self._repository.finish_run(run_id, "failed")
+            raise
         run = self._repository.get_run(run_id)
         if run is None:
             raise RuntimeError("lint run retrieval failed")
@@ -202,6 +218,8 @@ class StyleLintService:
             metric_runs,
             text_id,
             structure_id,
+            cast(Callable[[int, int], None] | None, values.get("progress_callback")),
+            cast(Callable[[], bool] | None, values.get("cancellation_probe")),
         )
         warnings = sorted(set((*scene_warnings, *warnings)))
         fingerprint = fingerprint_json(
@@ -247,8 +265,8 @@ class StyleLintService:
 
     def _measurements(
         self, runs: dict[str, int | None]
-    ) -> dict[tuple[str, str, int, int], float]:
-        result: dict[tuple[str, str, int, int], float] = {}
+    ) -> dict[tuple[str, str, int, str, int], float]:
+        result: dict[tuple[str, str, int, str, int], float] = {}
         for group in ("basic", "semantic"):
             run_id = runs.get(group)
             if run_id is None:
@@ -260,7 +278,8 @@ class StyleLintService:
                 (run_id,),
             ).fetchall()
             for row in rows:
-                result[(group, str(row[0]), int(row[1]), int(row[3]))] = float(row[4])
+                key = (group, str(row[0]), int(row[1]), str(row[2]), int(row[3]))
+                result[key] = float(row[4])
         return result
 
     def _scenes(self, structure_id: int) -> tuple[SceneRecord, ...]:
@@ -371,10 +390,12 @@ class StyleLintService:
         requested_scene: int | None,
         states: list[JsonObject],
         links: list[JsonObject],
-        measurements: dict[tuple[str, str, int, int], float],
+        measurements: dict[tuple[str, str, int, str, int], float],
         runs: dict[str, int | None],
         text_id: int,
         structure_id: int,
+        progress_callback: Callable[[int, int], None] | None,
+        cancellation_probe: Callable[[], bool] | None,
     ) -> tuple[list[tuple[object, ...]], int, int, list[str]]:
         state_map: dict[tuple[int, str], JsonObject] = {}
         for item in states:
@@ -459,7 +480,12 @@ class StyleLintService:
                 item for item in candidate_group if item.specificity == maximum
             )
         findings: list[tuple[object, ...]] = []
+        total = len(selected)
+        if progress_callback is not None:
+            progress_callback(0, total)
         for candidate in selected:
+            if cancellation_probe is not None and cancellation_probe():
+                raise AnalysisCancelledError()
             applicable += 1
             rule = candidate.rule
             definition = METRIC_DEFINITIONS[rule.metric_name]
@@ -468,13 +494,15 @@ class StyleLintService:
                 metric_group,
                 candidate.target_type,
                 candidate.target_id,
+                rule.metric_name,
                 rule.metric_version,
             )
             observed = measurements.get(measurement_key)
             if observed is None:
                 missing += 1
-                if runs.get(metric_group) is None:
-                    warnings.append(f"METRIC_UNAVAILABLE:{rule.metric_name}")
+                warnings.append(f"METRIC_UNAVAILABLE:{rule.metric_name}")
+                if progress_callback is not None:
+                    progress_callback(applicable, total)
                 continue
             deviation, explanation = _deviation(
                 observed,
@@ -483,6 +511,8 @@ class StyleLintService:
                 definition.zero_width_tolerance,
             )
             if deviation == 0:
+                if progress_callback is not None:
+                    progress_callback(applicable, total)
                 continue
             severity = (
                 "info"
@@ -491,14 +521,14 @@ class StyleLintService:
                 if deviation <= 0.75
                 else "strong_warning"
             )
-            evidence = {
-                "evidence_kind": "scope_metric",
-                "text_revision_id": text_id,
-                "structure_revision_id": structure_id,
-                "target_type": candidate.target_type,
-                "target_id": candidate.target_id,
-                "spans": [],
-            }
+            evidence = build_lint_evidence(
+                self._connection,
+                metric_name=rule.metric_name,
+                target_type=candidate.target_type,
+                target_id=candidate.target_id,
+                text_revision_id=text_id,
+                structure_revision_id=structure_id,
+            )
             findings.append(
                 (
                     rule.id,
@@ -518,6 +548,8 @@ class StyleLintService:
                     json_text(evidence),
                 )
             )
+            if progress_callback is not None:
+                progress_callback(applicable, total)
         return findings, applicable, missing, sorted(set(warnings))
 
     def _profile_version_no(self, version_id: int) -> int:

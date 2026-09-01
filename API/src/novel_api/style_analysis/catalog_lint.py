@@ -4,7 +4,12 @@ import json
 from typing import Any
 
 from novel_core.document import parse_document_json, render_plain_text_projection
-from novel_core.errors import DocumentSchemaError, DocumentStorageError, ValidationError
+from novel_core.errors import (
+    DocumentSchemaError,
+    ProjectDraftNotFoundError,
+    ProjectDraftTextProjectionError,
+    ValidationError,
+)
 from novel_core.repositories.draft_repository import DraftRepository
 from novel_core.style_analysis.lint_repository import FindingRecord, LintRunRecord
 from novel_core.style_analysis.lint_service import LintResult, StyleLintService
@@ -30,14 +35,17 @@ class StyleAnalysisLintMixin:
                 raise ValidationError("EPISODE_NOT_FOUND")
             draft = DraftRepository(self._connection).get_by_id(draft_id)
             if draft is None:
-                raise ValidationError("DRAFT_NOT_FOUND")
+                raise ProjectDraftNotFoundError()
             if draft.work_id != int(episode[0]) or draft.episode_id != episode_id:
                 raise ValidationError("PROJECT_DRAFT_EPISODE_MISMATCH")
             try:
                 document = parse_document_json(draft.document_json)
             except DocumentSchemaError as exc:
-                raise DocumentStorageError() from exc
-            projection = render_plain_text_projection(document)
+                raise ProjectDraftTextProjectionError() from exc
+            try:
+                projection = render_plain_text_projection(document)
+            except (DocumentSchemaError, ValueError) as exc:
+                raise ProjectDraftTextProjectionError() from exc
             row = self._connection.execute(
                 "SELECT id FROM style_documents "
                 "WHERE kind = 'project_episode_draft' "
