@@ -7,7 +7,8 @@ from dataclasses import dataclass
 class TermPrefixEntry:
     episode_id: int
     episode_order: int
-    document_id: int
-    text_revision_id: int
-    structure_revision_id: int
-    term_run_id: int
+    document_id: int | None
+    text_revision_id: int | None
+    structure_revision_id: int | None
+    term_run_id: int | None
+    resolver_status: str | None = None

@@ -204,6 +204,35 @@ def test_incomplete_first_appearance_suppresses_term_metrics(tmp_path: Path) -> 
         connection.close()
 
 
+def test_composition_metrics_emit_zero_for_dialogue_only_scope(tmp_path: Path) -> None:
+    connection, document_id, scenes, blocks = _fixture(tmp_path)
+    try:
+        dialogue_only = tuple(
+            block for block in blocks if block.block_type == "dialogue"
+        )
+        result = calculate_semantic_metrics(
+            connection,
+            document_id=document_id,
+            canonical_text="「本当？」",
+            scenes=scenes,
+            blocks=dialogue_only,
+            speaker_run_id=None,
+            term_run_id=None,
+            explanation_run_id=None,
+            block_run_id=3,
+        )
+        composition = [
+            item
+            for item in result.measurements
+            if item.metric_name.startswith("semantic.")
+        ]
+        assert len(composition) == 10
+        assert {item.value for item in composition} == {0.0}
+        assert {item.sample_count for item in composition} == {1}
+    finally:
+        connection.close()
+
+
 def test_term_metrics_use_first_mentions_and_sufficient_explanation(
     tmp_path: Path,
 ) -> None:

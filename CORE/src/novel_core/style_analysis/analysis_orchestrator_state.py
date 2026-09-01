@@ -4,8 +4,11 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.model_contracts import JsonObject as ModelJsonObject
+from novel_core.style_analysis.semantic_service import SemanticService
 from novel_core.style_analysis.structure_models import BlockRecord
+from novel_core.style_analysis.term_service import TermService
 
 
 class AnalysisStateMixin:
@@ -24,7 +27,6 @@ class AnalysisStateMixin:
             "block.semantic_primary",
             "term.novelty",
             "term_mention.explanation",
-            "mention.entity_resolution",
         )
         override_placeholders = ", ".join("?" for _ in override_paths)
         review_placeholders = ", ".join("?" for _ in review_paths)
@@ -302,3 +304,13 @@ class AnalysisStateMixin:
         return build_context_window(
             blocks, subject_block_id=block_id, before=before, after=after
         )
+
+
+class AnalysisStateReader(AnalysisStateMixin):
+    """Read-only state adapter shared by execution and current-run resolution."""
+
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+        self.entities = EntityService(connection)
+        self.terms = TermService(connection)
+        self.semantic = SemanticService(connection)

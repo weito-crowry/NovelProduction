@@ -4,9 +4,7 @@ import json
 import sqlite3
 from typing import cast
 
-from novel_core.style_analysis.analysis_orchestrator import (
-    DocumentAnalysisOrchestrator,
-)
+from novel_core.style_analysis.analysis_orchestrator_state import AnalysisStateReader
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.analysis_runtime import AnalysisRuntime
 from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
@@ -46,9 +44,7 @@ class CurrentRunResolver:
         self.policy = policy or AnalysisPolicy()
         self.runs = AnalysisRunRepository(connection)
         self.runtime = AnalysisRuntime(self.runs)
-        self.state = DocumentAnalysisOrchestrator(
-            connection, model_client=None, policy=self.policy
-        )
+        self.state = AnalysisStateReader(connection)
         self._cache: dict[tuple[int, int, int, str], AnalysisRunRecord | None] = {}
 
     def clear(self) -> None:
@@ -116,20 +112,20 @@ class CurrentRunResolver:
             (document_id,),
         ).fetchone()
         if row is None:
-            return (
-                (
-                    TermPrefixEntry(
-                        0,
-                        0,
-                        document_id,
-                        text_revision_id,
-                        structure_id,
-                        current_term_run_id or 0,
-                    ),
-                )
-                if current_term_run_id is not None
-                else (),
-                current_term_run_id is not None,
+            run = self._target_term_run(
+                document_id, text_revision_id, structure_id, current_term_run_id
+            )
+            entry = self._prefix_entry(
+                0,
+                0,
+                document_id,
+                text_revision_id,
+                structure_id,
+                run,
+                current_term_run_id,
+            )
+            return (entry,), self._is_exact_succeeded(
+                run, document_id, text_revision_id, structure_id
             )
         work_id, target_order = int(row[1]), int(row[2])
         episodes = self.connection.execute(
@@ -149,55 +145,58 @@ class CurrentRunResolver:
             source_text,
             source_structure,
         ) in episodes:
-            if (
-                source_document is None
-                or source_text is None
-                or source_structure is None
-            ):
-                complete = False
-                continue
-            source_document_id = int(source_document)
-            source_text_id = int(source_text)
-            source_structure_id = int(source_structure)
-            if source_document_id == document_id:
-                run = (
-                    self.runs.get_run(current_term_run_id)
-                    if current_term_run_id is not None
-                    else None
+            source_document_id: int | None
+            source_text_id: int | None
+            source_structure_id: int | None
+            target = source_document is not None and int(source_document) == document_id
+            if target:
+                source_document_id = document_id
+                source_text_id = text_revision_id
+                source_structure_id = structure_id
+                run = self._target_term_run(
+                    document_id,
+                    text_revision_id,
+                    structure_id,
+                    current_term_run_id,
                 )
-                if (
-                    run is None
-                    or run.analyzer_id != "term-resolver"
-                    or run.document_id != source_document_id
-                    or run.text_revision_id != source_text_id
-                    or run.structure_revision_id != source_structure_id
-                ):
-                    run = self.resolve(
+                requested_run_id = current_term_run_id
+            else:
+                source_document_id = (
+                    int(source_document) if source_document is not None else None
+                )
+                source_text_id = int(source_text) if source_text is not None else None
+                source_structure_id = (
+                    int(source_structure) if source_structure is not None else None
+                )
+                run = (
+                    self.resolve(
                         source_document_id,
                         source_text_id,
                         source_structure_id,
                         "term-resolver",
                     )
-            else:
-                run = self.resolve(
-                    source_document_id,
-                    source_text_id,
-                    source_structure_id,
-                    "term-resolver",
+                    if source_document_id is not None
+                    and source_text_id is not None
+                    and source_structure_id is not None
+                    else None
                 )
-            if run is None:
-                complete = False
-                continue
-            if run.status != "succeeded":
+                requested_run_id = None
+            if not self._is_exact_succeeded(
+                run,
+                source_document_id,
+                source_text_id,
+                source_structure_id,
+            ):
                 complete = False
             entries.append(
-                TermPrefixEntry(
+                self._prefix_entry(
                     int(episode_id),
                     int(order),
                     source_document_id,
                     source_text_id,
                     source_structure_id,
-                    run.id,
+                    run,
+                    requested_run_id,
                 )
             )
         return tuple(entries), complete and bool(entries)
@@ -222,10 +221,63 @@ class CurrentRunResolver:
                     "text_revision_id": item.text_revision_id,
                     "structure_revision_id": item.structure_revision_id,
                     "term_resolver_run_id": item.term_run_id,
+                    "resolver_status": item.resolver_status,
                 }
                 for item in entries
             ],
         }
+
+    def _target_term_run(
+        self,
+        document_id: int,
+        text_revision_id: int,
+        structure_id: int,
+        current_term_run_id: int | None,
+    ) -> AnalysisRunRecord | None:
+        if current_term_run_id is not None:
+            return self.runs.get_run(current_term_run_id)
+        return self.resolve(
+            document_id, text_revision_id, structure_id, "term-resolver"
+        )
+
+    @staticmethod
+    def _is_exact_succeeded(
+        run: AnalysisRunRecord | None,
+        document_id: int | None,
+        text_revision_id: int | None,
+        structure_id: int | None,
+    ) -> bool:
+        return (
+            run is not None
+            and document_id is not None
+            and text_revision_id is not None
+            and structure_id is not None
+            and run.analyzer_id == "term-resolver"
+            and run.document_id == document_id
+            and run.text_revision_id == text_revision_id
+            and run.structure_revision_id == structure_id
+            and run.status == "succeeded"
+        )
+
+    @staticmethod
+    def _prefix_entry(
+        episode_id: int,
+        episode_order: int,
+        document_id: int | None,
+        text_revision_id: int | None,
+        structure_id: int | None,
+        run: AnalysisRunRecord | None,
+        requested_run_id: int | None,
+    ) -> TermPrefixEntry:
+        return TermPrefixEntry(
+            episode_id,
+            episode_order,
+            document_id,
+            text_revision_id,
+            structure_id,
+            run.id if run is not None else requested_run_id,
+            run.status if run is not None else None,
+        )
 
     def _dependencies(
         self,

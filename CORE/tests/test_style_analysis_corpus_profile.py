@@ -13,6 +13,7 @@ from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrch
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.corpus_models import AggregateSpec
 from novel_core.style_analysis.corpus_repository import CorpusRepository
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.model_prompts import get_prompt
 from novel_core.style_analysis.profile_service import ProfileService
 from novel_core.style_analysis.semantic_repository import SemanticRepository
@@ -91,6 +92,71 @@ def test_measurements_are_persisted_for_current_basic_run(tmp_path: Path) -> Non
             ).fetchone()[0]
             > 0
         )
+    finally:
+        connection.close()
+
+
+def test_term_prefix_uses_in_flight_target_lineage_before_pointer_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = open_test_database(tmp_path)
+    try:
+        work_id = import_work(connection, count=2)
+        episodes = StyleSourceRepository(connection).list_reference_episodes(work_id)
+        target = episodes[1]
+        assert target.style_document_id is not None
+        assert target.current_text_revision_id is not None
+        assert target.current_structure_revision_id is not None
+        digest = "d" * 64
+        cursor = connection.execute(
+            "INSERT INTO style_structure_revisions "
+            "(text_revision_id, revision_no, segmenter_id, segmenter_version, "
+            "source_kind, fingerprint) VALUES (?, 2, 'test', 1, 'automatic', ?)",
+            (target.current_text_revision_id, digest),
+        )
+        assert cursor.lastrowid is not None
+        in_flight_structure_id = int(cursor.lastrowid)
+        runs = AnalysisRunRepository(connection)
+        assert episodes[0].style_document_id is not None
+        assert episodes[0].current_text_revision_id is not None
+        assert episodes[0].current_structure_revision_id is not None
+        prior_run_id = runs.insert_run(
+            document_id=episodes[0].style_document_id,
+            analyzer_id="term-resolver",
+            analyzer_version=1,
+            text_revision_id=episodes[0].current_text_revision_id,
+            structure_revision_id=episodes[0].current_structure_revision_id,
+            status="succeeded",
+            fingerprint=digest,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        run_id = runs.insert_run(
+            document_id=target.style_document_id,
+            analyzer_id="term-resolver",
+            analyzer_version=1,
+            text_revision_id=target.current_text_revision_id,
+            structure_revision_id=in_flight_structure_id,
+            status="succeeded",
+            fingerprint=digest,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        resolver = CurrentRunResolver(connection)
+        prior_run = runs.get_run(prior_run_id)
+        assert prior_run is not None
+        monkeypatch.setattr(resolver, "resolve", lambda *_args: prior_run)
+        entries, complete = resolver.term_prefix(
+            target.style_document_id,
+            target.current_text_revision_id,
+            in_flight_structure_id,
+            run_id,
+        )
+        assert complete
+        assert entries[-1].document_id == target.style_document_id
+        assert entries[-1].text_revision_id == target.current_text_revision_id
+        assert entries[-1].structure_revision_id == in_flight_structure_id
+        assert entries[-1].resolver_status == "succeeded"
     finally:
         connection.close()
 

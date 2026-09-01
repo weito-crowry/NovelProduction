@@ -122,8 +122,6 @@ def _composition_metrics(
         if denominator == 0:
             continue
         narration = tuple(block for block in usable if block.block_type == "narration")
-        if not narration:
-            continue
         labels: dict[int, str] = {}
         for block in narration:
             effective = resolve_block_semantic(
@@ -282,6 +280,8 @@ def _term_metrics(
     first_by_term: dict[int, tuple[tuple[int, int, int], TermMentionRecord]] = {}
     current_mentions: dict[int, TermMentionRecord] = {}
     for entry in entries:
+        if entry.term_run_id is None or entry.document_id is None:
+            continue
         novelty: dict[int, object] = {}
         for subject_id, value_json, confidence, start_cp in annotation_records(
             connection, entry.term_run_id, "term.novelty"

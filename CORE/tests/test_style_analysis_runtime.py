@@ -11,6 +11,7 @@ from novel_core.style_analysis.analysis_runtime import (
     AnalysisRuntime,
     execution_fingerprint,
 )
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.runtime_models import (
     AnalysisPolicy,
     AnalyzerDefinition,
@@ -198,6 +199,46 @@ def test_analysis_policy_has_only_specified_defaults() -> None:
     assert policy.pov_effective == 0.80
     assert policy.scene_boundary_auto_apply == 0.85
     assert policy.scene_boundary_candidate_min == 0.60
+
+
+def test_current_run_resolver_project_requires_exact_succeeded_term_run(
+    runtime_context: tuple[
+        sqlite3.Connection, AnalysisRunRepository, AnalysisRuntime, int, int, int
+    ],
+) -> None:
+    connection, repository, _runtime, document_id, text_id, structure_id = (
+        runtime_context
+    )
+    partial_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_id,
+        structure_revision_id=structure_id,
+        analyzer_id="term-resolver",
+        status="partial",
+    )
+    resolver = CurrentRunResolver(connection)
+    entries, complete = resolver.term_prefix(
+        document_id, text_id, structure_id, partial_id
+    )
+    assert not complete
+    assert entries[0].term_run_id == partial_id
+    assert entries[0].resolver_status == "partial"
+
+    succeeded_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_id,
+        structure_revision_id=structure_id,
+        analyzer_id="term-resolver",
+        status="succeeded",
+    )
+    entries, complete = resolver.term_prefix(
+        document_id, text_id, structure_id, succeeded_id
+    )
+    assert complete
+    assert entries[0].term_run_id == succeeded_id
+    assert entries[0].text_revision_id == text_id
 
 
 def test_execution_fingerprint_ignores_json_object_key_order() -> None:
