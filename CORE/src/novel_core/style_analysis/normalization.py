@@ -131,7 +131,8 @@ def _normalize_nfc(pieces: list[_Piece]) -> list[_Piece]:
             if not next_piece.text:
                 break
             source = "".join(item.text for item in group)
-            if unicodedata.combining(next_piece.text[0]):
+            next_nfd = unicodedata.normalize("NFD", next_piece.text)
+            if unicodedata.combining(next_nfd[0]):
                 group.append(next_piece)
                 next_index += 1
                 continue
