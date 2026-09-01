@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -148,12 +149,26 @@ def test_nfc_alignment_handles_repeated_precomposed_character() -> None:
     result = normalize_text("e\u0301é", [])
     assert result.canonical_text == "éé"
     assert result.segments
+    assert unicodedata.is_normalized("NFC", result.canonical_text)
 
 
 def test_nfc_alignment_maps_combining_sequence_and_raw_boundary() -> None:
     assert normalize_text("a\u0301a", []).canonical_text == "áa"
     result = normalize_text("e\u0301é", [2])
     assert result.scene_break_offsets_cp == (1,)
+
+
+def test_nfc_alignment_handles_hangul_jamo_composition() -> None:
+    result = normalize_text("\u1100\u1161", [])
+    assert result.canonical_text == "가"
+    assert unicodedata.is_normalized("NFC", result.canonical_text)
+
+
+def test_normalization_collapses_and_trims_blank_lines_after_space_removal() -> None:
+    assert normalize_text("A\n \n \nB", []).canonical_text == "A\n\nB"
+    assert normalize_text("\n\n\n本文", []).canonical_text == "本文"
+    with pytest.raises(ValidationError, match="TEXT_EMPTY"):
+        normalize_text("\n \n \n", [])
 
 
 def test_normalization_empty_and_code_point_limit_errors() -> None:

@@ -117,21 +117,21 @@ def test_basic_metric_char_count_excludes_unicode_whitespace() -> None:
 
 
 def test_dialogue_utterance_length_excludes_outer_quotes_and_whitespace() -> None:
-    scenes = (SceneRecord(1, 10, 1, 0, 7),)
-    blocks = (BlockRecord(11, 10, 1, 1, 1, "dialogue", 0, 7),)
+    scenes = (SceneRecord(1, 10, 1, 0, 8),)
+    blocks = (BlockRecord(11, 10, 1, 1, 1, "dialogue", 0, 8),)
     results = calculate_basic_metrics(
         document_id=1,
         canonical_text="「 A  B 」",
         scenes=scenes,
         blocks=blocks,
-        sentences=(SentenceRecord(21, 11, 1, 0, 7),),
+        sentences=(SentenceRecord(21, 11, 1, 0, 8),),
     )
     utterance_p50 = next(
         result
         for result in results
         if result.metric_name == "dialogue.utterance_len.p50"
     )
-    assert utterance_p50.value == 3.0
+    assert utterance_p50.value == 2.0
 
 
 def test_dialogue_turn_bridge_uses_nonwhitespace_metric_length() -> None:

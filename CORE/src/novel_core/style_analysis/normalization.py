@@ -144,7 +144,20 @@ def _normalize_nfc(pieces: list[_Piece]) -> list[_Piece]:
         next_index = index + 1
         while next_index < len(pieces):
             next_piece = pieces[next_index]
-            if not next_piece.text or not unicodedata.combining(next_piece.text[0]):
+            if not next_piece.text:
+                break
+            source = "".join(item.text for item in group)
+            if unicodedata.combining(next_piece.text[0]):
+                group.append(next_piece)
+                next_index += 1
+                continue
+            if not _may_extend_hangul_group(source, next_piece.text):
+                break
+            candidate = unicodedata.normalize("NFC", source + next_piece.text)
+            separated = unicodedata.normalize("NFC", source) + unicodedata.normalize(
+                "NFC", next_piece.text
+            )
+            if candidate == separated:
                 break
             group.append(next_piece)
             next_index += 1
@@ -163,6 +176,21 @@ def _normalize_nfc(pieces: list[_Piece]) -> list[_Piece]:
             )
         index = next_index
     return result
+
+
+def _may_extend_hangul_group(source: str, next_text: str) -> bool:
+    return _is_hangul_jamo(next_text[0]) and any(
+        _is_hangul_jamo(character) for character in source
+    )
+
+
+def _is_hangul_jamo(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        0x1100 <= codepoint <= 0x11FF
+        or 0xA960 <= codepoint <= 0xA97C
+        or 0xD7B0 <= codepoint <= 0xD7FB
+    )
 
 
 def _is_removed_control(value: str) -> bool:
@@ -200,9 +228,7 @@ def _collapse_blank_lines(pieces: list[_Piece]) -> list[_Piece]:
             index += 1
             continue
         end = index
-        while end + 1 < len(visible) and visible[end + 1] == visible[end] + 1:
-            if pieces[visible[end + 1]].text != "\n":
-                break
+        while end + 1 < len(visible) and pieces[visible[end + 1]].text == "\n":
             end += 1
         if end - index + 1 >= 3:
             first = visible[index]
@@ -222,14 +248,14 @@ def _trim_blank_lines(pieces: list[_Piece]) -> list[_Piece]:
     result = list(pieces)
     while True:
         visible = [index for index, piece in enumerate(result) if piece.text]
-        if not visible or result[visible[0]].text != "\n":
+        if not visible or result[visible[0]].text.strip("\n"):
             break
         index = visible[0]
         piece = result[index]
         result[index] = _Piece("", piece.raw_start, piece.raw_end, "delete")
     while True:
         visible = [index for index, piece in enumerate(result) if piece.text]
-        if not visible or result[visible[-1]].text != "\n":
+        if not visible or result[visible[-1]].text.strip("\n"):
             break
         index = visible[-1]
         piece = result[index]

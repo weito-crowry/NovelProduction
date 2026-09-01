@@ -65,6 +65,14 @@ def test_quoted_symbol_only_paragraphs_take_dialogue_precedence() -> None:
     assert "unmatched_dialogue_quote" in draft.warnings
 
 
+def test_unmatched_closing_dialogue_quote_is_warned_and_preserved() -> None:
+    draft = build_automatic_structure("」", [])
+    assert draft.blocks[0].block_type == "narration"
+    assert draft.blocks[0].start_cp == 0
+    assert draft.blocks[0].end_cp == 1
+    assert "unmatched_dialogue_quote" in draft.warnings
+
+
 def test_automatic_structure_is_persisted_and_reused(tmp_path: Path) -> None:
     connection = open_test_database(tmp_path)
     try:

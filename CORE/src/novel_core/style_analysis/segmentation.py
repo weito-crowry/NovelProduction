@@ -153,7 +153,9 @@ def _paragraph_blocks(
                 paragraph_index, "heading", offset, offset + len(paragraph), paragraph
             )
         ]
-    if _is_separator(paragraph) and "「" not in paragraph:
+    if _is_separator(paragraph) and not any(
+        quote in paragraph for quote in ("「", "」")
+    ):
         return [
             _block(
                 paragraph_index, "separator", offset, offset + len(paragraph), paragraph
@@ -178,7 +180,10 @@ def _paragraph_blocks(
                     )
                 dialogue_start = index
             depth += 1
-        elif character == "」" and depth:
+        elif character == "」":
+            if not depth:
+                warnings.append("unmatched_dialogue_quote")
+                continue
             depth -= 1
             if depth == 0 and dialogue_start is not None:
                 result.append(
