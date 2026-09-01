@@ -134,9 +134,9 @@ class ProfileRuleRequest(BaseModel):
     preferred_value: StrictInt | StrictFloat | None = None
     min_value: StrictInt | StrictFloat | None = None
     max_value: StrictInt | StrictFloat | None = None
-    weight: StrictInt | StrictFloat = 1.0
-    enabled: bool = True
-    severity_policy: Literal["standard"] = "standard"
+    weight: StrictInt | StrictFloat
+    enabled: bool
+    severity_policy: Literal["standard"]
 
 
 class ProfileFromCorpusRequest(BaseModel):

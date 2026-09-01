@@ -36,7 +36,7 @@ def test_semantics_migration_creates_all_sa_d_tables(tmp_path: Path) -> None:
                 "AND name LIKE 'style_%' ORDER BY rowid"
             )
         )
-        assert tables[-21:-10] == (
+        assert tables[-24:-13] == (
             "style_entities",
             "style_mentions",
             "style_entity_aliases",
@@ -582,14 +582,26 @@ def test_document_orchestrator_persists_sa_d_runs_and_annotations(
             structure_revision_id=structure_id,
         )
         assert result.status == "succeeded"
-        assert len(result.run_ids) == 10
+        assert len(result.run_ids) == 11
         assert connection.execute(
             "SELECT COUNT(*) FROM style_analysis_runs WHERE document_id = ?",
             (document_id,),
-        ).fetchone() == (10,)
+        ).fetchone() == (11,)
         assert connection.execute(
             "SELECT COUNT(*) FROM style_annotations"
         ).fetchone() >= (5,)
+        semantic_metric_run = connection.execute(
+            "SELECT id, status FROM style_analysis_runs "
+            "WHERE analyzer_id = 'style-metrics-semantic'"
+        ).fetchone()
+        assert semantic_metric_run == (10, "succeeded")
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM style_measurements WHERE analysis_run_id = ?",
+                (semantic_metric_run[0],),
+            ).fetchone()[0]
+            == 14
+        )
 
         cancelled_orchestrator = DocumentAnalysisOrchestrator(
             connection,

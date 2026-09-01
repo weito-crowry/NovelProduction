@@ -51,6 +51,9 @@ FOUNDATION_TABLES = (
     "style_profile_versions",
     "style_rules",
     "style_rule_aggregate_sources",
+    "style_lint_runs",
+    "style_findings",
+    "style_finding_reviews",
 )
 
 

@@ -125,3 +125,54 @@ CREATE TABLE style_rule_aggregate_sources (
     role TEXT NOT NULL CHECK(role IN ('preferred', 'min', 'max')),
     PRIMARY KEY (rule_id, role)
 );
+
+CREATE TABLE style_lint_runs (
+    id INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL
+        REFERENCES style_documents(id) ON DELETE CASCADE,
+    text_revision_id INTEGER NOT NULL
+        REFERENCES style_text_revisions(id) ON DELETE CASCADE,
+    structure_revision_id INTEGER NOT NULL
+        REFERENCES style_structure_revisions(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES style_profiles(id) ON DELETE RESTRICT,
+    profile_version_id INTEGER NOT NULL
+        REFERENCES style_profile_versions(id) ON DELETE RESTRICT,
+    scene_id INTEGER REFERENCES style_scenes(id) ON DELETE CASCADE,
+    basic_metric_run_id INTEGER REFERENCES style_analysis_runs(id) ON DELETE SET NULL,
+    semantic_metric_run_id INTEGER REFERENCES style_analysis_runs(id) ON DELETE SET NULL,
+    input_fingerprint TEXT NOT NULL CHECK(length(input_fingerprint) = 64),
+    status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')),
+    warning_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(warning_json)),
+    enabled_rule_count INTEGER NOT NULL CHECK(enabled_rule_count >= 0),
+    applicable_rule_count INTEGER NOT NULL CHECK(applicable_rule_count >= 0),
+    missing_rule_count INTEGER NOT NULL CHECK(missing_rule_count >= 0),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TEXT
+);
+
+CREATE TABLE style_findings (
+    id INTEGER PRIMARY KEY,
+    lint_run_id INTEGER NOT NULL REFERENCES style_lint_runs(id) ON DELETE CASCADE,
+    rule_id INTEGER NOT NULL REFERENCES style_rules(id) ON DELETE RESTRICT,
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    metric_name TEXT NOT NULL,
+    observed_value REAL NOT NULL,
+    expected_min REAL NOT NULL,
+    expected_max REAL NOT NULL,
+    preferred_value REAL,
+    deviation REAL NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('info','warning','strong_warning')),
+    sort_score REAL NOT NULL,
+    explanation_code TEXT NOT NULL,
+    evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE style_finding_reviews (
+    id INTEGER PRIMARY KEY,
+    finding_id INTEGER NOT NULL REFERENCES style_findings(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK(status IN ('acknowledged','ignored')),
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

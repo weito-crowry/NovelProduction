@@ -9,6 +9,54 @@ from novel_core.style_analysis.structure_models import BlockRecord
 
 
 class AnalysisStateMixin:
+    def _metric_effective_state(
+        self: Any, document_id: int, structure_id: int
+    ) -> list[dict[str, object]]:
+        field_paths = (
+            "block.speaker",
+            "block.semantic_primary",
+            "term.novelty",
+            "term_mention.explanation",
+        )
+        placeholders = ", ".join("?" for _ in field_paths)
+        overrides = self.connection.execute(
+            "SELECT subject_type, subject_id, field_path, operation, value_json, "
+            "structure_revision_id FROM style_manual_overrides "
+            "WHERE document_id = ? AND field_path IN (" + placeholders + ") "
+            "AND (structure_revision_id IS NULL OR structure_revision_id = ?) "
+            "ORDER BY subject_type, subject_id, field_path, created_at, id",
+            (document_id, *field_paths, structure_id),
+        ).fetchall()
+        reviews = self.connection.execute(
+            "SELECT subject_type, subject_id, field_path, review_status, "
+            "analysis_run_id FROM style_inference_reviews "
+            "WHERE document_id = ? AND field_path IN (" + placeholders + ") "
+            "ORDER BY subject_type, subject_id, field_path, created_at, id",
+            (document_id, *field_paths),
+        ).fetchall()
+        return [
+            {
+                "kind": "override",
+                "subject_type": str(row[0]),
+                "subject_id": int(row[1]),
+                "field_path": str(row[2]),
+                "operation": str(row[3]),
+                "value_json": row[4],
+                "structure_revision_id": row[5],
+            }
+            for row in overrides
+        ] + [
+            {
+                "kind": "review",
+                "subject_type": str(row[0]),
+                "subject_id": int(row[1]),
+                "field_path": str(row[2]),
+                "review_status": str(row[3]),
+                "analysis_run_id": int(row[4]),
+            }
+            for row in reviews
+        ]
+
     def _entity_registry_state(self: Any, document_id: int) -> list[dict[str, object]]:
         scope = self.entities._scope(document_id)
         scope_field, scope_value = next(iter(scope.items()))

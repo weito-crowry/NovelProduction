@@ -59,6 +59,20 @@ def test_profile_rule_api_rejects_boolean_numeric_values() -> None:
         )
 
 
+def test_profile_rule_api_requires_all_control_fields() -> None:
+    with pytest.raises(ValidationError):
+        ProfileRuleRequest.model_validate(
+            {
+                "target_scope": "document",
+                "scope_selector": {},
+                "metric_name": "text.char_count",
+                "metric_version": 1,
+                "min_value": 0,
+                "max_value": 2,
+            }
+        )
+
+
 def test_partial_terminal_status_is_limited_to_analysis_jobs(
     data_root: Path,
 ) -> None:

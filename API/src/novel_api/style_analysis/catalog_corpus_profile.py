@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
@@ -99,6 +100,101 @@ class StyleAnalysisCorpusProfileMixin:
             if measurement_target_type is not None
             else None,
         )
+
+    def compare_corpora(
+        self,
+        corpus_ids: Sequence[int],
+        *,
+        metric_name: str | None = None,
+        metric_version: int | None = None,
+        measurement_target_type: str | None = None,
+        filter_json: str | None = None,
+    ) -> list[dict[str, object]]:
+        if not 2 <= len(corpus_ids) <= 5:
+            raise ValueError("CORPUS_COMPARE_COUNT_INVALID")
+        if filter_json is not None:
+            try:
+                filter_json = json.dumps(
+                    json.loads(filter_json),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            except json.JSONDecodeError as exc:
+                raise ValueError("CORPUS_COMPARE_FILTER_INVALID") from exc
+        grouped: list[dict[tuple[str, int, str, str], dict[str, AggregateRecord]]] = []
+        for corpus_id in corpus_ids:
+            if self.get_corpus(corpus_id) is None:
+                raise ValueError("CORPUS_NOT_FOUND")
+            statistic_rows = self.list_aggregates(
+                container_type="corpus", container_id=corpus_id
+            )
+            by_spec: dict[tuple[str, int, str, str], dict[str, AggregateRecord]] = {}
+            for row in statistic_rows:
+                spec_key: tuple[str, int, str, str] = (
+                    row.metric_name,
+                    row.metric_version,
+                    str(row.measurement_target_type),
+                    row.filter_json,
+                )
+                if metric_name is not None and row.metric_name != metric_name:
+                    continue
+                if metric_version is not None and row.metric_version != metric_version:
+                    continue
+                if (
+                    measurement_target_type is not None
+                    and row.measurement_target_type != measurement_target_type
+                ):
+                    continue
+                if filter_json is not None and row.filter_json != filter_json:
+                    continue
+                by_spec.setdefault(spec_key, {})[row.statistic] = row
+            grouped.append(by_spec)
+        common = set(grouped[0]).intersection(*(set(item) for item in grouped[1:]))
+        comparisons: list[dict[str, object]] = []
+        for spec_key in sorted(common):
+            values: list[dict[str, object]] = []
+            for corpus_id, by_spec in zip(corpus_ids, grouped, strict=True):
+                stats_by_name = by_spec[spec_key]
+                median = stats_by_name.get("median")
+                p25 = stats_by_name.get("p25")
+                p75 = stats_by_name.get("p75")
+                if median is None or p25 is None or p75 is None:
+                    continue
+                warnings = sorted(
+                    {
+                        warning
+                        for row in stats_by_name.values()
+                        for warning in json.loads(row.warning_json)
+                    }
+                )
+                values.append(
+                    {
+                        "corpus_id": corpus_id,
+                        "median": median.value_real,
+                        "p25": p25.value_real,
+                        "p75": p75.value_real,
+                        "source_measurement_count": median.source_measurement_count,
+                        "sample_count": median.sample_count,
+                        "work_count": median.work_count,
+                        "skipped_target_count": median.skipped_target_count,
+                        "stale": any(row.stale for row in stats_by_name.values()),
+                        "warnings": warnings,
+                    }
+                )
+            if len(values) == len(corpus_ids):
+                comparisons.append(
+                    {
+                        "metric_name": spec_key[0],
+                        "metric_version": spec_key[1],
+                        "measurement_target_type": spec_key[2],
+                        "filter_json": spec_key[3],
+                        "corpora": values,
+                    }
+                )
+        if not comparisons:
+            raise ValueError("CORPUS_COMPARE_AXIS_NOT_FOUND")
+        return comparisons
 
     def recompute_aggregates(
         self,

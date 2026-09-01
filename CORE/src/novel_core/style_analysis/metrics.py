@@ -48,6 +48,25 @@ def _basic(
     )
 
 
+def _semantic(
+    name: str,
+    unit: str,
+    value_type: Literal["int", "float"],
+    scope_types: tuple[Literal["document", "scene", "character"], ...],
+    tolerance: float,
+) -> MetricDefinition:
+    return MetricDefinition(
+        name=name,
+        version=1,
+        unit=unit,
+        value_type=value_type,
+        scope_types=scope_types,
+        group="semantic",
+        description=name,
+        zero_width_tolerance=tolerance,
+    )
+
+
 BASIC_METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
     "text.char_count": _basic("text.char_count", "chars", "int", 5.0),
     "sentence.len.p50": _basic("sentence.len.p50", "chars", "float", 5.0),
@@ -68,6 +87,63 @@ BASIC_METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
     "dialogue.turn_count.p90": _basic("dialogue.turn_count.p90", "count", "float", 1.0),
     "narration.run_len.p50": _basic("narration.run_len.p50", "chars", "float", 5.0),
     "narration.run_len.p90": _basic("narration.run_len.p90", "chars", "float", 5.0),
+}
+
+
+SEMANTIC_METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
+    name: _semantic(name, "ratio", "float", ("document", "scene"), 0.02)
+    for name in (
+        "semantic.action.char_ratio",
+        "semantic.description.char_ratio",
+        "semantic.exposition.char_ratio",
+        "semantic.psychology.char_ratio",
+        "semantic.transition.char_ratio",
+    )
+}
+SEMANTIC_METRIC_DEFINITIONS.update(
+    {
+        "speaker.utterance_count": _semantic(
+            "speaker.utterance_count", "count", "int", ("character",), 1.0
+        ),
+        "speaker.utterance_len.p50": _semantic(
+            "speaker.utterance_len.p50", "chars", "float", ("character",), 5.0
+        ),
+        "speaker.utterance_len.p90": _semantic(
+            "speaker.utterance_len.p90", "chars", "float", ("character",), 5.0
+        ),
+        "speaker.question_ratio": _semantic(
+            "speaker.question_ratio", "ratio", "float", ("character",), 0.02
+        ),
+        "speaker.consecutive_turns.p50": _semantic(
+            "speaker.consecutive_turns.p50", "count", "float", ("character",), 1.0
+        ),
+        "term.new_per_1000_chars": _semantic(
+            "term.new_per_1000_chars",
+            "per_1000_chars",
+            "float",
+            ("document", "scene"),
+            0.2,
+        ),
+        "term.explained_same_scene_ratio": _semantic(
+            "term.explained_same_scene_ratio",
+            "ratio",
+            "float",
+            ("document", "scene"),
+            0.02,
+        ),
+        "term.explanation_delay.p50": _semantic(
+            "term.explanation_delay.p50", "chars", "float", ("document", "scene"), 10.0
+        ),
+        "term.explanation_delay.p90": _semantic(
+            "term.explanation_delay.p90", "chars", "float", ("document", "scene"), 10.0
+        ),
+    }
+)
+
+
+METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
+    **BASIC_METRIC_DEFINITIONS,
+    **SEMANTIC_METRIC_DEFINITIONS,
 }
 
 

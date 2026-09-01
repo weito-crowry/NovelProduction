@@ -13,7 +13,7 @@ from novel_core.style_analysis.corpus_models import (
     Statistic,
 )
 from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
-from novel_core.style_analysis.metrics import BASIC_METRIC_DEFINITIONS, percentile
+from novel_core.style_analysis.metrics import METRIC_DEFINITIONS, percentile
 from novel_core.style_analysis.semantic_models import (
     SCENE_FUNCTIONS,
     SCENE_INFORMATION_LOADS,
@@ -96,7 +96,7 @@ def _canonical_filter_json(filter_json: str, target_type: MeasurementTargetType)
 
 
 def _metric_version(metric_name: str) -> int:
-    definition = BASIC_METRIC_DEFINITIONS.get(metric_name)
+    definition = METRIC_DEFINITIONS.get(metric_name)
     if definition is None:
         raise ValidationError("METRIC_NOT_FOUND")
     return definition.version
@@ -184,6 +184,7 @@ def _input_fingerprint(
                     "filter_result": target.filter_result,
                 }
                 for target in targets
+                if target.filter_result in {"match", "unknown"}
             ),
             key=json_object,
         ),

@@ -14,7 +14,7 @@ from novel_core.style_analysis.corpus_models import (
     ProfileVersionRecord,
     StyleRuleRecord,
 )
-from novel_core.style_analysis.metrics import BASIC_METRIC_DEFINITIONS
+from novel_core.style_analysis.metrics import METRIC_DEFINITIONS
 from novel_core.style_analysis.profile_calculations import (
     _canonical_json,
     _finite_number,
@@ -468,7 +468,7 @@ class ProfileService:
                 raise ValidationError("PROFILE_RULE_SCOPE_INVALID")
             if not isinstance(metric_name, str) or not isinstance(metric_version, int):
                 raise ValidationError("PROFILE_RULE_METRIC_INVALID")
-            definition = BASIC_METRIC_DEFINITIONS.get(metric_name)
+            definition = METRIC_DEFINITIONS.get(metric_name)
             if definition is None or definition.version != metric_version:
                 raise ValidationError("METRIC_NOT_FOUND")
             if target_scope not in definition.scope_types:

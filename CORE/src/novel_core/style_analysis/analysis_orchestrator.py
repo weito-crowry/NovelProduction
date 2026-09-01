@@ -8,6 +8,9 @@ from typing import cast
 
 from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.aggregate_repository import MeasurementRepository
+from novel_core.style_analysis.analysis_orchestrator_metrics import (
+    SemanticMetricsMixin,
+)
 from novel_core.style_analysis.analysis_orchestrator_semantic import (
     SemanticAnalysisMixin,
 )
@@ -115,7 +118,10 @@ class _SafePointModelClient:
 
 
 class DocumentAnalysisOrchestrator(
-    SemanticAnalysisMixin, TermAndSceneAnalysisMixin, AnalysisStateMixin
+    SemanticAnalysisMixin,
+    SemanticMetricsMixin,
+    TermAndSceneAnalysisMixin,
+    AnalysisStateMixin,
 ):
     def __init__(
         self,
@@ -235,11 +241,21 @@ class DocumentAnalysisOrchestrator(
 
         if preset == "full":
             try:
-                run_ids.extend(
-                    self._semantic_analyzers(
-                        document_id, revision.id, structure.id, scenes, blocks
-                    )
+                semantic_run_ids = self._semantic_analyzers(
+                    document_id, revision.id, structure.id, scenes, blocks
                 )
+                run_ids.extend(semantic_run_ids)
+                semantic_metric_run, semantic_metrics = self._semantic_metrics(
+                    document_id,
+                    revision.id,
+                    structure.id,
+                    revision,
+                    scenes,
+                    blocks,
+                    semantic_run_ids,
+                )
+                run_ids.append(semantic_metric_run)
+                metrics.extend(semantic_metrics)
             except AnalysisCancelledError:
                 raise
             except Exception as exc:

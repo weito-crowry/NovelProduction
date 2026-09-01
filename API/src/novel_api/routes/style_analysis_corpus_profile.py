@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import cast
+from typing import Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from novel_core.style_analysis.fingerprints import JsonObject
@@ -58,18 +58,25 @@ def compare_corpora(
     request: Request,
     project_id: str,
     corpus_id: list[int] = Query(..., min_length=2, max_length=5),  # noqa: B008
+    metric_name: str | None = None,
+    metric_version: int | None = None,
+    measurement_target_type: Literal["document", "scene"] | None = None,
+    filter: str | None = Query(None),  # noqa: A002, B008
 ) -> ProjectEnvelope[list[object]]:
     target = resolve_project_target(request, project_id)
     with open_project_read_services(target) as services:
-        result = [
-            {
-                "corpus_id": item,
-                "aggregates": services.style_analysis.list_aggregates(
-                    container_type="corpus", container_id=item
-                ),
-            }
-            for item in corpus_id
-        ]
+        try:
+            result = services.style_analysis.compare_corpora(
+                corpus_id,
+                metric_name=metric_name,
+                metric_version=metric_version,
+                measurement_target_type=measurement_target_type,
+                filter_json=filter,
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            status = 404 if detail == "CORPUS_NOT_FOUND" else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
     return envelope(project_id, result)
 
 
