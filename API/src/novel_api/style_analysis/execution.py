@@ -73,7 +73,7 @@ def _document(
     text_revision_id = _optional_positive_int(payload.get("text_revision_id"))
     structure_revision_id = _optional_positive_int(payload.get("structure_revision_id"))
     preset = payload.get("preset", "full")
-    if preset not in {"deterministic", "full"}:
+    if preset not in {"deterministic", "full", "metrics"}:
         raise ValueError("ANALYSIS_PRESET_INVALID")
     orchestrator = DocumentAnalysisOrchestrator(
         cast(Any, connection),

@@ -8,6 +8,7 @@ from typing import cast
 
 from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.aggregate_repository import MeasurementRepository
+from novel_core.style_analysis.analysis_orchestrator_basic import BasicMetricsMixin
 from novel_core.style_analysis.analysis_orchestrator_metrics import (
     SemanticMetricsMixin,
 )
@@ -32,10 +33,6 @@ from novel_core.style_analysis.fingerprints import (
     JsonValue,
     fingerprint_json,
 )
-from novel_core.style_analysis.metrics import (
-    BASIC_METRIC_DEFINITIONS,
-    calculate_basic_metrics,
-)
 from novel_core.style_analysis.model_contracts import (
     JsonObject as ModelJsonObject,
 )
@@ -54,7 +51,6 @@ from novel_core.style_analysis.semantic_service import SemanticService
 from novel_core.style_analysis.structure_models import (
     BlockRecord,
     SceneRecord,
-    SentenceRecord,
 )
 from novel_core.style_analysis.structure_service import StyleStructureService
 from novel_core.style_analysis.term_service import TermService
@@ -122,6 +118,7 @@ class DocumentAnalysisOrchestrator(
     SemanticMetricsMixin,
     TermAndSceneAnalysisMixin,
     AnalysisStateMixin,
+    BasicMetricsMixin,
 ):
     def __init__(
         self,
@@ -168,7 +165,7 @@ class DocumentAnalysisOrchestrator(
         rebuild_structure: bool = False,
     ) -> DocumentAnalysisResult:
         self._safe_point()
-        if preset not in {"deterministic", "full"}:
+        if preset not in {"deterministic", "full", "metrics"}:
             raise ValueError("ANALYSIS_PRESET_INVALID")
         document = self.text.get_document(document_id)
         if document is None:
@@ -210,6 +207,55 @@ class DocumentAnalysisOrchestrator(
         metrics: list[StoredJsonObject] = []
         if preset == "full" and self.client is None:
             raise ValueError("ANALYZER_PROVIDER_UNAVAILABLE")
+
+        if preset == "metrics":
+            from novel_core.style_analysis.current_run_resolver import (
+                CurrentRunResolver,
+            )
+
+            current = CurrentRunResolver(self.connection, self.policy)
+            dependency_ids = [
+                run.id
+                for analyzer_id in (
+                    "speaker-attribution",
+                    "term-resolver",
+                    "term-explanation-detector",
+                    "block-semantic-classifier",
+                )
+                if (
+                    run := current.resolve(
+                        document_id,
+                        revision.id,
+                        structure.id,
+                        analyzer_id,
+                    )
+                )
+            ]
+            semantic_metric_run, semantic_metrics = self._semantic_metrics(
+                document_id,
+                revision.id,
+                structure.id,
+                revision,
+                scenes,
+                blocks,
+                dependency_ids,
+            )
+            run_ids.append(semantic_metric_run)
+            metrics.extend(semantic_metrics)
+            metric_run = self.runs.get_run(semantic_metric_run)
+            if metric_run is not None and metric_run.status != "succeeded":
+                warnings.append(
+                    f"ANALYZER_{metric_run.status.upper()}:{metric_run.analyzer_id}"
+                )
+            self.runs.commit()
+            return DocumentAnalysisResult(
+                status="partial" if warnings else "succeeded",
+                text_revision_id=revision.id,
+                structure_revision_id=structure.id,
+                run_ids=tuple(run_ids),
+                warnings=tuple(warnings),
+                metrics=tuple(metrics),
+            )
 
         if (
             preset == "full"
@@ -517,66 +563,6 @@ class DocumentAnalysisOrchestrator(
             error=ValueError("DEPENDENCY_FAILED"),
         )
         return run_id
-
-    def _basic(
-        self,
-        document_id: int,
-        text_revision_id: int,
-        structure_id: int,
-        text: str,
-        scenes: Sequence[SceneRecord],
-        blocks: Sequence[BlockRecord],
-        sentences: Sequence[SentenceRecord],
-    ) -> tuple[int, list[StoredJsonObject]]:
-        run_id = self._new_run(
-            "style-metrics-basic",
-            document_id=document_id,
-            text_revision_id=text_revision_id,
-            structure_revision_id=structure_id,
-            config={
-                "metric_versions": {
-                    name: definition.version
-                    for name, definition in sorted(BASIC_METRIC_DEFINITIONS.items())
-                }
-            },
-        )
-        try:
-            measurements = calculate_basic_metrics(
-                document_id=document_id,
-                canonical_text=text,
-                scenes=tuple(scenes),
-                blocks=tuple(blocks),
-                sentences=tuple(sentences),
-            )
-            values: list[StoredJsonObject] = [
-                {
-                    "target_type": item.target_type,
-                    "target_id": item.target_id,
-                    "metric_name": item.metric_name,
-                    "metric_version": item.metric_version,
-                    "value": item.value,
-                    "sample_count": item.sample_count,
-                }
-                for item in measurements
-            ]
-            for item in measurements:
-                definition = BASIC_METRIC_DEFINITIONS[item.metric_name]
-                self.measurements.insert(
-                    analysis_run_id=run_id,
-                    structure_revision_id=structure_id,
-                    target_type=item.target_type,
-                    target_id=item.target_id,
-                    metric_name=item.metric_name,
-                    metric_version=item.metric_version,
-                    value=item.value,
-                    value_type=definition.value_type,
-                    sample_count=item.sample_count,
-                )
-            self._finish(run_id)
-            return run_id, values
-        except Exception as exc:
-            self._finish(run_id, status="failed", error=exc)
-            raise
 
 
 def _alias_kind(mention_type: str) -> str:

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import cast
 
 from novel_core.style_analysis.resolver_candidates import exact_key
-from novel_core.style_analysis.term_models import TERM_TYPES, TermRecord
+from novel_core.style_analysis.term_models import (
+    TERM_TYPES,
+    TermAliasRecord,
+    TermRecord,
+)
 from novel_core.style_analysis.term_repository import TermRepository
 
 
@@ -14,6 +19,60 @@ class TermService:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
         self.repository = TermRepository(connection)
+
+    def create_manual_term(
+        self,
+        *,
+        reference_work_id: int | None,
+        document_id: int | None,
+        canonical_label: str,
+        term_type: str,
+    ) -> TermRecord:
+        if (reference_work_id is None) == (document_id is None):
+            raise ValueError("TERM_SCOPE_INVALID")
+        if term_type not in TERM_TYPES:
+            raise ValueError("TERM_TYPE_INVALID")
+        if document_id is not None:
+            row = self._connection.execute(
+                "SELECT reference_episode_id FROM style_documents WHERE id=?",
+                (document_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("STYLE_DOCUMENT_NOT_FOUND")
+            if row[0] is not None:
+                raise ValueError("TERM_SCOPE_INVALID")
+        label = canonical_label.strip() if isinstance(canonical_label, str) else ""
+        if not 1 <= len(label) <= 200:
+            raise ValueError("TERM_LABEL_INVALID")
+        with self._write_transaction():
+            cursor = self._connection.execute(
+                "INSERT INTO style_terms "
+                "(reference_work_id, document_id, canonical_label, term_type, origin) "
+                "VALUES (?, ?, ?, ?, 'manual')",
+                (reference_work_id, document_id, label, term_type),
+            )
+            assert cursor.lastrowid is not None
+            return self.repository.get(cursor.lastrowid)
+
+    def create_manual_alias(self, *, term_id: int, alias: str) -> TermAliasRecord:
+        normalized = alias.strip() if isinstance(alias, str) else ""
+        if not 1 <= len(normalized) <= 200:
+            raise ValueError("ALIAS_INVALID")
+        self.repository.get(term_id)
+        existing = self._connection.execute(
+            "SELECT id FROM style_term_aliases "
+            "WHERE term_id=? AND alias=? AND origin='manual' ORDER BY id LIMIT 1",
+            (term_id, normalized),
+        ).fetchone()
+        if existing is not None:
+            return self.repository.get_alias(int(existing[0]))
+        with self._write_transaction():
+            return self.repository.insert_alias(
+                term_id=term_id,
+                alias=normalized,
+                origin="manual",
+                analysis_run_id=None,
+            )
 
     def exact_matches(
         self, *, document_id: int, surface: str
@@ -132,13 +191,10 @@ class TermService:
     def _latest_override(
         self, subject_id: int, field_path: str
     ) -> tuple[object, object] | None:
-        row = self._connection.execute(
-            "SELECT operation, value_json FROM style_manual_overrides "
-            "WHERE subject_type = 'term' AND subject_id = ? AND field_path = ? "
-            "ORDER BY created_at DESC, id DESC LIMIT 1",
-            (subject_id, field_path),
-        ).fetchone()
-        return None if row is None else (row[0], row[1])
+        from novel_core.style_analysis.semantic_metric_support import latest_override
+
+        row = latest_override(self._connection, "term", subject_id, field_path)
+        return None if row is None else (row[1], row[2])
 
     def _alias_is_usable(self, alias_id: int, origin: str) -> bool:
         if origin == "manual":
@@ -151,3 +207,25 @@ class TermService:
             (alias_id,),
         ).fetchone()
         return row is not None and row[0] == "confirmed"
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[None]:
+        savepoint = "style_term_write"
+        owns_transaction = not self._connection.in_transaction
+        if owns_transaction:
+            self._connection.execute("BEGIN IMMEDIATE")
+        else:
+            self._connection.execute(f"SAVEPOINT {savepoint}")
+        try:
+            yield
+            if owns_transaction:
+                self._connection.commit()
+            else:
+                self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            if owns_transaction:
+                self._connection.rollback()
+            else:
+                self._connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                self._connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+            raise

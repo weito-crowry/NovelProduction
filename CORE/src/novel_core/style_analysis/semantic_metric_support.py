@@ -7,7 +7,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
-from novel_core.style_analysis.entity_models import ENTITY_TYPES
+from novel_core.style_analysis.semantic_values import (
+    annotation_value,
+    json_field,
+    label_value,
+    speaker_value,
+)
+from novel_core.style_analysis.semantic_values import (
+    confidence as _confidence,
+)
 from novel_core.style_analysis.structure_models import BlockRecord
 
 
@@ -72,8 +80,14 @@ def resolve_block_semantic(
     run_id: int,
     raw: tuple[str, object, object] | None,
     threshold: float,
+    *,
+    include_manual: bool = True,
 ) -> EffectiveValue:
-    override = latest_override(connection, "block", block_id, "block.semantic_primary")
+    override = (
+        latest_override(connection, "block", block_id, "block.semantic_primary")
+        if include_manual
+        else None
+    )
     if override is not None:
         override_id, operation, value_json = override
         if operation == "set":
@@ -124,8 +138,14 @@ def resolve_speaker(
     run_id: int,
     raw: tuple[str, object, object] | None,
     threshold: float,
+    *,
+    include_manual: bool = True,
 ) -> EffectiveValue:
-    override = latest_override(connection, "block", block_id, "block.speaker_entity_id")
+    override = (
+        latest_override(connection, "block", block_id, "block.speaker_entity_id")
+        if include_manual
+        else None
+    )
     if override is not None:
         override_id, operation, value_json = override
         if operation == "clear":
@@ -173,9 +193,15 @@ def resolve_term_novelty(
     connection: sqlite3.Connection,
     term_id: int,
     run_id: int,
-    raw: tuple[int, str, object, object],
+    raw: tuple[int, str, object, object] | None,
+    *,
+    include_manual: bool = True,
 ) -> EffectiveValue:
-    override = latest_override(connection, "term", term_id, "term.novelty")
+    override = (
+        latest_override(connection, "term", term_id, "term.novelty")
+        if include_manual
+        else None
+    )
     if override is not None:
         override_id, operation, value_json = override
         if operation == "clear":
@@ -187,77 +213,67 @@ def resolve_term_novelty(
     review = review_status(connection, "term", term_id, "term.novelty", run_id)
     if review == "rejected":
         return EffectiveValue(None, "unknown", analysis_run_id=run_id)
+    if raw is None:
+        return EffectiveValue("uncertain", "default")
+    value = annotation_value(raw[1], "value")
+    if not isinstance(value, str):
+        return EffectiveValue(
+            None, "unknown", confidence=_confidence(raw[2]), analysis_run_id=run_id
+        )
     return EffectiveValue(
-        annotation_value(raw[1], "value"),
+        value,
         "confirmed" if review == "confirmed" else "inferred",
         confidence=_confidence(raw[2]),
         analysis_run_id=run_id,
     )
 
 
-def speaker_value(
-    value: tuple[str, object, object] | None,
-) -> tuple[int | None, float, str]:
-    if value is None:
-        return None, 0.0, "unknown"
-    try:
-        raw = json.loads(value[0])
-    except (TypeError, json.JSONDecodeError):
-        return None, 0.0, "unknown"
-    entity_id = raw.get("speaker_entity_id") if isinstance(raw, dict) else None
-    reason = raw.get("reason_code", "unknown") if isinstance(raw, dict) else "unknown"
-    return (
-        entity_id
-        if isinstance(entity_id, int) and not isinstance(entity_id, bool)
-        else None,
-        float(value[1]) if isinstance(value[1], (int, float)) else 0.0,
-        str(raw.get("reason_code", reason)),
+def resolve_entity_enabled(
+    connection: sqlite3.Connection, entity_id: int
+) -> EffectiveValue:
+    from novel_core.style_analysis.semantic_effective import (
+        resolve_entity_enabled as impl,
     )
 
+    return impl(connection, entity_id)
 
-def label_value(
-    value: tuple[str, object, object] | None,
-) -> tuple[str | None, float, str]:
-    if value is None:
-        return None, 0.0, "unknown"
-    try:
-        raw = json.loads(value[0])
-    except (TypeError, json.JSONDecodeError):
-        return None, 0.0, "unknown"
-    label = raw.get("label") if isinstance(raw, dict) else None
-    return (
-        label if isinstance(label, str) else None,
-        float(value[1]) if isinstance(value[1], (int, float)) else 0.0,
-        str(value[2] or "inferred"),
+
+def resolve_entity_name(
+    connection: sqlite3.Connection, entity_id: int
+) -> EffectiveValue:
+    from novel_core.style_analysis.semantic_effective import resolve_entity_name as impl
+
+    return impl(connection, entity_id)
+
+
+def resolve_entity_type(
+    connection: sqlite3.Connection, entity_id: int
+) -> EffectiveValue:
+    from novel_core.style_analysis.semantic_effective import resolve_entity_type as impl
+
+    return impl(connection, entity_id)
+
+
+def resolve_term_enabled(
+    connection: sqlite3.Connection, term_id: int
+) -> EffectiveValue:
+    from novel_core.style_analysis.semantic_effective import (
+        resolve_term_enabled as impl,
     )
 
-
-def annotation_value(value_json: object, key: str) -> object:
-    try:
-        value = json.loads(cast(str, value_json))
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if isinstance(value, dict):
-        return value.get(key)
-    return value if key == "value" else None
+    return impl(connection, term_id)
 
 
-def json_field(value_json: object, key: str) -> object:
-    try:
-        value = json.loads(cast(str, value_json))
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if isinstance(value, dict):
-        return value.get(key)
-    return value if key in {"value", "label", "speaker_entity_id"} else None
+def resolve_term_label(connection: sqlite3.Connection, term_id: int) -> EffectiveValue:
+    from novel_core.style_analysis.semantic_effective import resolve_term_label as impl
+
+    return impl(connection, term_id)
 
 
-def _confidence(value: object) -> float | None:
-    return (
-        float(value)
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-        else None
-    )
+def resolve_term_type(connection: sqlite3.Connection, term_id: int) -> EffectiveValue:
+    from novel_core.style_analysis.semantic_effective import resolve_term_type as impl
+
+    return impl(connection, term_id)
 
 
 def resolve_mention_entity(
@@ -265,8 +281,14 @@ def resolve_mention_entity(
     mention_id: int,
     run_id: int,
     raw: tuple[str, object, object] | None,
+    *,
+    include_manual: bool = True,
 ) -> EffectiveValue:
-    override = latest_override(connection, "mention", mention_id, "mention.entity_id")
+    override = (
+        latest_override(connection, "mention", mention_id, "mention.entity_id")
+        if include_manual
+        else None
+    )
     if override is not None:
         override_id, operation, value_json = override
         if operation == "clear":
@@ -299,12 +321,18 @@ def resolve_term_mention_explanation(
     mention_id: int,
     explanation_run_id: int | None,
     threshold: float,
+    *,
+    include_manual: bool = True,
 ) -> EffectiveValue:
-    override = latest_override(
-        connection,
-        "term_mention",
-        mention_id,
-        "term_mention.sufficient_explanation_annotation_id",
+    override = (
+        latest_override(
+            connection,
+            "term_mention",
+            mention_id,
+            "term_mention.sufficient_explanation_annotation_id",
+        )
+        if include_manual
+        else None
     )
     if override is not None:
         override_id, operation, value_json = override
@@ -386,13 +414,9 @@ def latest_override(
     subject_id: int,
     field_path: str,
 ) -> tuple[int, str, object] | None:
-    row = connection.execute(
-        "SELECT id, operation, value_json FROM style_manual_overrides "
-        "WHERE subject_type = ? AND subject_id = ? AND field_path = ? "
-        "ORDER BY created_at DESC, id DESC LIMIT 1",
-        (subject_type, subject_id, field_path),
-    ).fetchone()
-    return None if row is None else (int(row[0]), str(row[1]), row[2])
+    from novel_core.style_analysis.semantic_overrides import latest_override as impl
+
+    return impl(connection, subject_type, subject_id, field_path)
 
 
 def review_status(
@@ -496,34 +520,6 @@ def enabled_person(connection: sqlite3.Connection, entity_id: int) -> bool:
     if override is None or override[1] != "set":
         return True
     return json_field(override[2], "value") is not False
-
-
-def resolve_entity_type(
-    connection: sqlite3.Connection, entity_id: int
-) -> EffectiveValue:
-    row = connection.execute(
-        "SELECT entity_type FROM style_entities WHERE id = ?", (entity_id,)
-    ).fetchone()
-    if row is None:
-        return EffectiveValue(None, "unknown")
-    override = latest_override(connection, "entity", entity_id, "entity.entity_type")
-    if override is not None:
-        override_id, operation, value_json = override
-        if operation == "set":
-            value = json_field(value_json, "value")
-            return EffectiveValue(
-                value if isinstance(value, str) and value in ENTITY_TYPES else None,
-                "manual"
-                if isinstance(value, str) and value in ENTITY_TYPES
-                else "unknown",
-                override_id=override_id,
-            )
-    value = row[0]
-    return EffectiveValue(
-        value if isinstance(value, str) and value in ENTITY_TYPES else None,
-        "inferred" if isinstance(value, str) and value in ENTITY_TYPES else "unknown",
-        override_id=override[0] if override is not None else None,
-    )
 
 
 def speaker_streaks(

@@ -8,9 +8,11 @@ from novel_core.style_analysis.aggregate_repository import MeasurementRepository
 from novel_core.style_analysis.aggregate_service import AggregateService
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
+from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
 from novel_core.style_analysis.metrics import BASIC_METRIC_DEFINITIONS
 from novel_core.style_analysis.profile_service import ProfileService
+from novel_core.style_analysis.review_service import ReviewService
 from novel_core.style_analysis.runtime_models import AnalysisRunRecord
 from novel_core.style_analysis.semantic_repository import SemanticRepository
 from novel_core.style_analysis.source_models import (
@@ -18,6 +20,7 @@ from novel_core.style_analysis.source_models import (
     ReferenceWorkRecord,
 )
 from novel_core.style_analysis.source_repository import StyleSourceRepository
+from novel_core.style_analysis.term_service import TermService
 
 from novel_api.style_analysis.catalog_corpus_profile import (
     StyleAnalysisCorpusProfileMixin,
@@ -28,6 +31,7 @@ from novel_api.style_analysis.catalog_current import (
 )
 from novel_api.style_analysis.catalog_effective import effective_outputs
 from novel_api.style_analysis.catalog_outputs import StyleAnalysisOutputsMixin
+from novel_api.style_analysis.catalog_review import StyleAnalysisReviewMixin
 from novel_api.style_analysis.job_service import DatabaseConnection
 
 _SA_D_ANALYZERS = (
@@ -54,7 +58,9 @@ def _canonical_json(value: object) -> str:
 
 
 class StyleAnalysisCatalogService(
-    StyleAnalysisCorpusProfileMixin, StyleAnalysisOutputsMixin
+    StyleAnalysisCorpusProfileMixin,
+    StyleAnalysisOutputsMixin,
+    StyleAnalysisReviewMixin,
 ):
     def __init__(self, connection: DatabaseConnection) -> None:
         self._repository = StyleSourceRepository(cast(Any, connection))
@@ -64,6 +70,9 @@ class StyleAnalysisCatalogService(
         self._measurements = MeasurementRepository(cast(Any, connection))
         self._aggregate_service = AggregateService(cast(Any, connection))
         self._profile_service = ProfileService(cast(Any, connection))
+        self._entities = EntityService(cast(Any, connection))
+        self._terms = TermService(cast(Any, connection))
+        self._reviews = ReviewService(cast(Any, connection))
 
     def list_reference_works(self) -> tuple[ReferenceWorkRecord, ...]:
         return self._repository.list_reference_works()

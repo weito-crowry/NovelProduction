@@ -83,6 +83,9 @@ _VERSION_CONFLICT = _ErrorSpec(
     "VERSION_CONFLICT",
     "The resource was modified by another client.",
 )
+_REVIEW_ITEM_CLOSED = _ErrorSpec(
+    409, "REVIEW_ITEM_CLOSED", "The review item is already closed."
+)
 _ORDER_CONFLICT = _ErrorSpec(
     409,
     "ORDER_CONFLICT",
@@ -186,6 +189,23 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         )
     if isinstance(exc, VersionConflictError):
         return _VERSION_CONFLICT
+    if isinstance(exc, ValueError):
+        code = str(exc)
+        if code == "VERSION_CONFLICT":
+            return _VERSION_CONFLICT
+        if code == "REVIEW_ITEM_CLOSED":
+            return _REVIEW_ITEM_CLOSED
+        if code in {
+            "REVIEW_ITEM_NOT_FOUND",
+            "REVIEW_SUBJECT_NOT_FOUND",
+            "ENTITY_NOT_FOUND",
+            "TERM_NOT_FOUND",
+            "CHARACTER_NOT_FOUND",
+            "STYLE_DOCUMENT_NOT_FOUND",
+            "ANALYSIS_RUN_NOT_FOUND",
+            "OVERRIDE_NOT_FOUND",
+        }:
+            return _NOT_FOUND
     if isinstance(exc, DocumentSchemaError):
         return _DOCUMENT_SCHEMA_ERROR
     if isinstance(exc, DocumentStorageError):
