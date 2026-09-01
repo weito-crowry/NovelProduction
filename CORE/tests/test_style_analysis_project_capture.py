@@ -20,6 +20,7 @@ from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.lint_repository import LintRepository
 from novel_core.style_analysis.lint_service import StyleLintService
 from novel_core.style_analysis.profile_service import ProfileService
+from novel_core.style_analysis.structure_models import SceneRecord
 from novel_core.style_analysis.text_service import StyleTextService
 
 
@@ -375,5 +376,54 @@ def test_lint_evaluates_document_range_and_persists_coverage(
             (failed_run_id,),
         ).fetchone() == (0,)
         monkeypatch.setattr(LintRepository, "insert_finding", original_insert)
+    finally:
+        connection.close()
+
+
+def test_lint_progress_separates_selector_missing_from_evaluated_pairs(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        unavailable_scene_rule = SimpleNamespace(
+            id=1,
+            target_scope="scene",
+            scope_selector_json='{"function":["exposition"]}',
+            metric_name="text.char_count",
+            metric_version=1,
+            min_value=10,
+            max_value=20,
+            preferred_value=15,
+            weight=1.0,
+        )
+        available_document_rule = SimpleNamespace(
+            id=2,
+            target_scope="document",
+            scope_selector_json="{}",
+            metric_name="text.char_count",
+            metric_version=1,
+            min_value=10,
+            max_value=20,
+            preferred_value=15,
+            weight=1.0,
+        )
+        events: list[tuple[int, int]] = []
+        result = StyleLintService(connection)._candidates(
+            1,
+            (unavailable_scene_rule, available_document_rule),
+            (SceneRecord(1, 1, 1, 0, 1),),
+            None,
+            [],
+            [],
+            {("basic", "document", 1, "text.char_count", 1): 15.0},
+            {},
+            1,
+            1,
+            lambda current, total: events.append((current, total)),
+            None,
+        )
+
+        assert result[1:3] == (2, 1)
+        assert events == [(0, 2), (1, 2), (2, 2)]
     finally:
         connection.close()

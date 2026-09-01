@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 from novel_core.config import DatabaseConfig
 from novel_core.database import default_migration_dir, open_database
 from novel_core.document import import_plain_text, serialize_document_json
+from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
+from novel_core.style_analysis.profile_service import ProfileService
+
+from novel_api.style_analysis.execution import execute_style_job
+from novel_api.style_analysis.job_service import StyleJobService
 
 
 def create_episode_and_draft(project_dir: Path) -> tuple[int, int]:
@@ -138,3 +146,143 @@ def test_lint_endpoint_enqueues_explicit_revision_contract(
 
     assert response.status_code == 202
     assert response.json()["data"]["job_type"] == "run_lint"
+
+
+def test_lint_job_keeps_progress_legal_when_selector_is_unavailable(
+    client, project_factory, monkeypatch
+) -> None:
+    project_dir = project_factory("lint-progress")
+    episode_id, draft_id = create_episode_and_draft(project_dir)
+    capture = client.post(
+        f"/api/v1/projects/lint-progress/style-analysis/project-episodes/{episode_id}/capture",
+        json={"draft_id": draft_id},
+    )
+    captured = capture.json()["data"]
+    document_id = int(captured["document_id"])
+    text_id = int(captured["current_text_revision_id"])
+    connection = sqlite3.connect(project_dir / "story.db")
+    try:
+        connection.execute(
+            "INSERT INTO style_structure_revisions "
+            "(text_revision_id, revision_no, segmenter_id, segmenter_version, "
+            "source_kind, fingerprint) VALUES (?, 1, 'test', 1, 'automatic', ?)",
+            (text_id, "b" * 64),
+        )
+        structure_id = int(
+            connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        )
+        connection.execute(
+            "INSERT INTO style_scenes "
+            "(structure_revision_id, order_index, start_cp, end_cp) "
+            "VALUES (?, 1, 0, 2)",
+            (structure_id,),
+        )
+        int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        connection.execute(
+            "UPDATE style_documents SET current_structure_revision_id = ? WHERE id = ?",
+            (structure_id, document_id),
+        )
+        metric_run_id = AnalysisRunRepository(connection).insert_run(
+            document_id=document_id,
+            analyzer_id="style-metrics-basic",
+            analyzer_version=1,
+            text_revision_id=text_id,
+            structure_revision_id=structure_id,
+            status="succeeded",
+            fingerprint="c" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        connection.execute(
+            "INSERT INTO style_measurements "
+            "(analysis_run_id, structure_revision_id, target_type, target_id, "
+            "metric_name, metric_version, value_int, sample_count) "
+            "VALUES (?, ?, 'document', ?, 'text.char_count', 1, 15, 1)",
+            (metric_run_id, structure_id, document_id),
+        )
+        profile = ProfileService(connection).create_manual(
+            name="Progress Profile",
+            rules=(
+                {
+                    "target_scope": "scene",
+                    "scope_selector": {"function": ["exposition"]},
+                    "metric_name": "text.char_count",
+                    "metric_version": 1,
+                    "preferred_value": 15,
+                    "min_value": 10,
+                    "max_value": 20,
+                    "weight": 1.0,
+                    "enabled": True,
+                    "severity_policy": "standard",
+                },
+                {
+                    "target_scope": "document",
+                    "scope_selector": {},
+                    "metric_name": "text.char_count",
+                    "metric_version": 1,
+                    "preferred_value": 15,
+                    "min_value": 10,
+                    "max_value": 20,
+                    "weight": 1.0,
+                    "enabled": True,
+                    "severity_policy": "standard",
+                },
+            ),
+        )
+        payload = json.dumps(
+            {
+                "document_id": document_id,
+                "text_revision_id": text_id,
+                "structure_revision_id": structure_id,
+                "profile_id": profile.profile.id,
+                "profile_version_no": profile.version.version_no,
+            }
+        )
+        cursor = connection.execute(
+            "INSERT INTO style_jobs (job_type, payload_json, status) "
+            "VALUES ('run_lint', ?, 'running')",
+            (payload,),
+        )
+        assert cursor.lastrowid is not None
+        job_id = int(cursor.lastrowid)
+        connection.commit()
+        row = connection.execute(
+            "SELECT id, job_type, payload_json, status, cancel_requested, "
+            "progress_current, progress_total, result_json, warning_json, created_at, "
+            "started_at, finished_at, error_code, error_message, version "
+            "FROM style_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        assert row is not None
+        job = StyleJobService._record_from_row(row)
+        monkeypatch.setattr(
+            CurrentRunResolver,
+            "resolve",
+            lambda self, *args: (
+                SimpleNamespace(id=metric_run_id)
+                if args[-1] == "style-metrics-basic"
+                else None
+            ),
+        )
+
+        execute_style_job(
+            connection,
+            job,
+            model_client=None,
+            model_provider=None,
+            model_id=None,
+        )
+        status, current, total, result_json = connection.execute(
+            "SELECT status, progress_current, progress_total, result_json "
+            "FROM style_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert status == "succeeded"
+    assert 0 <= current <= total
+    assert (current, total) == (2, 2)
+    result = json.loads(result_json)
+    assert result["applicable_rule_count"] == 2
+    assert result["missing_rule_count"] == 1

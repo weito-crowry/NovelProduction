@@ -411,6 +411,7 @@ class StyleLintService:
         candidates: list[_Candidate] = []
         applicable = 0
         missing = 0
+        unavailable = 0
         warnings: list[str] = []
         targets: list[tuple[str, int]] = [("document", document_id)]
         if requested_scene is None:
@@ -442,6 +443,7 @@ class StyleLintService:
                     if unknown:
                         applicable += 1
                         missing += 1
+                        unavailable += 1
                         warnings.extend(
                             f"SELECTOR_UNAVAILABLE:{axis}" for axis in unknown
                         )
@@ -480,9 +482,12 @@ class StyleLintService:
                 item for item in candidate_group if item.specificity == maximum
             )
         findings: list[tuple[object, ...]] = []
-        total = len(selected)
+        total = unavailable + len(selected)
         if progress_callback is not None:
             progress_callback(0, total)
+            if unavailable:
+                progress_callback(unavailable, total)
+        evaluated = unavailable
         for candidate in selected:
             if cancellation_probe is not None and cancellation_probe():
                 raise AnalysisCancelledError()
@@ -501,8 +506,9 @@ class StyleLintService:
             if observed is None:
                 missing += 1
                 warnings.append(f"METRIC_UNAVAILABLE:{rule.metric_name}")
+                evaluated += 1
                 if progress_callback is not None:
-                    progress_callback(applicable, total)
+                    progress_callback(evaluated, total)
                 continue
             deviation, explanation = _deviation(
                 observed,
@@ -511,8 +517,9 @@ class StyleLintService:
                 definition.zero_width_tolerance,
             )
             if deviation == 0:
+                evaluated += 1
                 if progress_callback is not None:
-                    progress_callback(applicable, total)
+                    progress_callback(evaluated, total)
                 continue
             severity = (
                 "info"
@@ -523,11 +530,13 @@ class StyleLintService:
             )
             evidence = build_lint_evidence(
                 self._connection,
+                document_id=document_id,
                 metric_name=rule.metric_name,
                 target_type=candidate.target_type,
                 target_id=candidate.target_id,
                 text_revision_id=text_id,
                 structure_revision_id=structure_id,
+                metric_run_id=runs.get(metric_group),
             )
             findings.append(
                 (
@@ -548,8 +557,9 @@ class StyleLintService:
                     json_text(evidence),
                 )
             )
+            evaluated += 1
             if progress_callback is not None:
-                progress_callback(applicable, total)
+                progress_callback(evaluated, total)
         return findings, applicable, missing, sorted(set(warnings))
 
     def _profile_version_no(self, version_id: int) -> int:

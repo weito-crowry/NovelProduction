@@ -6,6 +6,7 @@ from pathlib import Path
 from test_style_analysis_migration import open_test_database
 
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
+from novel_core.style_analysis.lint_evidence import build_lint_evidence
 from novel_core.style_analysis.semantic_metric_support import (
     enabled_person,
     resolve_entity_type,
@@ -383,6 +384,186 @@ def test_term_metrics_use_first_mentions_and_sufficient_explanation(
         assert values[("document", "term.new_per_1000_chars")] == 1000 / 7
         assert values[("scene", "term.explained_same_scene_ratio")] == 1
         assert values[("document", "term.explanation_delay.p50")] == 0
+    finally:
+        connection.close()
+
+
+def test_lint_evidence_uses_effective_block_semantic_lineage(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, _, blocks = _fixture(tmp_path)
+    try:
+        runs = AnalysisRunRepository(connection)
+        semantic_run_id = runs.insert_run(
+            document_id=document_id,
+            analyzer_id="style-metrics-semantic",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="a" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        runs.add_dependency(semantic_run_id, 3)
+        connection.execute(
+            'UPDATE style_annotations SET value_json = \'{"label":"exposition"}\' '
+            "WHERE analysis_run_id = 3 AND subject_id = ?",
+            (blocks[1].id,),
+        )
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(document_id, subject_type, subject_id, field_path, operation, "
+            "value_json, structure_revision_id) VALUES (?, 'block', ?, "
+            "'block.semantic_primary', 'set', '{\"label\":\"action\"}', 1)",
+            (document_id, blocks[1].id),
+        )
+        connection.commit()
+
+        evidence = build_lint_evidence(
+            connection,
+            document_id=document_id,
+            metric_name="semantic.exposition.char_ratio",
+            target_type="document",
+            target_id=document_id,
+            text_revision_id=1,
+            structure_revision_id=1,
+            metric_run_id=semantic_run_id,
+        )
+
+        assert evidence["evidence_kind"] == "scope_metric"
+        assert evidence["spans"] == []
+    finally:
+        connection.close()
+
+
+def test_lint_term_evidence_uses_first_appearance_and_effective_explanation(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, scenes, blocks = _fixture(tmp_path)
+    try:
+        runs = AnalysisRunRepository(connection)
+        term_run_id = runs.insert_run(
+            document_id=document_id,
+            analyzer_id="term-resolver",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="b" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        explanation_run_id = runs.insert_run(
+            document_id=document_id,
+            analyzer_id="term-explanation-detector",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="c" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        semantic_run_id = runs.insert_run(
+            document_id=document_id,
+            analyzer_id="style-metrics-semantic",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="d" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        runs.add_dependency(semantic_run_id, term_run_id)
+        runs.add_dependency(semantic_run_id, explanation_run_id)
+        cursor = connection.execute(
+            "INSERT INTO style_terms "
+            "(document_id, canonical_label, term_type, origin) "
+            "VALUES (?, '固有語', 'other', 'manual')",
+            (document_id,),
+        )
+        assert cursor.lastrowid is not None
+        term_id = int(cursor.lastrowid)
+        repository = TermRepository(connection)
+        first = repository.insert_mention(
+            term_id=term_id,
+            structure_revision_id=1,
+            scene_id=scenes[0].id,
+            block_id=blocks[1].id,
+            start_cp=6,
+            end_cp=8,
+            surface="固有語",
+            analysis_run_id=term_run_id,
+        )
+        repeated = repository.insert_mention(
+            term_id=term_id,
+            structure_revision_id=1,
+            scene_id=scenes[0].id,
+            block_id=blocks[1].id,
+            start_cp=7,
+            end_cp=8,
+            surface="語",
+            analysis_run_id=term_run_id,
+        )
+        assert repeated.id > first.id
+        semantic = SemanticRepository(connection)
+        semantic.insert_annotation(
+            annotation_type="term.novelty",
+            subject_type="term",
+            subject_id=term_id,
+            value_json='{"value":"work_specific"}',
+            confidence=1.0,
+            analysis_run_id=term_run_id,
+        )
+        semantic.insert_annotation(
+            annotation_type="term_explanation",
+            subject_type="term_mention",
+            subject_id=first.id,
+            value_json=json.dumps(
+                {"block_id": blocks[1].id, "completeness": "sufficient"}
+            ),
+            confidence=0.9,
+            analysis_run_id=explanation_run_id,
+            start_cp=6,
+            end_cp=8,
+        )
+        connection.commit()
+
+        term_evidence = build_lint_evidence(
+            connection,
+            document_id=document_id,
+            metric_name="term.new_per_1000_chars",
+            target_type="document",
+            target_id=document_id,
+            text_revision_id=1,
+            structure_revision_id=1,
+            metric_run_id=semantic_run_id,
+        )
+        assert term_evidence["evidence_kind"] == "term_first_appearance"
+        assert [item["subject_id"] for item in term_evidence["spans"]] == [first.id]
+
+        connection.execute(
+            "INSERT INTO style_inference_reviews "
+            "(document_id, subject_type, subject_id, field_path, analysis_run_id, "
+            "review_status) VALUES (?, 'term_mention', ?, "
+            "'term_mention.explanation', ?, 'rejected')",
+            (document_id, first.id, explanation_run_id),
+        )
+        connection.commit()
+        explanation_evidence = build_lint_evidence(
+            connection,
+            document_id=document_id,
+            metric_name="term.explanation_delay.p50",
+            target_type="document",
+            target_id=document_id,
+            text_revision_id=1,
+            structure_revision_id=1,
+            metric_run_id=semantic_run_id,
+        )
+        assert explanation_evidence["evidence_kind"] == "scope_metric"
+        assert explanation_evidence["spans"] == []
     finally:
         connection.close()
 
