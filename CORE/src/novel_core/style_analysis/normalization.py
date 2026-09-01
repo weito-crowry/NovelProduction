@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 from novel_core.errors import ValidationError
 from novel_core.style_analysis.text_mapping import (
@@ -151,7 +152,7 @@ def _normalize_nfc(pieces: list[_Piece]) -> list[_Piece]:
                 group.append(next_piece)
                 next_index += 1
                 continue
-            if not _may_extend_hangul_group(source, next_piece.text):
+            if not _may_extend_nfc_group(next_piece.text):
                 break
             candidate = unicodedata.normalize("NFC", source + next_piece.text)
             separated = unicodedata.normalize("NFC", source) + unicodedata.normalize(
@@ -178,19 +179,24 @@ def _normalize_nfc(pieces: list[_Piece]) -> list[_Piece]:
     return result
 
 
-def _may_extend_hangul_group(source: str, next_text: str) -> bool:
-    return _is_hangul_jamo(next_text[0]) and any(
-        _is_hangul_jamo(character) for character in source
-    )
+def _may_extend_nfc_group(next_text: str) -> bool:
+    next_character = next_text[0]
+    if next_character.isascii():
+        return False
+    return next_character in _nfc_composition_components()
 
 
-def _is_hangul_jamo(character: str) -> bool:
-    codepoint = ord(character)
-    return (
-        0x1100 <= codepoint <= 0x11FF
-        or 0xA960 <= codepoint <= 0xA97C
-        or 0xD7B0 <= codepoint <= 0xD7FB
-    )
+@lru_cache(maxsize=1)
+def _nfc_composition_components() -> frozenset[str]:
+    components: set[str] = set()
+    for codepoint in range(0x110000):
+        decomposition = unicodedata.decomposition(chr(codepoint))
+        if decomposition and not decomposition.startswith("<"):
+            components.update(chr(int(value, 16)) for value in decomposition.split())
+    components.update(chr(codepoint) for codepoint in range(0x1100, 0x1200))
+    components.update(chr(codepoint) for codepoint in range(0xA960, 0xA97D))
+    components.update(chr(codepoint) for codepoint in range(0xD7B0, 0xD7FC))
+    return frozenset(components)
 
 
 def _is_removed_control(value: str) -> bool:
@@ -212,7 +218,7 @@ def _remove_line_end_spaces(pieces: list[_Piece]) -> list[_Piece]:
         if piece.text != " ":
             continue
         next_index = index + 1
-        while next_index < len(result) and result[next_index].text == " ":
+        while next_index < len(result) and result[next_index].text in {" ", ""}:
             next_index += 1
         next_text = result[next_index].text if next_index < len(result) else ""
         if next_text in {"", "\n"}:
@@ -278,7 +284,10 @@ def _segments_from_pieces(pieces: list[_Piece]) -> tuple[TextMapSegment, ...]:
         )
         if (
             segments
-            and segments[-1].operation == segment.operation
+            and (
+                segments[-1].operation == segment.operation == "identity"
+                or segments[-1].operation == segment.operation == "delete"
+            )
             and segments[-1].raw_end == segment.raw_start
             and segments[-1].canonical_end == segment.canonical_start
         ):
