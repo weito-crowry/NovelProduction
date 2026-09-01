@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from novel_core.style_analysis.semantic_lineage import current_mention_ids
 from novel_core.style_analysis.semantic_values import (
     annotation_value,
     json_field,
@@ -482,14 +483,11 @@ def eligible_persons(
         "SELECT structure_revision_id FROM style_analysis_runs WHERE id = ?",
         (annotation_run_id,),
     ).fetchone()
-    mention_ids = {
-        int(row[0])
-        for row in connection.execute(
-            "SELECT id FROM style_mentions WHERE structure_revision_id = ?",
-            (structure_row[0],) if structure_row is not None else (-1,),
-        ).fetchall()
-    }
-    mention_ids.update(raw_by_mention)
+    mention_ids = (
+        current_mention_ids(connection, annotation_run_id, int(structure_row[0]))
+        if structure_row is not None
+        else frozenset()
+    )
     for subject_id in mention_ids:
         raw = raw_by_mention.get(subject_id)
         entity_id = resolve_mention_entity(

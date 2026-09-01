@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from novel_core.style_analysis.runtime_models import AnalysisPolicy
@@ -118,6 +119,8 @@ def append_unknown_effective_values(
     catalog: Any,
     effective: dict[str, list[dict[str, object]]],
     structure_revision_id: int,
+    *,
+    term_resolver_run_ids: Sequence[int] = (),
 ) -> None:
     policy = AnalysisPolicy()
     scenes = catalog._connection.execute(
@@ -240,11 +243,16 @@ def append_unknown_effective_values(
                     value=result.value,
                 )
             )
-    term_mentions = catalog._connection.execute(
-        "SELECT id FROM style_term_mentions "
-        "WHERE structure_revision_id = ? ORDER BY id",
-        (structure_revision_id,),
-    ).fetchall()
+    if term_resolver_run_ids:
+        placeholders = ",".join("?" for _ in term_resolver_run_ids)
+        term_mentions = catalog._connection.execute(
+            "SELECT id FROM style_term_mentions "
+            f"WHERE structure_revision_id = ? AND analysis_run_id IN ({placeholders}) "
+            "ORDER BY id",
+            (structure_revision_id, *term_resolver_run_ids),
+        ).fetchall()
+    else:
+        term_mentions = ()
     existing_explanations = {
         item.get("subject_id") for item in effective["explanations"]
     }

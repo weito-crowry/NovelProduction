@@ -176,9 +176,10 @@ class StyleAnalysisCatalogService(
                 if run.analyzer_id == "entity-mention-extractor"
             )
         )
-        term_mentions = self._term_mentions_for_runs(
-            tuple(run.id for run in selected if run.analyzer_id == "term-resolver")
+        term_resolver_run_ids = tuple(
+            run.id for run in selected if run.analyzer_id == "term-resolver"
         )
+        term_mentions = self._term_mentions_for_runs(term_resolver_run_ids)
         by_type = {
             "entities": entities,
             "mentions": mentions,
@@ -221,6 +222,7 @@ class StyleAnalysisCatalogService(
             mentions=mentions,
             terms=terms,
             structure_revision_id=structure_revision_id,
+            term_resolver_run_ids=term_resolver_run_ids,
         )
         return {
             "structure_revision_id": structure_revision_id,
@@ -376,6 +378,7 @@ class StyleAnalysisCatalogService(
         mentions: Sequence[dict[str, object]] = (),
         terms: Sequence[dict[str, object]] = (),
         structure_revision_id: int | None = None,
+        term_resolver_run_ids: Sequence[int] = (),
     ) -> dict[str, list[dict[str, object]]]:
         return effective_outputs(
             self,
@@ -383,6 +386,7 @@ class StyleAnalysisCatalogService(
             mentions=mentions,
             terms=terms,
             structure_revision_id=structure_revision_id,
+            term_resolver_run_ids=term_resolver_run_ids,
         )
 
     def analysis_status(

@@ -50,6 +50,7 @@ def effective_outputs(
     mentions: Sequence[dict[str, object]] = (),
     terms: Sequence[dict[str, object]] = (),
     structure_revision_id: int | None = None,
+    term_resolver_run_ids: Sequence[int] = (),
 ) -> dict[str, list[dict[str, object]]]:
     if structure_revision_id is not None and _has_semantic_tables(catalog):
         return _database_effective_outputs(
@@ -58,6 +59,7 @@ def effective_outputs(
             mentions=mentions,
             terms=terms,
             structure_revision_id=structure_revision_id,
+            term_resolver_run_ids=term_resolver_run_ids,
         )
     mention_resolutions = {
         output.get("subject_id"): output
@@ -240,6 +242,7 @@ def _database_effective_outputs(
     mentions: Sequence[dict[str, object]],
     terms: Sequence[dict[str, object]],
     structure_revision_id: int,
+    term_resolver_run_ids: Sequence[int],
 ) -> dict[str, list[dict[str, object]]]:
     connection = catalog._connection
     policy = AnalysisPolicy()
@@ -455,5 +458,10 @@ def _database_effective_outputs(
                 effective["pov"].append(item)
 
     if structure_revision_id is not None:
-        append_unknown_effective_values(catalog, effective, structure_revision_id)
+        append_unknown_effective_values(
+            catalog,
+            effective,
+            structure_revision_id,
+            term_resolver_run_ids=term_resolver_run_ids,
+        )
     return effective

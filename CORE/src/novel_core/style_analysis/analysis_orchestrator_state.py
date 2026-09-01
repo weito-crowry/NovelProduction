@@ -5,6 +5,7 @@ from typing import Any
 
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.model_contracts import JsonObject as ModelJsonObject
+from novel_core.style_analysis.semantic_lineage import current_mention_ids
 from novel_core.style_analysis.semantic_metric_support import (
     enabled_person,
     resolve_entity_name,
@@ -249,6 +250,7 @@ class AnalysisStateMixin:
         scope = self.entities._scope(document_id)
         scope_field, scope_value = next(iter(scope.items()))
         state: dict[int, dict[str, object]] = {}
+        current_ids = current_mention_ids(self.connection, run_id, structure_id)
         override_rows = self.connection.execute(
             "SELECT subject_id, field_path, operation, value_json "
             "FROM style_manual_overrides WHERE subject_type = 'mention' "
@@ -257,6 +259,8 @@ class AnalysisStateMixin:
             (structure_id, scope_value),
         ).fetchall()
         for row in override_rows:
+            if int(row[0]) not in current_ids:
+                continue
             state[int(row[0])] = {
                 "mention_id": int(row[0]),
                 "manual_override": {
@@ -273,6 +277,8 @@ class AnalysisStateMixin:
             (run_id, scope_value),
         ).fetchall()
         for row in review_rows:
+            if int(row[0]) not in current_ids:
+                continue
             item = state.setdefault(int(row[0]), {"mention_id": int(row[0])})
             item["inference_review"] = {
                 "field_path": str(row[1]),
@@ -291,6 +297,9 @@ class AnalysisStateMixin:
         ).fetchone()
         if structure_row is None:
             return []
+        current_ids = current_mention_ids(
+            self.connection, resolution_run_id, int(structure_row[0])
+        )
         raw_by_mention = {
             int(annotation.subject_id): (
                 annotation.value_json,
@@ -299,6 +308,7 @@ class AnalysisStateMixin:
             )
             for annotation in self.semantic.repository.list_for_run(resolution_run_id)
             if annotation.annotation_type == "mention.entity_resolution"
+            and int(annotation.subject_id) in current_ids
         }
         entity_ids: set[int] = set()
         mention_rows = self.connection.execute(
@@ -307,6 +317,8 @@ class AnalysisStateMixin:
             (structure_row[0],),
         ).fetchall()
         for mention_id, mention_scene_id in mention_rows:
+            if int(mention_id) not in current_ids:
+                continue
             entity_id = resolve_mention_entity(
                 self.connection,
                 int(mention_id),

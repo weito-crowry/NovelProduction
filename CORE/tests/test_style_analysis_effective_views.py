@@ -11,6 +11,7 @@ from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.review_service import ReviewService
 from novel_core.style_analysis.semantic_metric_support import (
+    eligible_persons,
     enabled_person,
     resolve_entity_enabled,
     resolve_entity_name,
@@ -428,29 +429,86 @@ def test_people_for_scene_uses_effective_mention_entity(tmp_path: Path) -> None:
             entity_type="person",
             canonical_name="B",
         )
-        connection.execute(
+        runs = AnalysisRunRepository(connection)
+        current_mention_run_id = runs.insert_run(
+            document_id=document_id,
+            analyzer_id="entity-mention-extractor",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="a" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        historical_mention_run_id = runs.insert_run(
+            document_id=document_id,
+            analyzer_id="entity-mention-extractor",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="b" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:01+00:00",
+        )
+        runs.add_dependency(1, current_mention_run_id)
+        current_cursor = connection.execute(
             "INSERT INTO style_mentions "
             "(structure_revision_id, scene_id, block_id, start_cp, end_cp, "
             "surface, mention_type, entity_type_candidate, canonical_name_candidate, "
             "confidence, analysis_run_id) VALUES (?, ?, ?, 0, 1, 'A', 'proper_name', "
-            "'person', 'A', 1.0, 1)",
-            (1, scenes[0].id, blocks[0].id),
+            "'person', 'A', 1.0, ?)",
+            (1, scenes[0].id, blocks[0].id, current_mention_run_id),
+        )
+        assert current_cursor.lastrowid is not None
+        current_mention_id = int(current_cursor.lastrowid)
+        historical_cursor = connection.execute(
+            "INSERT INTO style_mentions "
+            "(structure_revision_id, scene_id, block_id, start_cp, end_cp, "
+            "surface, mention_type, entity_type_candidate, canonical_name_candidate, "
+            "confidence, analysis_run_id) VALUES (?, ?, ?, 0, 1, 'B', 'proper_name', "
+            "'person', 'B', 1.0, ?)",
+            (1, scenes[0].id, blocks[0].id, historical_mention_run_id),
+        )
+        assert historical_cursor.lastrowid is not None
+        historical_mention_id = int(historical_cursor.lastrowid)
+        connection.execute(
+            "UPDATE style_annotations SET subject_id=? WHERE analysis_run_id=1 "
+            "AND annotation_type='mention.entity_resolution'",
+            (current_mention_id,),
         )
         connection.commit()
-        orchestrator = DocumentAnalysisOrchestrator(connection, model_client=None)
-        initial = orchestrator._people_for_scene(document_id, 1, scenes[0].id)
-        assert [item["entity_id"] for item in initial] == [entity_id]
         ReviewService(connection).create_override(
             subject_type="mention",
-            subject_id=1,
+            subject_id=historical_mention_id,
             field_path="mention.entity_id",
             operation="set",
             value=replacement.id,
             document_id=document_id,
             structure_revision_id=1,
         )
+        orchestrator = DocumentAnalysisOrchestrator(connection, model_client=None)
+        initial = orchestrator._people_for_scene(document_id, 1, scenes[0].id)
+        assert [item["entity_id"] for item in initial] == [entity_id]
+        assert eligible_persons(connection, 2, blocks=()) == {entity_id}
+        assert orchestrator._mention_resolution_state(document_id, 1, 1) == []
+        ReviewService(connection).create_override(
+            subject_type="mention",
+            subject_id=current_mention_id,
+            field_path="mention.entity_id",
+            operation="set",
+            value=replacement.id,
+            document_id=document_id,
+            structure_revision_id=1,
+        )
+        assert [
+            item["mention_id"]
+            for item in orchestrator._mention_resolution_state(document_id, 1, 1)
+        ] == [current_mention_id]
         effective = orchestrator._people_for_scene(document_id, 1, scenes[0].id)
         assert [item["entity_id"] for item in effective] == [replacement.id]
+        assert eligible_persons(connection, 2, blocks=()) == {replacement.id}
     finally:
         connection.close()
 

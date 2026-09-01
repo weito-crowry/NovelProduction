@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
+from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.runtime_models import JobRecord
 from novel_core.style_analysis.runtime_registry import ANALYZERS_BY_ID
 from pydantic import ValidationError
@@ -364,6 +365,106 @@ def test_effective_values_synthesize_manual_results_when_raw_rows_are_missing(
         assert speaker["source"] == "manual"
         assert block["value"] == "action"
         assert block["source"] == "manual"
+    finally:
+        connection.close()
+
+
+def test_effective_explanations_ignore_historical_term_mention_lineage(
+    data_root: Path,
+) -> None:
+    connection, document_id, _, first = _create_reference_analysis(data_root)
+    try:
+        work_id = connection.execute(
+            "SELECT reference_work_id FROM style_reference_episodes "
+            "WHERE id = (SELECT reference_episode_id FROM style_documents WHERE id=?)",
+            (document_id,),
+        ).fetchone()[0]
+        scene_id, block_id = connection.execute(
+            "SELECT s.id, b.id FROM style_scenes s JOIN style_blocks b "
+            "ON b.scene_id=s.id WHERE s.structure_revision_id=? ORDER BY b.id LIMIT 1",
+            (first.structure_revision_id,),
+        ).fetchone()
+        current_term_run_id = connection.execute(
+            "SELECT id FROM style_analysis_runs "
+            "WHERE document_id=? AND analyzer_id='term-resolver' "
+            "ORDER BY id DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()[0]
+        historical_term_run_id = AnalysisRunRepository(connection).insert_run(
+            document_id=document_id,
+            analyzer_id="term-resolver",
+            analyzer_version=1,
+            text_revision_id=first.text_revision_id,
+            structure_revision_id=first.structure_revision_id,
+            status="succeeded",
+            fingerprint="c" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:01+00:00",
+        )
+        term_cursor = connection.execute(
+            "INSERT INTO style_terms "
+            "(reference_work_id, canonical_label, term_type, origin) "
+            "VALUES (?, '用語', 'other', 'manual')",
+            (work_id,),
+        )
+        assert term_cursor.lastrowid is not None
+        term_id = int(term_cursor.lastrowid)
+        current_cursor = connection.execute(
+            "INSERT INTO style_term_mentions "
+            "(term_id, structure_revision_id, scene_id, block_id, start_cp, end_cp, "
+            "surface, analysis_run_id) VALUES (?, ?, ?, ?, 0, 1, '用語', ?)",
+            (
+                term_id,
+                first.structure_revision_id,
+                scene_id,
+                block_id,
+                current_term_run_id,
+            ),
+        )
+        historical_cursor = connection.execute(
+            "INSERT INTO style_term_mentions "
+            "(term_id, structure_revision_id, scene_id, block_id, start_cp, end_cp, "
+            "surface, analysis_run_id) VALUES (?, ?, ?, ?, 1, 2, '用語', ?)",
+            (
+                term_id,
+                first.structure_revision_id,
+                scene_id,
+                block_id,
+                historical_term_run_id,
+            ),
+        )
+        assert current_cursor.lastrowid is not None
+        assert historical_cursor.lastrowid is not None
+        catalog = StyleAnalysisCatalogService(connection)
+        catalog.create_override(
+            subject_type="term_mention",
+            subject_id=int(historical_cursor.lastrowid),
+            field_path="term_mention.sufficient_explanation_annotation_id",
+            operation="clear",
+            reference_work_id=work_id,
+            structure_revision_id=first.structure_revision_id,
+        )
+        effective = {
+            "entities": [],
+            "mentions": [],
+            "terms": [],
+            "term_novelty": [],
+            "speakers": [],
+            "explanations": [],
+            "scenes": [],
+            "scene_axes": [],
+            "pov": [],
+            "blocks": [],
+        }
+        append_unknown_effective_values(
+            catalog,
+            effective,
+            first.structure_revision_id,
+            term_resolver_run_ids=(current_term_run_id,),
+        )
+        explanation_ids = {item["subject_id"] for item in effective["explanations"]}
+        assert int(current_cursor.lastrowid) in explanation_ids
+        assert int(historical_cursor.lastrowid) not in explanation_ids
     finally:
         connection.close()
 

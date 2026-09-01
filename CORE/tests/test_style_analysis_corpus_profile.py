@@ -218,20 +218,14 @@ def test_metric_state_uses_reference_term_scope_without_registry_novelty(
         assert not any(
             item["field_path"] == "mention.entity_id" for item in metric_state
         )
-        assert resolver.state._mention_resolution_state(
-            episode.style_document_id,
-            episode.current_structure_revision_id,
-            run_id,
-        ) == [
-            {
-                "mention_id": 999,
-                "manual_override": {
-                    "field_path": "mention.entity_id",
-                    "operation": "set",
-                    "value_json": '{"value":1}',
-                },
-            }
-        ]
+        assert (
+            resolver.state._mention_resolution_state(
+                episode.style_document_id,
+                episode.current_structure_revision_id,
+                run_id,
+            )
+            == []
+        )
         registry_state = resolver.state._term_registry_state(episode.style_document_id)
         connection.execute(
             "INSERT INTO style_manual_overrides "
