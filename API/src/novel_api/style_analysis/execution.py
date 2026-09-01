@@ -110,6 +110,9 @@ def _work(
     ).fetchall()
     if not rows:
         raise ValueError("REFERENCE_WORK_NOT_FOUND")
+    rebuild_structure = payload.get("rebuild_structure", False)
+    if not isinstance(rebuild_structure, bool):
+        raise ValueError("REBUILD_STRUCTURE_INVALID")
     orchestrator = DocumentAnalysisOrchestrator(
         connection,
         model_client=model_client,
@@ -152,6 +155,7 @@ def _work(
                 document_id=document_id,
                 text_revision_id=text_revision_id,
                 preset=preset,
+                rebuild_structure=rebuild_structure,
             )
             if _is_cancel_requested(connection, job.id):
                 _cancel(connection, job.id)
