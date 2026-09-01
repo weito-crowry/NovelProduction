@@ -17,6 +17,9 @@ JobType: TypeAlias = Literal[  # noqa: UP040
 RunStatus: TypeAlias = Literal[  # noqa: UP040
     "running", "succeeded", "partial", "failed", "cancelled"
 ]
+JobStatus: TypeAlias = Literal[  # noqa: UP040
+    "queued", "running", "succeeded", "partial", "failed", "cancelled"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,25 @@ class AnalysisRunRecord:
     warning_json: str
     created_at: str
     dependency_runs: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class JobRecord:
+    id: int
+    job_type: JobType
+    payload_json: str
+    status: JobStatus
+    cancel_requested: int
+    progress_current: int | None
+    progress_total: int | None
+    result_json: str
+    warning_json: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    error_code: str | None
+    error_message: str | None
+    version: int
 
 
 @dataclass(frozen=True, slots=True)
