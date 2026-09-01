@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from novel_core.config import DatabaseConfig
 from novel_core.database import (
@@ -25,6 +24,7 @@ from novel_api.style_analysis.adapters.base import (
     SourceTooLargeError,
     SourceType,
 )
+from novel_api.style_analysis.job_service import DatabaseConnection
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
@@ -55,7 +55,7 @@ def import_source(
     )
     identity = adapter.identify(request)
     with _open_connection(target, readonly=True) as connection:
-        existing = StyleSourceRepository(connection).find_by_identity(
+        existing = StyleSourceRepository(cast(Any, connection)).find_by_identity(
             source_type, identity.external_work_id
         )
     if existing is not None:
@@ -85,7 +85,7 @@ def import_source(
     with _open_connection(target, readonly=False) as connection:
         try:
             connection.execute("BEGIN IMMEDIATE")
-            repository = StyleSourceRepository(connection)
+            repository = StyleSourceRepository(cast(Any, connection))
             existing = repository.find_by_identity(
                 source_type, identity.external_work_id
             )
@@ -122,7 +122,7 @@ def import_source(
 @contextmanager
 def _open_connection(
     target: ProjectTarget, *, readonly: bool
-) -> Iterator[sqlite3.Connection]:
+) -> Iterator[DatabaseConnection]:
     config = DatabaseConfig(
         db_path=target.descriptor.story_db,
         migration_dir=default_migration_dir(),

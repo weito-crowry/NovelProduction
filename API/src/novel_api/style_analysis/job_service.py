@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from novel_core.config import DatabaseConfig
 from novel_core.database import (
@@ -41,7 +41,9 @@ class DatabaseCursor(Protocol):
     @property
     def rowcount(self) -> int: ...
 
-    def fetchone(self) -> Sequence[object] | None: ...
+    def fetchone(self) -> Sequence[Any] | None: ...
+
+    def fetchall(self) -> Sequence[Sequence[Any]]: ...
 
 
 class DatabaseConnection(Protocol):

@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.model_contracts import ModelClient
 from novel_core.style_analysis.runtime_models import JobRecord
 
+from novel_api.style_analysis.job_service import DatabaseConnection
+
 
 def execute_style_job(
-    connection: sqlite3.Connection,
+    connection: DatabaseConnection,
     job: JobRecord,
     *,
     model_client: ModelClient | None,
@@ -57,7 +58,7 @@ def execute_style_job(
 
 
 def _document(
-    connection: sqlite3.Connection,
+    connection: DatabaseConnection,
     job_id: int,
     payload: Mapping[str, object],
     model_client: ModelClient | None,
@@ -71,7 +72,7 @@ def _document(
     if preset not in {"deterministic", "full"}:
         raise ValueError("ANALYSIS_PRESET_INVALID")
     orchestrator = DocumentAnalysisOrchestrator(
-        connection,
+        cast(Any, connection),
         model_client=model_client,
         model_provider=provider,
         model_id=model_id,
@@ -90,7 +91,7 @@ def _document(
 
 
 def _work(
-    connection: sqlite3.Connection,
+    connection: DatabaseConnection,
     job: JobRecord,
     payload: Mapping[str, object],
     model_client: ModelClient | None,
@@ -114,7 +115,7 @@ def _work(
     if not isinstance(rebuild_structure, bool):
         raise ValueError("REBUILD_STRUCTURE_INVALID")
     orchestrator = DocumentAnalysisOrchestrator(
-        connection,
+        cast(Any, connection),
         model_client=model_client,
         model_provider=provider,
         model_id=model_id,
@@ -206,7 +207,7 @@ def _work(
 
 
 def _store_result(
-    connection: sqlite3.Connection,
+    connection: DatabaseConnection,
     job_id: int,
     status: str,
     warnings: tuple[str, ...] | list[str],
@@ -236,7 +237,7 @@ def _store_result(
     )
 
 
-def _fail(connection: sqlite3.Connection, job_id: int, code: str, message: str) -> None:
+def _fail(connection: DatabaseConnection, job_id: int, code: str, message: str) -> None:
     connection.execute(
         "UPDATE style_jobs SET status='failed', error_code=?, "
         "error_message=?, finished_at=CURRENT_TIMESTAMP WHERE id = ?",
@@ -244,14 +245,14 @@ def _fail(connection: sqlite3.Connection, job_id: int, code: str, message: str) 
     )
 
 
-def _is_cancel_requested(connection: sqlite3.Connection, job_id: int) -> bool:
+def _is_cancel_requested(connection: DatabaseConnection, job_id: int) -> bool:
     row = connection.execute(
         "SELECT cancel_requested FROM style_jobs WHERE id = ?", (job_id,)
     ).fetchone()
     return row is not None and bool(row[0])
 
 
-def _cancel(connection: sqlite3.Connection, job_id: int) -> None:
+def _cancel(connection: DatabaseConnection, job_id: int) -> None:
     connection.execute(
         "UPDATE style_jobs SET status = 'cancelled', "
         "finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP) WHERE id = ?",

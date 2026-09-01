@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import cast
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +35,7 @@ def create_app(settings: ApiSettings) -> FastAPI:
     worker = StyleAnalysisWorker(
         data_root=settings.data_root,
         executor=lambda connection, job: execute_style_job(
-            cast(sqlite3.Connection, connection),
+            connection,
             job,
             model_client=model_client,
             model_provider=settings.style_model_provider

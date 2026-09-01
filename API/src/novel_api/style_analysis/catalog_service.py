@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Sequence
-from typing import cast
+from typing import Any, cast
 
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
@@ -23,6 +22,7 @@ from novel_api.style_analysis.catalog_current import (
     select_current_runs,
 )
 from novel_api.style_analysis.catalog_effective import effective_outputs
+from novel_api.style_analysis.job_service import DatabaseConnection
 
 _SA_D_ANALYZERS = (
     "entity-mention-extractor",
@@ -48,11 +48,11 @@ def _canonical_json(value: object) -> str:
 
 
 class StyleAnalysisCatalogService:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self._repository = StyleSourceRepository(connection)
+    def __init__(self, connection: DatabaseConnection) -> None:
+        self._repository = StyleSourceRepository(cast(Any, connection))
         self._connection = connection
-        self._runs = AnalysisRunRepository(connection)
-        self._annotations = SemanticRepository(connection)
+        self._runs = AnalysisRunRepository(cast(Any, connection))
+        self._annotations = SemanticRepository(cast(Any, connection))
 
     def list_reference_works(self) -> tuple[ReferenceWorkRecord, ...]:
         return self._repository.list_reference_works()
@@ -466,7 +466,7 @@ class StyleAnalysisCatalogService:
         if structure_revision_id is None:
             return False
         orchestrator = DocumentAnalysisOrchestrator(
-            self._connection,
+            cast(Any, self._connection),
             model_client=None,
             model_provider=None,
             model_id=None,
