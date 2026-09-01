@@ -11,7 +11,7 @@ from novel_core.style_analysis.entity_models import (
     EntityRecord,
 )
 from novel_core.style_analysis.entity_repository import EntityRepository
-from novel_core.style_analysis.resolver_candidates import comparison_key, exact_key
+from novel_core.style_analysis.resolver_candidates import exact_key
 
 
 class EntityService:
@@ -93,17 +93,20 @@ class EntityService:
         analysis_run_id: int,
         source_mention_id: int,
     ) -> None:
-        if not alias or alias_kind == "pronoun":
+        normalized_alias = alias.strip() if isinstance(alias, str) else ""
+        if not normalized_alias or alias_kind == "pronoun":
             return
         entity = self.repository.get(entity_id)
-        values = [self._effective_name(entity)] + [
+        values = [self._effective_name(entity).strip()] + [
             item.alias for item in self.repository.aliases_for(entity_id)
         ]
-        if comparison_key(alias) in {comparison_key(value) for value in values}:
+        if exact_key(normalized_alias) in {
+            exact_key(value.strip()) for value in values
+        }:
             return
         self.repository.insert_alias(
             entity_id=entity_id,
-            alias=alias,
+            alias=normalized_alias,
             alias_kind=alias_kind,
             origin="inferred",
             analysis_run_id=analysis_run_id,

@@ -8,7 +8,12 @@ import pytest
 from test_style_analysis_migration import open_test_database
 
 from novel_core.errors import AnalysisCancelledError
-from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
+from novel_core.style_analysis.analysis_orchestrator import (
+    DocumentAnalysisOrchestrator,
+)
+from novel_core.style_analysis.analyzers.term_explanation import (
+    detect_term_explanations,
+)
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.model_contracts import (
     ModelRequest,
@@ -17,6 +22,7 @@ from novel_core.style_analysis.model_contracts import (
 )
 from novel_core.style_analysis.model_prompts import PROMPT_REGISTRY
 from novel_core.style_analysis.resolver_candidates import build_context_window
+from novel_core.style_analysis.structure_service import StyleStructureService
 from novel_core.style_analysis.term_service import TermService
 
 
@@ -219,6 +225,205 @@ def test_pronoun_has_no_inferred_alias_kind() -> None:
     assert _alias_kind("pronoun") == "pronoun"
 
 
+def test_inferred_entity_alias_uses_nfc_only_duplicate_matching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        service = EntityService(connection)
+        entity = type(
+            "Entity",
+            (),
+            {"id": 1, "canonical_name": "NASA"},
+        )()
+        inserted: list[dict[str, object]] = []
+        monkeypatch.setattr(service.repository, "get", lambda entity_id: entity)
+        monkeypatch.setattr(service.repository, "aliases_for", lambda entity_id: ())
+        monkeypatch.setattr(
+            service.repository,
+            "insert_alias",
+            lambda **kwargs: inserted.append(kwargs),
+        )
+        monkeypatch.setattr(
+            service, "_effective_name", lambda value: value.canonical_name
+        )
+
+        service.insert_inferred_alias_if_missing(
+            entity_id=1,
+            alias="nasa",
+            alias_kind="name",
+            analysis_run_id=1,
+            source_mention_id=1,
+        )
+
+        assert len(inserted) == 1
+        assert inserted[0]["alias"] == "nasa"
+    finally:
+        connection.close()
+
+
+def test_inferred_term_alias_uses_nfc_only_duplicate_matching(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        service = TermService(connection)
+        term = type(
+            "Term",
+            (),
+            {"id": 1, "canonical_label": "NASA"},
+        )()
+        inserted: list[dict[str, object]] = []
+        monkeypatch.setattr(service.repository, "get", lambda term_id: term)
+        monkeypatch.setattr(service.repository, "aliases_for", lambda term_id: ())
+        monkeypatch.setattr(
+            service.repository,
+            "insert_alias",
+            lambda **kwargs: inserted.append(kwargs),
+        )
+        monkeypatch.setattr(
+            service, "_effective_label", lambda value: value.canonical_label
+        )
+
+        service.insert_inferred_alias_if_missing(
+            term_id=1,
+            alias="nasa",
+            analysis_run_id=1,
+        )
+
+        assert len(inserted) == 1
+        assert inserted[0]["alias"] == "nasa"
+    finally:
+        connection.close()
+
+
+def test_term_explanation_drops_invalid_item_and_keeps_valid_item() -> None:
+    class Model:
+        def complete_json(self, request: ModelRequest) -> dict[str, object]:
+            return {
+                "explanations": [
+                    {
+                        "block_id": 999,
+                        "start_in_block": 0,
+                        "end_in_block": 1,
+                        "explanation_kind": "definition",
+                        "completeness": "sufficient",
+                        "confidence": 0.99,
+                    },
+                    {
+                        "block_id": 1,
+                        "start_in_block": 0,
+                        "end_in_block": 3,
+                        "explanation_kind": "definition",
+                        "completeness": "sufficient",
+                        "confidence": 0.80,
+                    },
+                ]
+            }
+
+    warnings: list[str] = []
+    candidates = detect_term_explanations(
+        term_mention_id=1,
+        term_label="用語",
+        mention_block_id=1,
+        mention_start_in_block=0,
+        mention_end_in_block=1,
+        blocks=[{"block_id": 1, "text": "説明文"}],
+        client=Model(),
+        warnings=warnings,
+    )
+
+    assert [candidate.block_id for candidate in candidates] == [1]
+    assert warnings == ["MODEL_ITEM_ID_INVALID"]
+
+
+def test_boundary_materializer_reads_canonical_subject_id_shape(tmp_path: Path) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        connection.execute("INSERT INTO works (slug, working_title) VALUES ('x', 'X')")
+        work_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO chapters (work_id, position, title) VALUES (?, 1, 'c')",
+            (work_id,),
+        )
+        chapter_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO episodes (work_id, chapter_id, position, title) "
+            "VALUES (?, ?, 1, 'e')",
+            (work_id, chapter_id),
+        )
+        episode_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_documents "
+            "(kind, project_work_id, project_episode_id) VALUES "
+            "('project_episode_draft', ?, ?)",
+            (work_id, episode_id),
+        )
+        document_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        digest = "d" * 64
+        text = "one\n\ntwo\n\nthree"
+        connection.execute(
+            "INSERT INTO style_text_revisions "
+            "(document_id, revision_no, project_draft_id, raw_text, canonical_text, "
+            "raw_sha256, canonical_sha256, normalization_input_fingerprint, "
+            "normalizer_id, normalizer_version) VALUES "
+            "(?, 1, 1, ?, ?, ?, ?, ?, 'test', 1)",
+            (document_id, text, text, digest, digest, digest),
+        )
+        text_revision_id = connection.execute("SELECT last_insert_rowid()").fetchone()[
+            0
+        ]
+        connection.commit()
+
+        structure_service = StyleStructureService(connection)
+        automatic = structure_service.build_automatic_structure(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            set_current=False,
+        )
+        orchestrator = DocumentAnalysisOrchestrator(
+            connection, model_client=None, model_provider=None, model_id=None
+        )
+        boundary_run = orchestrator._new_run(
+            "scene-boundary-detector",
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=automatic.id,
+        )
+        orchestrator._finish(boundary_run)
+        first_block = structure_service.list_blocks(automatic.id)[0]
+        connection.execute(
+            "INSERT INTO style_annotations "
+            "(annotation_type, subject_type, subject_id, value_json, confidence, "
+            "analysis_run_id) VALUES "
+            "('scene_boundary_candidate', 'block', ?, ?, 0.9, ?)",
+            (
+                first_block.id,
+                json.dumps(
+                    {
+                        "base_structure_revision_id": automatic.id,
+                        "reasons": ["time_shift"],
+                    }
+                ),
+                boundary_run,
+            ),
+        )
+        connection.commit()
+
+        materialized = structure_service.materialize_semantic_structure(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            parent_structure_revision_id=automatic.id,
+            boundary_analysis_run_id=boundary_run,
+            auto_apply_threshold=0.85,
+        )
+
+        assert materialized.source_kind == "semantic"
+        assert len(structure_service.list_scenes(materialized.id)) == 2
+    finally:
+        connection.close()
+
+
 def test_term_novelty_reduction_ignores_uncertain_when_one_concrete_value_remains() -> (
     None
 ):
@@ -385,6 +590,32 @@ def test_document_orchestrator_persists_sa_d_runs_and_annotations(
         assert connection.execute(
             "SELECT COUNT(*) FROM style_annotations"
         ).fetchone() >= (5,)
+
+        cancelled_orchestrator = DocumentAnalysisOrchestrator(
+            connection,
+            model_client=_FakeModel(),
+            cancellation_probe=lambda: True,
+        )
+        blocks = cancelled_orchestrator.structure.list_blocks(structure_id)
+        revision = cancelled_orchestrator.text.get_text_revision(
+            document_id, text_revision_id
+        )
+        with pytest.raises(AnalysisCancelledError):
+            cancelled_orchestrator._block_semantics(
+                document_id,
+                text_revision_id,
+                structure_id,
+                blocks,
+                [
+                    cancelled_orchestrator._block_json(block, revision.canonical_text)
+                    for block in blocks
+                ],
+            )
+        assert connection.execute(
+            "SELECT status FROM style_analysis_runs "
+            "WHERE analyzer_id = 'block-semantic-classifier' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone() == ("cancelled",)
     finally:
         connection.close()
 
@@ -470,6 +701,11 @@ def test_full_automatic_structure_materializes_semantic_structure(
         assert configs["pov-classifier"] == '{"pov_taxonomy_version":1}'
         basic_config = json.loads(configs["style-metrics-basic"])
         assert basic_config["metric_versions"]
+        assert connection.execute(
+            "SELECT model_provider, model_id FROM style_analysis_runs "
+            "WHERE document_id = ? AND analyzer_id = 'style-metrics-basic'",
+            (document_id,),
+        ).fetchone() == (None, None)
         assert connection.execute(
             "SELECT COUNT(*) FROM style_structure_analysis_sources "
             "WHERE structure_revision_id = ?",

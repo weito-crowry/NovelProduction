@@ -299,7 +299,7 @@ class StyleStructureService:
                 continue
             if value.get("base_structure_revision_id") != parent_structure_revision_id:
                 continue
-            after_block_id = value.get("after_block_id")
+            after_block_id = subject_id
             if (
                 not isinstance(after_block_id, int)
                 or isinstance(after_block_id, bool)

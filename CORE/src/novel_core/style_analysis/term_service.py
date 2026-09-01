@@ -5,7 +5,7 @@ import sqlite3
 from collections.abc import Mapping
 from typing import cast
 
-from novel_core.style_analysis.resolver_candidates import comparison_key, exact_key
+from novel_core.style_analysis.resolver_candidates import exact_key
 from novel_core.style_analysis.term_models import TERM_TYPES, TermRecord
 from novel_core.style_analysis.term_repository import TermRepository
 
@@ -75,17 +75,20 @@ class TermService:
     def insert_inferred_alias_if_missing(
         self, *, term_id: int, alias: str, analysis_run_id: int
     ) -> None:
-        if not alias:
+        normalized_alias = alias.strip() if isinstance(alias, str) else ""
+        if not normalized_alias:
             return
         term = self.repository.get(term_id)
-        values = [self._effective_label(term)] + [
+        values = [self._effective_label(term).strip()] + [
             item.alias for item in self.repository.aliases_for(term_id)
         ]
-        if comparison_key(alias) in {comparison_key(value) for value in values}:
+        if exact_key(normalized_alias) in {
+            exact_key(value.strip()) for value in values
+        }:
             return
         self.repository.insert_alias(
             term_id=term_id,
-            alias=alias,
+            alias=normalized_alias,
             origin="inferred",
             analysis_run_id=analysis_run_id,
         )

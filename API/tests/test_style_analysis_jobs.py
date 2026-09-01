@@ -7,7 +7,10 @@ import pytest
 from fastapi.testclient import TestClient
 from novel_core.config import DatabaseConfig
 from novel_core.database import default_migration_dir, open_database
-from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisResult
+from novel_core.style_analysis.analysis_orchestrator import (
+    DocumentAnalysisOrchestrator,
+    DocumentAnalysisResult,
+)
 from novel_core.style_analysis.model_contracts import ModelRequest
 from novel_core.style_analysis.runtime_models import JobRecord
 
@@ -99,6 +102,54 @@ class _BlockingWorkFakeModel(_WorkFakeModel):
         self.started.set()
         assert self.release.wait(timeout=5)
         return super().complete_json(request)
+
+
+class _FailingSpeakerModel(_WorkFakeModel):
+    def complete_json(self, request: ModelRequest) -> dict[str, object]:
+        if request.prompt_id == "style.speaker_attribution":
+            raise ValueError("MODEL_CONTRACT_INVALID")
+        return super().complete_json(request)
+
+
+def _create_reference_analysis(
+    data_root: Path, *, model: object | None = None
+) -> tuple[sqlite3.Connection, int, int, DocumentAnalysisResult]:
+    registry = ProjectRegistry(data_root)
+    registry.create("Reference", project_id="reference")
+    project_dir = data_root / "reference"
+    target = ProjectTarget(
+        project_id="reference",
+        descriptor=ProjectDescriptor(
+            project_dir=project_dir, story_db=project_dir / "story.db"
+        ),
+    )
+    import_source(
+        target,
+        source_type="text",
+        filename="reference.txt",
+        payload="Episode 1\n\n本文。".encode(),
+        media_type="text/plain",
+    )
+    connection = open_database(
+        DatabaseConfig(
+            db_path=project_dir / "story.db", migration_dir=default_migration_dir()
+        )
+    )
+    document_id, text_revision_id = connection.execute(
+        "SELECT id, current_text_revision_id FROM style_documents "
+        "WHERE reference_episode_id IS NOT NULL"
+    ).fetchone()
+    result = DocumentAnalysisOrchestrator(
+        connection,
+        model_client=model or _WorkFakeModel(),
+        model_provider="test",
+        model_id="fake",
+    ).analyze_document(
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        preset="full",
+    )
+    return connection, document_id, text_revision_id, result
 
 
 def test_fresh_reference_work_full_analysis_does_not_nest_transactions(
@@ -240,6 +291,161 @@ def test_job_response_exposes_progress_dto() -> None:
     )
     response = _job_response(job)
     assert response.progress == {"current": 2, "total": 5}
+
+
+def test_semantics_selects_current_partial_run_over_historical_success(
+    data_root: Path,
+) -> None:
+    connection, document_id, text_revision_id, first = _create_reference_analysis(
+        data_root
+    )
+    try:
+        reference_work_id = connection.execute(
+            "SELECT reference_work_id FROM style_reference_episodes "
+            "WHERE id = (SELECT reference_episode_id FROM style_documents "
+            "WHERE id = ?)",
+            (document_id,),
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_entities "
+            "(reference_work_id, entity_type, canonical_name, origin) "
+            "VALUES (?, 'person', '新しい人物', 'manual')",
+            (reference_work_id,),
+        )
+        connection.commit()
+        first_speaker_id = connection.execute(
+            "SELECT id FROM style_analysis_runs "
+            "WHERE document_id = ? AND analyzer_id = 'speaker-attribution' "
+            "ORDER BY id DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()[0]
+        second = DocumentAnalysisOrchestrator(
+            connection,
+            model_client=_FailingSpeakerModel(),
+            model_provider="test",
+            model_id="fake",
+        ).analyze_document(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=first.structure_revision_id,
+            preset="full",
+        )
+        second_speaker_id, second_speaker_status = connection.execute(
+            "SELECT id, status FROM style_analysis_runs "
+            "WHERE document_id = ? AND analyzer_id = 'speaker-attribution' "
+            "ORDER BY id DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()
+        connection.execute(
+            "UPDATE style_analysis_runs SET status = 'partial' WHERE id = ?",
+            (second_speaker_id,),
+        )
+        connection.commit()
+        second_speaker_status = connection.execute(
+            "SELECT status FROM style_analysis_runs WHERE id = ?",
+            (second_speaker_id,),
+        ).fetchone()[0]
+
+        semantics = StyleAnalysisCatalogService(connection).get_semantics(
+            document_id, first.structure_revision_id
+        )
+
+        assert second.status == "succeeded"
+        assert second_speaker_status == "partial"
+        assert second_speaker_id in semantics["analysis_run_ids"]
+        assert first_speaker_id not in semantics["analysis_run_ids"]
+        assert semantics["analysis_status"]["semantic"]["state"] == "partial"
+    finally:
+        connection.close()
+
+
+def test_semantics_returns_entity_mentions_even_without_resolution(
+    data_root: Path,
+) -> None:
+    connection, document_id, _, first = _create_reference_analysis(data_root)
+    try:
+        mention_run_id = connection.execute(
+            "SELECT id FROM style_analysis_runs "
+            "WHERE document_id = ? AND analyzer_id = 'entity-mention-extractor' "
+            "ORDER BY id DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()[0]
+        scene_id, block_id, block_start, block_end = connection.execute(
+            "SELECT scene_id, id, start_cp, end_cp FROM style_blocks "
+            "WHERE structure_revision_id = ? AND scene_id IS NOT NULL "
+            "ORDER BY id LIMIT 1",
+            (first.structure_revision_id,),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO style_mentions "
+            "(structure_revision_id, scene_id, block_id, start_cp, end_cp, surface, "
+            "mention_type, entity_type_candidate, canonical_name_candidate, "
+            "confidence, analysis_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                first.structure_revision_id,
+                scene_id,
+                block_id,
+                block_start,
+                min(block_start + 1, block_end),
+                "本",
+                "proper_name",
+                "person",
+                "未解決人物",
+                0.7,
+                mention_run_id,
+            ),
+        )
+        connection.commit()
+
+        semantics = StyleAnalysisCatalogService(connection).get_semantics(
+            document_id, first.structure_revision_id
+        )
+
+        assert semantics["mentions"] == [
+            {
+                "id": semantics["mentions"][0]["id"],
+                "structure_revision_id": first.structure_revision_id,
+                "scene_id": scene_id,
+                "block_id": block_id,
+                "start_cp": block_start,
+                "end_cp": min(block_start + 1, block_end),
+                "surface": "本",
+                "mention_type": "proper_name",
+                "entity_type_candidate": "person",
+                "canonical_name_candidate": "未解決人物",
+                "confidence": 0.7,
+                "analysis_run_id": mention_run_id,
+            }
+        ]
+    finally:
+        connection.close()
+
+
+def test_effective_semantics_does_not_adopt_turn_taking_only_speaker() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        catalog = StyleAnalysisCatalogService(connection)
+        effective = catalog._effective_outputs(
+            [
+                {
+                    "annotation_type": "speaker",
+                    "subject_type": "block",
+                    "subject_id": 1,
+                    "value": {
+                        "speaker_entity_id": 7,
+                        "evidence_block_ids": [1],
+                        "reason_code": "turn_taking",
+                    },
+                    "confidence": 0.99,
+                    "analysis_run_id": 1,
+                }
+            ]
+        )
+
+        assert effective["speakers"][0]["value"]["speaker_entity_id"] is None
+        assert effective["speakers"][0]["source"] == "unknown"
+    finally:
+        connection.close()
 
 
 def test_reference_work_fails_episode_when_revision_changes_during_analysis(

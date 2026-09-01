@@ -36,6 +36,7 @@ def detect_term_explanations(
     mention_end_in_block: int,
     blocks: Sequence[JsonObject],
     client: ModelClient,
+    warnings: list[str] | None = None,
 ) -> tuple[TermExplanationCandidate, ...]:
     prompt = get_prompt("style.term_explanation")
     response = complete_validated_json(
@@ -66,56 +67,60 @@ def detect_term_explanations(
     }
     result: list[TermExplanationCandidate] = []
     for value in values:
-        item = validate_model_object(
-            value,
-            required=(
-                "block_id",
-                "start_in_block",
-                "end_in_block",
-                "explanation_kind",
-                "completeness",
-                "confidence",
-            ),
-            allowed=(
-                "block_id",
-                "start_in_block",
-                "end_in_block",
-                "explanation_kind",
-                "completeness",
-                "confidence",
-            ),
-        )
-        block_id = validate_positive_id(item["block_id"])
-        assert block_id is not None
-        text = block_texts.get(block_id)
-        if text is None:
-            raise ValueError("MODEL_ITEM_ID_INVALID")
-        start = item["start_in_block"]
-        end = item["end_in_block"]
-        if not isinstance(start, int) or not isinstance(end, int):
-            raise ValueError("MODEL_ITEM_SPAN_INVALID")
-        validate_span(text, start, end, text[start:end])
-        kind = item["explanation_kind"]
-        completeness = item["completeness"]
-        if kind not in {
-            "definition",
-            "paraphrase",
-            "example",
-            "contextual_clue",
-            "contrast",
-            "other",
-        } or completeness not in {"partial", "sufficient"}:
-            raise ValueError("MODEL_ITEM_ENUM_INVALID")
-        result.append(
-            TermExplanationCandidate(
-                block_id,
-                start,
-                end,
-                str(kind),
-                str(completeness),
-                validate_confidence(item["confidence"]),
+        try:
+            item = validate_model_object(
+                value,
+                required=(
+                    "block_id",
+                    "start_in_block",
+                    "end_in_block",
+                    "explanation_kind",
+                    "completeness",
+                    "confidence",
+                ),
+                allowed=(
+                    "block_id",
+                    "start_in_block",
+                    "end_in_block",
+                    "explanation_kind",
+                    "completeness",
+                    "confidence",
+                ),
             )
-        )
+            block_id = validate_positive_id(item["block_id"])
+            assert block_id is not None
+            text = block_texts.get(block_id)
+            if text is None:
+                raise ValueError("MODEL_ITEM_ID_INVALID")
+            start = item["start_in_block"]
+            end = item["end_in_block"]
+            if not isinstance(start, int) or not isinstance(end, int):
+                raise ValueError("MODEL_ITEM_SPAN_INVALID")
+            validate_span(text, start, end, text[start:end])
+            kind = item["explanation_kind"]
+            completeness = item["completeness"]
+            if kind not in {
+                "definition",
+                "paraphrase",
+                "example",
+                "contextual_clue",
+                "contrast",
+                "other",
+            } or completeness not in {"partial", "sufficient"}:
+                raise ValueError("MODEL_ITEM_ENUM_INVALID")
+            result.append(
+                TermExplanationCandidate(
+                    block_id,
+                    start,
+                    end,
+                    str(kind),
+                    str(completeness),
+                    validate_confidence(item["confidence"]),
+                )
+            )
+        except ValueError as exc:
+            if warnings is not None:
+                warnings.append(_item_warning(str(exc)))
     return tuple(
         sorted(
             result,
@@ -137,3 +142,19 @@ def _validate_response_shape(value: JsonObject) -> JsonObject:
     if not isinstance(obj["explanations"], list):
         raise ValueError("MODEL_CONTRACT_INVALID")
     return obj
+
+
+def _item_warning(error_code: str) -> str:
+    if error_code == "MODEL_ITEM_ID_INVALID":
+        return error_code
+    if error_code in {
+        "SPAN_INVALID",
+        "SPAN_SURFACE_MISMATCH",
+        "MODEL_ITEM_SPAN_INVALID",
+    }:
+        return "MODEL_ITEM_SPAN_INVALID"
+    if error_code == "MODEL_ITEM_ENUM_INVALID":
+        return error_code
+    if error_code == "CONFIDENCE_INVALID":
+        return "MODEL_ITEM_CONFIDENCE_INVALID"
+    return "MODEL_ITEM_INVALID"

@@ -318,6 +318,8 @@ class DocumentAnalysisOrchestrator:
         if analyzer_id in prompt_map:
             prompt = get_prompt(prompt_map[analyzer_id])
             prompt_id, prompt_version = prompt.prompt_id, prompt.version
+        model_provider = self.model_provider if prompt_id is not None else None
+        model_id = self.model_id if prompt_id is not None else None
         config_json = _json(config if config is not None else {})
         dependency_pairs_list: list[tuple[str, int]] = []
         for run_id in dependencies:
@@ -361,8 +363,8 @@ class DocumentAnalysisOrchestrator:
                     dependency_expectations=expectations,
                     prompt_id=prompt_id,
                     prompt_version=prompt_version,
-                    model_provider=self.model_provider,
-                    model_id=self.model_id,
+                    model_provider=model_provider,
+                    model_id=model_id,
                 )
                 if definition.cacheable
                 else None
@@ -379,8 +381,8 @@ class DocumentAnalysisOrchestrator:
             state_fingerprint=state_fingerprint,
             policy_input_fingerprint=policy_input_fingerprint,
             dependency_runs=dependency_pairs,
-            model_provider=self.model_provider,
-            model_id=self.model_id,
+            model_provider=model_provider,
+            model_id=model_id,
             prompt_id=prompt_id,
             prompt_version=prompt_version,
         )
@@ -397,8 +399,8 @@ class DocumentAnalysisOrchestrator:
             policy_input_fingerprint=policy_input_fingerprint,
             state_fingerprint=state_fingerprint,
             registry_input_fingerprint=registry_input_fingerprint,
-            model_provider=self.model_provider,
-            model_id=self.model_id,
+            model_provider=model_provider,
+            model_id=model_id,
             prompt_id=prompt_id,
             prompt_version=prompt_version,
             started_at=_now(),
@@ -466,13 +468,15 @@ class DocumentAnalysisOrchestrator:
                         subject_id=candidate.after_block_id,
                         value={
                             "base_structure_revision_id": structure_id,
-                            "after_block_id": candidate.after_block_id,
                             "reasons": list(candidate.reasons),
                         },
                         confidence=candidate.confidence,
                         analysis_run_id=run_id,
                     )
             self._finish(run_id)
+        except AnalysisCancelledError as exc:
+            self._finish(run_id, status="cancelled", error=exc)
+            raise
         except Exception as exc:
             self._finish(run_id, status="failed", error=exc)
             raise
@@ -544,7 +548,7 @@ class DocumentAnalysisOrchestrator:
                     warnings=mention_warnings,
                 )
         except AnalysisCancelledError as exc:
-            self._finish(mention_run, status="failed", error=exc)
+            self._finish(mention_run, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(mention_run, status="failed", error=exc)
@@ -638,7 +642,7 @@ class DocumentAnalysisOrchestrator:
                     warnings=term_warnings,
                 )
         except AnalysisCancelledError as exc:
-            self._finish(term_candidate_run, status="failed", error=exc)
+            self._finish(term_candidate_run, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(term_candidate_run, status="failed", error=exc)
@@ -854,7 +858,7 @@ class DocumentAnalysisOrchestrator:
                     resolved_by_scene.setdefault(mention.scene_id, set()).add(entity.id)
             self._finish(run_id)
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -919,7 +923,7 @@ class DocumentAnalysisOrchestrator:
                 )
             self._finish(run_id)
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -980,7 +984,7 @@ class DocumentAnalysisOrchestrator:
                 )
             self._finish(run_id)
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -1133,7 +1137,7 @@ class DocumentAnalysisOrchestrator:
                 )
             self._finish(run_id)
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -1158,6 +1162,7 @@ class DocumentAnalysisOrchestrator:
         block_json = [
             self._block_json(block, revision.canonical_text) for block in blocks
         ]
+        explanation_warnings: list[str] = []
         try:
             if self._is_reused(run_id):
                 return run_id
@@ -1191,6 +1196,7 @@ class DocumentAnalysisOrchestrator:
                     mention_end_in_block=mention.end_cp - block.start_cp,
                     blocks=window,
                     client=cast(ModelClient, self._analysis_client),
+                    warnings=explanation_warnings,
                 )
                 if not candidates and window_end < len(scene_blocks):
                     candidates = detect_term_explanations(
@@ -1201,6 +1207,7 @@ class DocumentAnalysisOrchestrator:
                         mention_end_in_block=mention.end_cp - block.start_cp,
                         blocks=scene_blocks[window_start:],
                         client=cast(ModelClient, self._analysis_client),
+                        warnings=explanation_warnings,
                     )
                 if candidates:
                     selected = min(
@@ -1235,9 +1242,13 @@ class DocumentAnalysisOrchestrator:
                         end_cp=self._block_start(blocks, selected.block_id)
                         + selected.end_in_block,
                     )
-            self._finish(run_id)
+            self._finish(
+                run_id,
+                status="partial" if explanation_warnings else "succeeded",
+                warnings=explanation_warnings,
+            )
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -1298,7 +1309,7 @@ class DocumentAnalysisOrchestrator:
                     )
             self._finish(run_id)
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -1336,7 +1347,7 @@ class DocumentAnalysisOrchestrator:
                 )
             self._finish(run_id)
         except AnalysisCancelledError as exc:
-            self._finish(run_id, status="failed", error=exc)
+            self._finish(run_id, status="cancelled", error=exc)
             raise
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
