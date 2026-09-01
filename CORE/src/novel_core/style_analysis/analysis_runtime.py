@@ -103,7 +103,7 @@ class AnalysisRuntime:
         prompt_version: int | None = None,
     ) -> AnalysisRunRecord | None:
         analyzer = self._analyzers.get(analyzer_id)
-        if analyzer is None:
+        if analyzer is None or analyzer_version != getattr(analyzer, "version", None):
             return None
         requested_dependencies = tuple(sorted(dependency_runs))
         expected_dependencies = tuple(
@@ -171,7 +171,11 @@ class AnalysisRuntime:
         dependency_expectations: tuple[DependencyRunExpectation, ...] = (),
     ) -> AnalysisRunRecord | None:
         analyzer = self._analyzers.get(analyzer_id)
-        if analyzer is None or not getattr(analyzer, "cacheable", False):
+        if (
+            analyzer is None
+            or analyzer_version != getattr(analyzer, "version", None)
+            or not getattr(analyzer, "cacheable", False)
+        ):
             return None
         requested_dependencies = tuple(sorted(dependency_runs))
         expected_dependencies = tuple(
@@ -269,7 +273,7 @@ class AnalysisRuntime:
                     config_json=_canonical_config_json(expectation.config_json),
                     state_fingerprint=expectation.state_fingerprint,
                     policy_input_fingerprint=expectation.policy_input_fingerprint,
-                    dependency_runs=dependency.dependency_runs,
+                    dependency_runs=None,
                     prompt_id=expectation.prompt_id,
                     prompt_version=expectation.prompt_version,
                 )
@@ -285,6 +289,24 @@ class AnalysisRuntime:
                 text_revision_id=text_revision_id,
                 structure_revision_id=structure_revision_id,
                 statuses=allowed_statuses,
+            )
+            current = tuple(
+                run
+                for run in current
+                if self._run_matches(
+                    run,
+                    analyzer_id=dependency_id,
+                    document_id=document_id,
+                    text_revision_id=text_revision_id,
+                    structure_revision_id=structure_revision_id,
+                    analyzer_version=getattr(analyzer, "version", -1),
+                    config_json=_canonical_config_json(expectation.config_json),
+                    state_fingerprint=expectation.state_fingerprint,
+                    policy_input_fingerprint=expectation.policy_input_fingerprint,
+                    dependency_runs=None,
+                    prompt_id=expectation.prompt_id,
+                    prompt_version=expectation.prompt_version,
+                )
             )
             if modes[dependency_id] == "subject_partial_allowed":
                 succeeded = tuple(run for run in current if run.status == "succeeded")
@@ -307,7 +329,7 @@ class AnalysisRuntime:
         config_json: str,
         state_fingerprint: str | None,
         policy_input_fingerprint: str | None,
-        dependency_runs: tuple[tuple[str, int], ...],
+        dependency_runs: tuple[tuple[str, int], ...] | None,
         prompt_id: str | None,
         prompt_version: int | None,
     ) -> bool:
@@ -320,7 +342,9 @@ class AnalysisRuntime:
             and _canonical_config_json(candidate.config_json) == config_json
             and candidate.state_fingerprint == state_fingerprint
             and candidate.policy_input_fingerprint == policy_input_fingerprint
-            and candidate.dependency_runs == dependency_runs
+            and (
+                dependency_runs is None or candidate.dependency_runs == dependency_runs
+            )
             and candidate.prompt_id == prompt_id
             and candidate.prompt_version == prompt_version
         )

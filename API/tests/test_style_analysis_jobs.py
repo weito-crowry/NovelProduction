@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +12,7 @@ from novel_core.style_analysis.runtime_models import JobRecord
 from novel_api.app import create_app
 from novel_api.config import ApiSettings
 from novel_api.project_registry import ProjectRegistry
+from novel_api.style_analysis import job_service as job_service_module
 from novel_api.style_analysis import job_worker as job_worker_module
 from novel_api.style_analysis.job_service import StyleJobService
 from novel_api.style_analysis.job_worker import StyleAnalysisWorker
@@ -81,6 +82,33 @@ def test_cancel_queued_job_and_request_cancel_for_running_job(
     running = service.cancel("demo", running_id)
     assert running.status == "running"
     assert running.cancel_requested == 1
+
+
+def test_cancel_starts_write_transaction_before_read(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ProjectRegistry(data_root).create("Demo", project_id="demo")
+    service = StyleJobService(data_root=data_root)
+    job = service.enqueue(project_id="demo", job_type="analyze_document", payload={})
+    statements: list[str] = []
+    original_open_database = job_service_module.open_database
+
+    def open_with_trace(config: DatabaseConfig) -> sqlite3.Connection:
+        connection = original_open_database(config)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(job_service_module, "open_database", open_with_trace)
+
+    assert service.cancel("demo", job.id).status == "cancelled"
+
+    begin_index = statements.index("BEGIN IMMEDIATE")
+    read_index = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith("SELECT id, job_type") and "WHERE id =" in statement
+    )
+    assert begin_index < read_index
 
 
 def test_retry_creates_new_queued_job_and_preserves_terminal_original(
@@ -243,6 +271,39 @@ def test_worker_does_not_execute_cancelled_job(
 
     assert worker.drain_once() is False
     assert executed == []
+    assert read_job(project_db, job_id).status == "cancelled"
+
+
+def test_service_cancel_after_worker_claim_requests_cancellation(
+    data_root: Path,
+) -> None:
+    ProjectRegistry(data_root).create("Demo", project_id="demo")
+    project_db = data_root / "demo" / "story.db"
+    job_id = insert_job_row(project_db, status="queued", job_type="analyze_document")
+    service = StyleJobService(data_root=data_root)
+    executor_started = Event()
+    release_executor = Event()
+    drain_results: list[bool] = []
+
+    def executor(_connection: sqlite3.Connection, job: JobRecord) -> None:
+        assert job.id == job_id
+        executor_started.set()
+        assert release_executor.wait(timeout=5)
+
+    worker = StyleAnalysisWorker(data_root=data_root, executor=executor)
+    worker.notify("demo")
+    drain_thread = Thread(target=lambda: drain_results.append(worker.drain_once()))
+    drain_thread.start()
+    assert executor_started.wait(timeout=5)
+
+    cancelled = service.cancel("demo", job_id)
+    assert cancelled.status == "running"
+    assert cancelled.cancel_requested == 1
+
+    release_executor.set()
+    drain_thread.join(timeout=5)
+    assert not drain_thread.is_alive()
+    assert drain_results == [True]
     assert read_job(project_db, job_id).status == "cancelled"
 
 

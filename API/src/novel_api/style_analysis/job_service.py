@@ -102,20 +102,27 @@ class StyleJobService:
 
     def cancel(self, project_id: str, job_id: int) -> JobRecord:
         with self._open_connection(project_id) as connection:
-            job = self._require_from_connection(connection, job_id)
-            if job.status == "queued":
-                connection.execute(
-                    "UPDATE style_jobs SET status = 'cancelled', "
-                    "finished_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (job_id,),
-                )
-            elif job.status == "running":
-                connection.execute(
-                    "UPDATE style_jobs SET cancel_requested = 1 WHERE id = ?",
-                    (job_id,),
-                )
-            connection.commit()
-            return self._require_from_connection(connection, job_id)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                job = self._require_from_connection(connection, job_id)
+                if job.status == "queued":
+                    connection.execute(
+                        "UPDATE style_jobs SET status = 'cancelled', "
+                        "finished_at = CURRENT_TIMESTAMP WHERE id = ? "
+                        "AND status = 'queued'",
+                        (job_id,),
+                    )
+                elif job.status == "running":
+                    connection.execute(
+                        "UPDATE style_jobs SET cancel_requested = 1 "
+                        "WHERE id = ? AND status = 'running'",
+                        (job_id,),
+                    )
+                connection.commit()
+                return self._require_from_connection(connection, job_id)
+            except Exception:
+                connection.rollback()
+                raise
 
     def retry(self, project_id: str, job_id: int) -> JobRecord:
         with self._open_connection(project_id) as connection:
