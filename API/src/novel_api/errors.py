@@ -38,6 +38,10 @@ from starlette.exceptions import HTTPException
 from novel_api.project_registry import ProjectConflictError, ProjectNotFoundError
 from novel_api.schemas.common import ApiError, ErrorEnvelope
 from novel_api.serialization import serialize_value
+from novel_api.style_analysis.adapters.base import (
+    SourceImportError,
+    SourceTooLargeError,
+)
 
 _MISSING = object()
 _CORE_NOT_FOUND_ERRORS = (
@@ -89,6 +93,7 @@ _DEPENDENCY_CONFLICT = _ErrorSpec(
     "The request conflicts with related resources.",
 )
 _DATABASE_BUSY = _ErrorSpec(503, "DATABASE_BUSY", "The database is temporarily busy.")
+_SOURCE_TOO_LARGE = _ErrorSpec(413, "SOURCE_TOO_LARGE", "The source is too large.")
 _INTERNAL_ERROR = _ErrorSpec(
     500, "INTERNAL_ERROR", "An internal server error occurred."
 )
@@ -192,6 +197,11 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _DEPENDENCY_CONFLICT
     if isinstance(exc, sqlite3.OperationalError):
         return _DATABASE_BUSY if _is_locked(exc) else _INTERNAL_ERROR
+    if isinstance(exc, SourceTooLargeError):
+        return _SOURCE_TOO_LARGE
+    if isinstance(exc, SourceImportError):
+        code = exc.code
+        return _ErrorSpec(400, code, "The source could not be imported.")
     if isinstance(exc, ValidationError | ValueError):
         return _VALIDATION
     return _INTERNAL_ERROR

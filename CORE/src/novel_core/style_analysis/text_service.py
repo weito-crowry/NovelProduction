@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
+from typing import cast
 
 from novel_core.errors import ValidationError
+from novel_core.style_analysis.fingerprints import (
+    JsonObject,
+    JsonValue,
+    fingerprint_json,
+)
 from novel_core.style_analysis.text_models import (
     StyleDocumentRecord,
     TextRevisionRecord,
@@ -18,6 +26,8 @@ _TEXT_REVISION_COLUMNS = (
     "normalization_input_fingerprint, normalizer_id, normalizer_version, "
     "metadata_json, created_at"
 )
+_REFERENCE_NORMALIZER_ID = "canonical-japanese-fiction"
+_REFERENCE_NORMALIZER_VERSION = 1
 
 
 class StyleTextService:
@@ -43,6 +53,111 @@ class StyleTextService:
             raise ValidationError("TEXT_REVISION_DOCUMENT_MISMATCH")
         return TextRevisionRecord(*row)
 
+    def insert_reference_revision(
+        self,
+        *,
+        document_id: int,
+        source_snapshot_id: int,
+        raw_text: str,
+        structure_hints_raw: object,
+    ) -> TextRevisionRecord:
+        """Insert or reuse the initial reference text revision.
+
+        The caller owns the transaction. SA-B stores the adapter serialization as
+        the canonical text bridge; the full canonical normalizer is SA-C scope.
+        """
+        document = self.get_document(document_id)
+        if document is None:
+            raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
+        if (
+            document.kind != "reference_episode"
+            or document.reference_episode_id is None
+        ):
+            raise ValidationError("REFERENCE_DOCUMENT_REQUIRED")
+
+        snapshot_row = self._connection.execute(
+            "SELECT source_id FROM style_source_snapshots WHERE id = ?",
+            (source_snapshot_id,),
+        ).fetchone()
+        if snapshot_row is None:
+            raise ValidationError("SOURCE_SNAPSHOT_NOT_FOUND")
+        document_source_row = self._connection.execute(
+            "SELECT rw.source_id FROM style_reference_episodes AS re "
+            "JOIN style_reference_works AS rw ON rw.id = re.reference_work_id "
+            "WHERE re.id = ?",
+            (document.reference_episode_id,),
+        ).fetchone()
+        if document_source_row is None:
+            raise ValidationError("REFERENCE_EPISODE_NOT_FOUND")
+        if document_source_row[0] != snapshot_row[0]:
+            raise ValidationError("SOURCE_SNAPSHOT_DOCUMENT_MISMATCH")
+
+        offsets = _normalize_scene_break_offsets(structure_hints_raw, len(raw_text))
+        raw_sha256 = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        structure_hints: JsonObject = {
+            "scene_break_offsets_raw": cast(JsonValue, offsets)
+        }
+        fingerprint_input: JsonObject = {
+            "raw_sha256": raw_sha256,
+            "normalizer_id": _REFERENCE_NORMALIZER_ID,
+            "normalizer_version": _REFERENCE_NORMALIZER_VERSION,
+            "structure_hints_raw": structure_hints,
+        }
+        normalization_input_fingerprint = fingerprint_json(fingerprint_input)
+        existing_row = self._connection.execute(
+            "SELECT id FROM style_text_revisions "
+            "WHERE document_id = ? AND normalization_input_fingerprint = ?",
+            (document_id, normalization_input_fingerprint),
+        ).fetchone()
+        if existing_row is not None:
+            revision_id = cast(int, existing_row[0])
+            if document.current_text_revision_id != revision_id:
+                self._connection.execute(
+                    "UPDATE style_documents SET current_text_revision_id = ?, "
+                    "current_structure_revision_id = NULL WHERE id = ?",
+                    (revision_id, document_id),
+                )
+            return self.get_text_revision(document_id, revision_id)
+
+        revision_no = self._connection.execute(
+            "SELECT COALESCE(MAX(revision_no), 0) + 1 "
+            "FROM style_text_revisions WHERE document_id = ?",
+            (document_id,),
+        ).fetchone()[0]
+        metadata: JsonObject = {
+            "structure_hints": {"scene_break_offsets_cp": cast(JsonValue, offsets)}
+        }
+        cursor = self._connection.execute(
+            "INSERT INTO style_text_revisions "
+            "(document_id, revision_no, source_snapshot_id, raw_text, "
+            "canonical_text, raw_sha256, canonical_sha256, "
+            "normalization_input_fingerprint, normalizer_id, "
+            "normalizer_version, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                document_id,
+                revision_no,
+                source_snapshot_id,
+                raw_text,
+                raw_text,
+                raw_sha256,
+                raw_sha256,
+                normalization_input_fingerprint,
+                _REFERENCE_NORMALIZER_ID,
+                _REFERENCE_NORMALIZER_VERSION,
+                _json(metadata),
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("reference text revision insert did not return an id")
+        revision_id = cursor.lastrowid
+        self._connection.execute(
+            "UPDATE style_documents SET current_text_revision_id = ?, "
+            "current_structure_revision_id = NULL WHERE id = ?",
+            (revision_id, document_id),
+        )
+        return self.get_text_revision(document_id, revision_id)
+
     def set_current_text(self, document_id: int, revision_id: int) -> None:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -63,3 +178,24 @@ class StyleTextService:
         except Exception:
             self._connection.rollback()
             raise
+
+
+def _normalize_scene_break_offsets(value: object, text_length: int) -> list[int]:
+    if not isinstance(value, list) or any(
+        not isinstance(offset, int) or isinstance(offset, bool) for offset in value
+    ):
+        raise ValidationError("STRUCTURE_HINTS_INVALID")
+    offsets = sorted(set(cast(list[int], value)))
+    if any(offset < 0 or offset > text_length for offset in offsets):
+        raise ValidationError("STRUCTURE_HINTS_INVALID")
+    return offsets
+
+
+def _json(value: JsonObject) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )

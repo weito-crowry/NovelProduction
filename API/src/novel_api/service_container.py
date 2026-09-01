@@ -29,6 +29,8 @@ from novel_core.services.timeline_service import TimelineService
 from novel_core.services.work_service import WorkService
 from novel_core.services.world_fact_service import WorldFactService
 
+from novel_api.style_analysis.catalog_service import StyleAnalysisCatalogService
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectDescriptor:
@@ -60,6 +62,7 @@ class ServiceContainer:
     draft: DraftService
     outline: OutlineService
     context: ContextService
+    style_analysis: StyleAnalysisCatalogService
 
 
 def _build_service_container(connection: sqlite3.Connection) -> ServiceContainer:
@@ -80,6 +83,7 @@ def _build_service_container(connection: sqlite3.Connection) -> ServiceContainer
         draft=DraftService(connection),
         outline=OutlineService(connection),
         context=ContextService(connection),
+        style_analysis=StyleAnalysisCatalogService(connection),
     )
 
 
