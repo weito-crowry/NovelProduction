@@ -124,11 +124,33 @@ class AnalysisRunRepository:
         text_revision_id: int,
         structure_revision_id: int,
     ) -> tuple[AnalysisRunRecord, ...]:
+        return self.runs(
+            document_id=document_id,
+            analyzer_id=analyzer_id,
+            analyzer_version=analyzer_version,
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_revision_id,
+            statuses=("succeeded",),
+        )
+
+    def runs(
+        self,
+        *,
+        document_id: int,
+        analyzer_id: str,
+        analyzer_version: int,
+        text_revision_id: int,
+        structure_revision_id: int,
+        statuses: tuple[RunStatus, ...],
+    ) -> tuple[AnalysisRunRecord, ...]:
+        if not statuses:
+            return ()
+        placeholders = ", ".join("?" for _ in statuses)
         rows = self._connection.execute(
             f"SELECT {_RUN_COLUMNS} FROM style_analysis_runs "
             "WHERE document_id = ? AND analyzer_id = ? "
             "AND analyzer_version = ? AND text_revision_id = ? "
-            "AND structure_revision_id = ? AND status = 'succeeded' "
+            f"AND structure_revision_id = ? AND status IN ({placeholders}) "
             "ORDER BY created_at DESC, id DESC",
             (
                 document_id,
@@ -136,6 +158,7 @@ class AnalysisRunRepository:
                 analyzer_version,
                 text_revision_id,
                 structure_revision_id,
+                *statuses,
             ),
         ).fetchall()
         return tuple(self._record_from_row(row) for row in rows)

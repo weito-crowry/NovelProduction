@@ -2,6 +2,8 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from novel_core.config import DatabaseConfig
 from novel_core.database import open_database
 
@@ -112,3 +114,30 @@ def test_foundation_schema_supports_fresh_and_existing_databases(
     finally:
         fresh.close()
         upgraded.close()
+
+
+def test_foundation_schema_enforces_source_type_and_job_fifo_index(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO style_sources "
+                "(source_type, external_work_id, original_filename, "
+                "adapter_id, adapter_version) VALUES (?, ?, ?, ?, ?)",
+                ("pdf", "work-1", "work.pdf", "test", 1),
+            )
+
+        index_names = tuple(
+            row[1] for row in connection.execute("PRAGMA index_list('style_jobs')")
+        )
+        assert "idx_style_jobs_status_id" in index_names
+        assert tuple(
+            row[2]
+            for row in connection.execute(
+                "PRAGMA index_info('idx_style_jobs_status_id')"
+            )
+        ) == ("status", "id")
+    finally:
+        connection.close()

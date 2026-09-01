@@ -28,6 +28,17 @@ class DependencySpec:
     mode: DependencyMode
 
 
+@dataclass(frozen=True, slots=True)
+class DependencyRunExpectation:
+    analyzer_id: str
+    run_id: int
+    config_json: str
+    state_fingerprint: str | None = None
+    policy_input_fingerprint: str | None = None
+    prompt_id: str | None = None
+    prompt_version: int | None = None
+
+
 class Analyzer(Protocol):
     id: str
     version: int

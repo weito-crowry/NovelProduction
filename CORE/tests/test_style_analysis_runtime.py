@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,6 +14,7 @@ from novel_core.style_analysis.analysis_runtime import (
 from novel_core.style_analysis.runtime_models import (
     AnalysisPolicy,
     AnalyzerDefinition,
+    DependencyRunExpectation,
     DependencySpec,
 )
 from novel_core.style_analysis.runtime_registry import ANALYZERS, ANALYZERS_BY_ID
@@ -110,6 +110,9 @@ def insert_run(
     policy_input_fingerprint: str | None = None,
     registry_input_fingerprint: str | None = None,
     dependency_runs: tuple[tuple[str, int], ...] = (),
+    config_json: str = '{"b":2,"a":1}',
+    prompt_id: str | None = None,
+    prompt_version: int | None = None,
 ) -> int:
     run_id = repository.insert_run(
         document_id=document_id,
@@ -119,10 +122,12 @@ def insert_run(
         structure_revision_id=structure_revision_id,
         status=status,
         fingerprint="b" * 64,
-        config_json=json.dumps({"b": 2, "a": 1}),
+        config_json=config_json,
         state_fingerprint=state_fingerprint,
         policy_input_fingerprint=policy_input_fingerprint,
         registry_input_fingerprint=registry_input_fingerprint,
+        prompt_id=prompt_id,
+        prompt_version=prompt_version,
         started_at="2026-01-01T00:00:00Z",
     )
     for _dependency_analyzer_id, dependency_run_id in dependency_runs:
@@ -310,7 +315,7 @@ def test_current_run_matches_relevant_inputs_and_ignores_registry_provenance(
     )
 
 
-def test_resolver_is_never_returned_as_cache_hit(
+def test_non_cacheable_resolver_current_run_is_resolvable(
     runtime_context: tuple[
         sqlite3.Connection, AnalysisRunRepository, AnalysisRuntime, int, int, int
     ],
@@ -318,7 +323,14 @@ def test_resolver_is_never_returned_as_cache_hit(
     _, repository, runtime, document_id, text_revision_id, structure_revision_id = (
         runtime_context
     )
-    insert_run(
+    dependency_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="entity-mention-extractor",
+    )
+    resolver_id = insert_run(
         repository,
         document_id=document_id,
         text_revision_id=text_revision_id,
@@ -326,7 +338,10 @@ def test_resolver_is_never_returned_as_cache_hit(
         analyzer_id="entity-resolver",
         state_fingerprint="c" * 64,
         policy_input_fingerprint="d" * 64,
+        dependency_runs=(("entity-mention-extractor", dependency_id),),
     )
+    resolver = repository.get_run(resolver_id)
+    assert resolver is not None
     assert (
         runtime.resolve_current_run(
             document_id=document_id,
@@ -337,10 +352,220 @@ def test_resolver_is_never_returned_as_cache_hit(
             config_json='{"a":1,"b":2}',
             state_fingerprint="c" * 64,
             policy_input_fingerprint="d" * 64,
-            dependency_runs=(),
+            dependency_runs=(("entity-mention-extractor", dependency_id),),
+            dependency_expectations=(
+                DependencyRunExpectation(
+                    analyzer_id="entity-mention-extractor",
+                    run_id=dependency_id,
+                    config_json='{"a":1,"b":2}',
+                ),
+            ),
+        )
+        == resolver
+    )
+
+
+def test_non_cacheable_resolver_is_not_a_cache_hit(
+    runtime_context: tuple[
+        sqlite3.Connection, AnalysisRunRepository, AnalysisRuntime, int, int, int
+    ],
+) -> None:
+    _, repository, runtime, document_id, text_revision_id, structure_revision_id = (
+        runtime_context
+    )
+    dependency_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="entity-mention-extractor",
+    )
+    fingerprint = execution_fingerprint(
+        analyzer_id="entity-resolver",
+        analyzer_version=1,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        config='{"a":1,"b":2}',
+        state_fingerprint="c" * 64,
+        policy_input_fingerprint="d" * 64,
+        dependency_runs=(("entity-mention-extractor", dependency_id),),
+        model_provider=None,
+        model_id=None,
+    )
+    run_id = repository.insert_run(
+        document_id=document_id,
+        analyzer_id="entity-resolver",
+        analyzer_version=1,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        status="succeeded",
+        fingerprint=fingerprint,
+        config_json='{"a":1,"b":2}',
+        state_fingerprint="c" * 64,
+        policy_input_fingerprint="d" * 64,
+        started_at="2026-01-01T00:00:00Z",
+    )
+    repository.add_dependency(run_id, dependency_id)
+    repository.commit()
+
+    assert (
+        runtime.resolve_cache_hit(
+            document_id=document_id,
+            analyzer_id="entity-resolver",
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_revision_id,
+            analyzer_version=1,
+            config_json='{"a":1,"b":2}',
+            state_fingerprint="c" * 64,
+            policy_input_fingerprint="d" * 64,
+            dependency_runs=(("entity-mention-extractor", dependency_id),),
+            model_provider=None,
+            model_id=None,
         )
         is None
     )
+
+
+def test_current_run_requires_current_dependency_inputs(
+    runtime_context: tuple[
+        sqlite3.Connection, AnalysisRunRepository, AnalysisRuntime, int, int, int
+    ],
+) -> None:
+    _, repository, runtime, document_id, text_revision_id, structure_revision_id = (
+        runtime_context
+    )
+    stale_dependency_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="entity-mention-extractor",
+        config_json='{"stale":true}',
+    )
+    current_dependency_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="entity-mention-extractor",
+    )
+    resolver_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="entity-resolver",
+        state_fingerprint="c" * 64,
+        policy_input_fingerprint="d" * 64,
+        dependency_runs=(("entity-mention-extractor", stale_dependency_id),),
+    )
+    assert repository.get_run(resolver_id) is not None
+
+    assert (
+        runtime.resolve_current_run(
+            document_id=document_id,
+            analyzer_id="entity-resolver",
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_revision_id,
+            analyzer_version=1,
+            config_json='{"a":1,"b":2}',
+            state_fingerprint="c" * 64,
+            policy_input_fingerprint="d" * 64,
+            dependency_runs=(("entity-mention-extractor", stale_dependency_id),),
+            dependency_expectations=(
+                DependencyRunExpectation(
+                    analyzer_id="entity-mention-extractor",
+                    run_id=stale_dependency_id,
+                    config_json='{"a":1,"b":2}',
+                ),
+            ),
+        )
+        is None
+    )
+    assert current_dependency_id != stale_dependency_id
+
+
+def test_current_run_checks_prompt_identity_and_version_and_null_contract(
+    runtime_context: tuple[
+        sqlite3.Connection, AnalysisRunRepository, AnalysisRuntime, int, int, int
+    ],
+) -> None:
+    _, repository, runtime, document_id, text_revision_id, structure_revision_id = (
+        runtime_context
+    )
+    prompt_analyzer = AnalyzerDefinition(
+        id="prompt-test",
+        version=1,
+        deterministic=None,
+        cacheable=True,
+        dependencies=(),
+        state_inputs=(),
+        policy_inputs=(),
+        input_scope=None,
+    )
+    prompt_runtime = AnalysisRuntime(
+        repository,
+        analyzers={**ANALYZERS_BY_ID, "prompt-test": prompt_analyzer},
+    )
+    prompt_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="prompt-test",
+        prompt_id="scene-v1",
+        prompt_version=1,
+    )
+    assert prompt_runtime.resolve_current_run(
+        document_id=document_id,
+        analyzer_id="prompt-test",
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_version=1,
+        config_json='{"a":1,"b":2}',
+        state_fingerprint=None,
+        policy_input_fingerprint=None,
+        dependency_runs=(),
+        prompt_id="scene-v1",
+        prompt_version=1,
+    ) == repository.get_run(prompt_id)
+    assert (
+        prompt_runtime.resolve_current_run(
+            document_id=document_id,
+            analyzer_id="prompt-test",
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_revision_id,
+            analyzer_version=1,
+            config_json='{"a":1,"b":2}',
+            state_fingerprint=None,
+            policy_input_fingerprint=None,
+            dependency_runs=(),
+            prompt_id="scene-v1",
+            prompt_version=2,
+        )
+        is None
+    )
+
+    null_prompt_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_id="style-metrics-basic",
+    )
+    assert runtime.resolve_current_run(
+        document_id=document_id,
+        analyzer_id="style-metrics-basic",
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        analyzer_version=1,
+        config_json='{"a":1,"b":2}',
+        state_fingerprint=None,
+        policy_input_fingerprint=None,
+        dependency_runs=(),
+        prompt_id=None,
+        prompt_version=None,
+    ) == repository.get_run(null_prompt_id)
 
 
 def test_analysis_run_repository_persists_provenance_and_links(
@@ -454,6 +679,15 @@ def test_partial_dependency_is_allowed_only_for_partial_mode(
             state_fingerprint=None,
             policy_input_fingerprint=None,
             dependency_runs=(("entity-resolver", partial_id),),
+            dependency_expectations=(
+                DependencyRunExpectation(
+                    analyzer_id="entity-resolver",
+                    run_id=partial_id,
+                    config_json='{"a":1,"b":2}',
+                    state_fingerprint="c" * 64,
+                    policy_input_fingerprint="d" * 64,
+                ),
+            ),
         )
         == speaker
     )
@@ -491,6 +725,15 @@ def test_partial_dependency_is_allowed_only_for_partial_mode(
             state_fingerprint=None,
             policy_input_fingerprint=None,
             dependency_runs=(("entity-resolver", partial_id),),
+            dependency_expectations=(
+                DependencyRunExpectation(
+                    analyzer_id="entity-resolver",
+                    run_id=partial_id,
+                    config_json='{"a":1,"b":2}',
+                    state_fingerprint="c" * 64,
+                    policy_input_fingerprint="d" * 64,
+                ),
+            ),
         )
         is None
     )

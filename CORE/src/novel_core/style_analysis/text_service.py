@@ -44,15 +44,15 @@ class StyleTextService:
         return TextRevisionRecord(*row)
 
     def set_current_text(self, document_id: int, revision_id: int) -> None:
-        document = self.get_document(document_id)
-        if document is None:
-            raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
-        self.get_text_revision(document_id, revision_id)
-        if document.current_text_revision_id == revision_id:
-            return
-
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            document = self.get_document(document_id)
+            if document is None:
+                raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
+            self.get_text_revision(document_id, revision_id)
+            if document.current_text_revision_id == revision_id:
+                self._connection.commit()
+                return
             self._connection.execute(
                 "UPDATE style_documents "
                 "SET current_text_revision_id = ?, "

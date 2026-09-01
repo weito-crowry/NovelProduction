@@ -33,20 +33,20 @@ class StyleStructureService:
         return StructureRevisionRecord(*row)
 
     def set_current_structure(self, document_id: int, revision_id: int) -> None:
-        document = self._text_service.get_document(document_id)
-        if document is None:
-            raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
-        structure = self.get_structure_revision(document_id, revision_id)
-        if (
-            document.current_text_revision_id is None
-            or structure.text_revision_id != document.current_text_revision_id
-        ):
-            raise ValidationError("CURRENT_STRUCTURE_TEXT_MISMATCH")
-        if document.current_structure_revision_id == revision_id:
-            return
-
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            document = self._text_service.get_document(document_id)
+            if document is None:
+                raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
+            structure = self.get_structure_revision(document_id, revision_id)
+            if (
+                document.current_text_revision_id is None
+                or structure.text_revision_id != document.current_text_revision_id
+            ):
+                raise ValidationError("CURRENT_STRUCTURE_TEXT_MISMATCH")
+            if document.current_structure_revision_id == revision_id:
+                self._connection.commit()
+                return
             self._connection.execute(
                 "UPDATE style_documents SET current_structure_revision_id = ? "
                 "WHERE id = ?",

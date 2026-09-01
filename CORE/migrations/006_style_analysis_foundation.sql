@@ -27,9 +27,13 @@ CREATE TABLE style_jobs (
     )
 );
 
+CREATE INDEX idx_style_jobs_status_id
+    ON style_jobs(status, id);
+
 CREATE TABLE style_sources (
     id INTEGER PRIMARY KEY,
-    source_type TEXT NOT NULL,
+    source_type TEXT NOT NULL
+        CHECK (source_type IN ('text', 'html_file', 'epub')),
     external_work_id TEXT NOT NULL,
     original_filename TEXT NOT NULL,
     adapter_id TEXT NOT NULL,

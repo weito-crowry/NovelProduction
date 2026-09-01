@@ -1,6 +1,7 @@
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 from test_style_analysis_migration import open_test_database
@@ -180,6 +181,82 @@ def test_current_structure_must_belong_to_current_text_revision(
         )
 
     assert current_pointers(connection, document_id) == (second_text, None)
+
+
+def test_current_structure_rechecks_text_inside_transaction(
+    connection: sqlite3.Connection,
+) -> None:
+    episode_id = insert_project_episode(connection, 1)
+    document_id = insert_style_document(connection, episode_id=episode_id)
+    first_text = insert_text_revision(
+        connection, document_id=document_id, revision_no=1
+    )
+    second_text = insert_text_revision(
+        connection, document_id=document_id, revision_no=2
+    )
+    first_structure = insert_structure_revision(connection, text_revision_id=first_text)
+    connection.commit()
+    StyleTextService(connection).set_current_text(document_id, first_text)
+
+    database_path = Path(connection.execute("PRAGMA database_list").fetchone()[2])
+    competing = sqlite3.connect(database_path, timeout=0, check_same_thread=False)
+    competing.execute("PRAGMA busy_timeout = 0")
+    validation_reached = Event()
+    allow_validation = Event()
+    competing_finished = Event()
+    competing_updated: list[bool] = []
+    errors: list[BaseException] = []
+
+    def trace(statement: str) -> None:
+        if "SELECT sr.id" in statement and not validation_reached.is_set():
+            validation_reached.set()
+            assert allow_validation.wait(timeout=5)
+
+    connection.set_trace_callback(trace)
+
+    def compete() -> None:
+        assert validation_reached.wait(timeout=5)
+        try:
+            competing.execute(
+                "UPDATE style_documents SET current_text_revision_id = ?, "
+                "current_structure_revision_id = NULL WHERE id = ?",
+                (second_text, document_id),
+            )
+            competing.commit()
+            competing_updated.append(True)
+        except sqlite3.OperationalError:
+            competing.rollback()
+            competing_updated.append(False)
+        finally:
+            competing_finished.set()
+
+    def set_structure() -> None:
+        try:
+            StyleStructureService(connection).set_current_structure(
+                document_id, first_structure
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    competitor_thread = Thread(target=compete)
+    try:
+        competitor_thread.start()
+        set_structure()
+        competitor_thread.join(timeout=5)
+        assert not competitor_thread.is_alive()
+        assert not errors
+
+        if competing_updated == [False]:
+            competing.execute(
+                "UPDATE style_documents SET current_text_revision_id = ?, "
+                "current_structure_revision_id = NULL WHERE id = ?",
+                (second_text, document_id),
+            )
+            competing.commit()
+        assert current_pointers(connection, document_id) == (second_text, None)
+    finally:
+        connection.set_trace_callback(None)
+        competing.close()
 
 
 def test_current_structure_must_belong_to_same_document(

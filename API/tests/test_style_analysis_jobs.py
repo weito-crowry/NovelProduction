@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,7 @@ from novel_core.style_analysis.runtime_models import JobRecord
 from novel_api.app import create_app
 from novel_api.config import ApiSettings
 from novel_api.project_registry import ProjectRegistry
+from novel_api.style_analysis import job_worker as job_worker_module
 from novel_api.style_analysis.job_service import StyleJobService
 from novel_api.style_analysis.job_worker import StyleAnalysisWorker
 
@@ -100,6 +102,29 @@ def test_retry_creates_new_queued_job_and_preserves_terminal_original(
     assert read_job(data_root / "demo" / "story.db", original_id).status == "failed"
 
 
+def test_retry_notifies_after_commit_and_preserves_terminal_original(
+    data_root: Path,
+) -> None:
+    ProjectRegistry(data_root).create("Demo", project_id="demo")
+    project_db = data_root / "demo" / "story.db"
+    original_id = insert_job_row(
+        project_db, status="failed", job_type="analyze_document"
+    )
+    observed: list[str] = []
+
+    def notify(project_id: str) -> None:
+        observed.append(project_id)
+        assert select_job_statuses(project_db) == ("failed", "queued")
+
+    service = StyleJobService(data_root=data_root, notify=notify)
+    retried = service.retry("demo", original_id)
+
+    assert observed == ["demo"]
+    assert read_job(data_root / "demo" / "story.db", original_id).status == "failed"
+    assert retried.status == "queued"
+    assert json.loads(retried.payload_json) == {"retry_of_job_id": original_id}
+
+
 @pytest.mark.parametrize("status", ["queued", "running"])
 def test_retry_rejects_non_terminal_job(data_root: Path, status: str) -> None:
     ProjectRegistry(data_root).create("Demo", project_id="demo")
@@ -173,6 +198,150 @@ def test_worker_drain_uses_project_fifo_and_injected_executor(
     assert worker.drain_once() is True
     assert observed == [first_id, second_id]
     assert select_job_statuses(project_db) == ("succeeded", "succeeded")
+
+
+def test_worker_preserves_executor_terminal_statuses(
+    data_root: Path,
+) -> None:
+    ProjectRegistry(data_root).create("Demo", project_id="demo")
+    project_db = data_root / "demo" / "story.db"
+    partial_id = insert_job_row(
+        project_db, status="queued", job_type="analyze_document"
+    )
+    failed_id = insert_job_row(project_db, status="queued", job_type="analyze_document")
+
+    def executor(connection: sqlite3.Connection, job: JobRecord) -> None:
+        status = "partial" if job.id == partial_id else "failed"
+        connection.execute(
+            "UPDATE style_jobs SET status = ? WHERE id = ?", (status, job.id)
+        )
+
+    worker = StyleAnalysisWorker(data_root=data_root, executor=executor)
+    worker.notify("demo")
+
+    assert worker.drain_once() is True
+    assert worker.drain_once() is True
+    assert read_job(project_db, partial_id).status == "partial"
+    assert read_job(project_db, failed_id).status == "failed"
+
+
+def test_worker_does_not_execute_cancelled_job(
+    data_root: Path,
+) -> None:
+    ProjectRegistry(data_root).create("Demo", project_id="demo")
+    project_db = data_root / "demo" / "story.db"
+    job_id = insert_job_row(project_db, status="queued", job_type="analyze_document")
+    service = StyleJobService(data_root=data_root)
+    assert service.cancel("demo", job_id).status == "cancelled"
+    executed: list[int] = []
+
+    def executor(_connection: sqlite3.Connection, job: JobRecord) -> None:
+        executed.append(job.id)
+
+    worker = StyleAnalysisWorker(data_root=data_root, executor=executor)
+    worker.notify("demo")
+
+    assert worker.drain_once() is False
+    assert executed == []
+    assert read_job(project_db, job_id).status == "cancelled"
+
+
+def test_worker_atomic_claim_never_runs_after_queued_cancel_wins(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ProjectRegistry(data_root).create("Demo", project_id="demo")
+    project_db = data_root / "demo" / "story.db"
+    job_id = insert_job_row(project_db, status="queued", job_type="analyze_document")
+    competing = sqlite3.connect(project_db, timeout=0)
+    competing.execute("PRAGMA busy_timeout = 0")
+    cancel_won: list[bool] = []
+    executed: list[int] = []
+    original_open_database = job_worker_module.open_database
+
+    def open_with_competing_cancel(config: DatabaseConfig) -> sqlite3.Connection:
+        connection = original_open_database(config)
+
+        def trace(statement: str) -> None:
+            if "UPDATE style_jobs SET status = 'running'" not in statement:
+                return
+            try:
+                competing.execute(
+                    "UPDATE style_jobs SET status = 'cancelled', "
+                    "finished_at = CURRENT_TIMESTAMP WHERE id = ? "
+                    "AND status = 'queued'",
+                    (job_id,),
+                )
+                competing.commit()
+                cancel_won.append(True)
+            except sqlite3.OperationalError:
+                competing.rollback()
+                cancel_won.append(False)
+
+        connection.set_trace_callback(trace)
+        return connection
+
+    monkeypatch.setattr(job_worker_module, "open_database", open_with_competing_cancel)
+
+    def executor(_connection: sqlite3.Connection, job: JobRecord) -> None:
+        executed.append(job.id)
+
+    worker = StyleAnalysisWorker(data_root=data_root, executor=executor)
+    worker.notify("demo")
+    try:
+        assert worker.drain_once() is True
+    finally:
+        competing.close()
+
+    assert cancel_won in ([True], [False])
+    if cancel_won == [True]:
+        assert executed == []
+        assert read_job(project_db, job_id).status == "cancelled"
+
+
+def test_worker_project_failure_isolation_keeps_thread_and_processes_other_project(
+    data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = ProjectRegistry(data_root)
+    registry.create("Project A", project_id="a")
+    registry.create("Project B", project_id="b")
+    a_db = data_root / "a" / "story.db"
+    b_db = data_root / "b" / "story.db"
+    insert_job_row(a_db, status="queued", job_type="analyze_document")
+    b_job_id = insert_job_row(b_db, status="queued", job_type="analyze_document")
+    processed = Event()
+    observed: list[int] = []
+
+    def executor(_connection: sqlite3.Connection, job: JobRecord) -> None:
+        observed.append(job.id)
+        processed.set()
+
+    worker = StyleAnalysisWorker(data_root=data_root, executor=executor)
+    original_process = worker._process_one
+    original_remove = worker._remove_if_empty
+
+    def fail_project_a(project_id: str) -> bool:
+        if project_id == "a":
+            raise RuntimeError("project A database unavailable")
+        return original_process(project_id)
+
+    def fail_cleanup_a(project_id: str) -> None:
+        if project_id == "a":
+            raise RuntimeError("project A cleanup unavailable")
+        original_remove(project_id)
+
+    monkeypatch.setattr(worker, "_process_one", fail_project_a)
+    monkeypatch.setattr(worker, "_remove_if_empty", fail_cleanup_a)
+    worker.start()
+    try:
+        worker.notify("a")
+        worker.notify("b")
+        assert processed.wait(timeout=5)
+        assert worker.is_running
+    finally:
+        worker.stop()
+
+    assert observed == [b_job_id]
+    assert read_job(b_db, b_job_id).status == "succeeded"
 
 
 def test_app_lifespan_owns_one_worker_instance(data_root: Path) -> None:

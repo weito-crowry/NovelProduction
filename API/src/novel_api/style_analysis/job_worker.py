@@ -70,10 +70,10 @@ class StyleAnalysisWorker:
             return False
         try:
             processed = self._process_one(project_id)
+            if not processed:
+                self._remove_if_empty(project_id)
         except Exception:
-            processed = False
-        if not processed:
-            self._remove_if_empty(project_id)
+            return False
         return processed
 
     def _run(self) -> None:
@@ -117,6 +117,7 @@ class StyleAnalysisWorker:
 
     def _process_one(self, project_id: str) -> bool:
         with self._open_project_connection(project_id) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT id, job_type, payload_json, status, cancel_requested, "
                 "progress_current, progress_total, result_json, warning_json, "
@@ -125,13 +126,18 @@ class StyleAnalysisWorker:
                 "ORDER BY id LIMIT 1"
             ).fetchone()
             if row is None:
+                connection.rollback()
                 return False
             job = StyleJobService._record_from_row(row)
-            connection.execute(
+            claim = connection.execute(
                 "UPDATE style_jobs SET status = 'running', "
-                "started_at = COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = ?",
+                "started_at = COALESCE(started_at, CURRENT_TIMESTAMP) "
+                "WHERE id = ? AND status = 'queued'",
                 (job.id,),
             )
+            if claim.rowcount != 1:
+                connection.rollback()
+                return False
             connection.commit()
             running_row = connection.execute(
                 "SELECT id, job_type, payload_json, status, cancel_requested, "
@@ -145,17 +151,19 @@ class StyleAnalysisWorker:
             try:
                 assert self._executor is not None
                 self._executor(connection, running)
-                cancel_row = connection.execute(
-                    "SELECT cancel_requested FROM style_jobs WHERE id = ?",
+                status_row = connection.execute(
+                    "SELECT status, cancel_requested FROM style_jobs WHERE id = ?",
                     (job.id,),
                 ).fetchone()
-                assert cancel_row is not None
-                final_status = "cancelled" if cancel_row[0] else "succeeded"
-                connection.execute(
-                    "UPDATE style_jobs SET status = ?, "
-                    "finished_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (final_status, job.id),
-                )
+                assert status_row is not None
+                current_status, cancel_requested = status_row
+                if current_status == "running":
+                    final_status = "cancelled" if cancel_requested else "succeeded"
+                    connection.execute(
+                        "UPDATE style_jobs SET status = ?, "
+                        "finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (final_status, job.id),
+                    )
             except Exception as exc:
                 connection.execute(
                     "UPDATE style_jobs SET status = 'failed', "

@@ -34,6 +34,9 @@ class DatabaseCursor(Protocol):
     @property
     def lastrowid(self) -> int | None: ...
 
+    @property
+    def rowcount(self) -> int: ...
+
     def fetchone(self) -> Sequence[object] | None: ...
 
 
@@ -43,6 +46,8 @@ class DatabaseConnection(Protocol):
     ) -> DatabaseCursor: ...
 
     def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
 
     def close(self) -> None: ...
 
@@ -142,7 +147,9 @@ class StyleJobService:
             retried = self._get_from_connection(connection, cursor.lastrowid)
             if retried is None:
                 raise RuntimeError("retry job retrieval failed")
-            return retried
+        if self._notify is not None:
+            self._notify(project_id)
+        return retried
 
     def set_status(self, project_id: str, job_id: int, status: JobStatus) -> JobRecord:
         if status not in {
