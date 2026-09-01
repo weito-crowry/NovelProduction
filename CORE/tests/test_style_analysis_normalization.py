@@ -185,6 +185,13 @@ def test_nfc_alignment_looks_through_decomposing_starters() -> None:
     assert unicodedata.is_normalized("NFC", result.canonical_text)
 
 
+def test_nfc_piece_groups_do_not_absorb_line_boundaries() -> None:
+    leading = normalize_text("\n\u0f73A", []).canonical_text
+    assert leading == "\u0f71\u0f72A"
+    collapsed = normalize_text("A\n\n\n\u0f73B", []).canonical_text
+    assert collapsed == "A\n\n\u0f71\u0f72B"
+
+
 def test_controls_and_tabs_are_processed_inside_reordered_pieces() -> None:
     assert normalize_text("\x00\u0315\u0300A", []).canonical_text == "\u0300\u0315A"
     assert normalize_text("\t\u0315\u0300A", []).canonical_text == " \u0300\u0315A"
