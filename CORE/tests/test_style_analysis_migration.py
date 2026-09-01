@@ -13,6 +13,7 @@ EXPECTED_LEGACY_MIGRATIONS = tuple(
 )
 FOUNDATION_MIGRATION = "006_style_analysis_foundation.sql"
 SEMANTICS_MIGRATION = "007_style_analysis_semantics.sql"
+CORPUS_PROFILE_MIGRATION = "008_style_analysis_corpus_profile.sql"
 FOUNDATION_TABLES = (
     "style_jobs",
     "style_sources",
@@ -40,6 +41,16 @@ FOUNDATION_TABLES = (
     "style_review_items",
     "style_inference_reviews",
     "style_manual_overrides",
+    "style_measurements",
+    "style_corpora",
+    "style_corpus_work_memberships",
+    "style_corpus_episode_memberships",
+    "style_aggregates",
+    "style_aggregate_measurements",
+    "style_profiles",
+    "style_profile_versions",
+    "style_rules",
+    "style_rule_aggregate_sources",
 )
 
 
@@ -76,7 +87,12 @@ def test_legacy_migration_bytes_remain_unchanged(tmp_path: Path) -> None:
         )
         assert applied == tuple(
             sorted(
-                (*EXPECTED_LEGACY_MIGRATIONS, FOUNDATION_MIGRATION, SEMANTICS_MIGRATION)
+                (
+                    *EXPECTED_LEGACY_MIGRATIONS,
+                    FOUNDATION_MIGRATION,
+                    SEMANTICS_MIGRATION,
+                    CORPUS_PROFILE_MIGRATION,
+                )
             )
         )
     finally:
@@ -104,7 +120,12 @@ def test_foundation_schema_supports_fresh_and_existing_databases(
     copy_migrations(
         MIGRATION_DIR,
         upgraded_dir,
-        (*EXPECTED_LEGACY_MIGRATIONS, FOUNDATION_MIGRATION, SEMANTICS_MIGRATION),
+        (
+            *EXPECTED_LEGACY_MIGRATIONS,
+            FOUNDATION_MIGRATION,
+            SEMANTICS_MIGRATION,
+            CORPUS_PROFILE_MIGRATION,
+        ),
     )
     upgraded = open_database(
         DatabaseConfig(db_path=legacy_path, migration_dir=upgraded_dir)

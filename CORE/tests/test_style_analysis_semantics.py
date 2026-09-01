@@ -36,7 +36,7 @@ def test_semantics_migration_creates_all_sa_d_tables(tmp_path: Path) -> None:
                 "AND name LIKE 'style_%' ORDER BY rowid"
             )
         )
-        assert tables[-11:] == (
+        assert tables[-21:-10] == (
             "style_entities",
             "style_mentions",
             "style_entity_aliases",

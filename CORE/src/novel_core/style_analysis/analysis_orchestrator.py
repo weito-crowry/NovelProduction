@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import cast
 
 from novel_core.errors import AnalysisCancelledError
+from novel_core.style_analysis.aggregate_repository import MeasurementRepository
 from novel_core.style_analysis.analysis_orchestrator_semantic import (
     SemanticAnalysisMixin,
 )
@@ -149,6 +150,7 @@ class DocumentAnalysisOrchestrator(
         self.entities = EntityService(connection)
         self.terms = TermService(connection)
         self.semantic = SemanticService(connection)
+        self.measurements = MeasurementRepository(connection)
 
     def analyze_document(
         self,
@@ -541,6 +543,19 @@ class DocumentAnalysisOrchestrator(
                 }
                 for item in measurements
             ]
+            for item in measurements:
+                definition = BASIC_METRIC_DEFINITIONS[item.metric_name]
+                self.measurements.insert(
+                    analysis_run_id=run_id,
+                    structure_revision_id=structure_id,
+                    target_type=item.target_type,
+                    target_id=item.target_id,
+                    metric_name=item.metric_name,
+                    metric_version=item.metric_version,
+                    value=item.value,
+                    value_type=definition.value_type,
+                    sample_count=item.sample_count,
+                )
             self._finish(run_id)
             return run_id, values
         except Exception as exc:

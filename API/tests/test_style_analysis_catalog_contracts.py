@@ -8,6 +8,7 @@ import pytest
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.runtime_models import JobRecord
 from novel_core.style_analysis.runtime_registry import ANALYZERS_BY_ID
+from pydantic import ValidationError
 from test_style_analysis_jobs import (
     _create_reference_analysis,
     _FailingSpeakerModel,
@@ -16,6 +17,7 @@ from test_style_analysis_jobs import (
 
 from novel_api.project_registry import ProjectRegistry
 from novel_api.routes.style_analysis import _job_response
+from novel_api.schemas.style_analysis import ProfileRuleRequest
 from novel_api.style_analysis import catalog_current as catalog_current_module
 from novel_api.style_analysis.catalog_service import StyleAnalysisCatalogService
 from novel_api.style_analysis.job_service import StyleJobService
@@ -41,6 +43,20 @@ def test_job_response_exposes_progress_dto() -> None:
     )
     response = _job_response(job)
     assert response.progress == {"current": 2, "total": 5}
+
+
+def test_profile_rule_api_rejects_boolean_numeric_values() -> None:
+    with pytest.raises(ValidationError):
+        ProfileRuleRequest.model_validate(
+            {
+                "target_scope": "document",
+                "scope_selector": {},
+                "metric_name": "text.char_count",
+                "metric_version": 1,
+                "min_value": True,
+                "max_value": 2,
+            }
+        )
 
 
 def test_partial_terminal_status_is_limited_to_analysis_jobs(

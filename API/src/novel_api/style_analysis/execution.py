@@ -5,7 +5,9 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from novel_core.errors import AnalysisCancelledError
+from novel_core.style_analysis.aggregate_service import AggregateService
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
+from novel_core.style_analysis.corpus_models import AggregateSpec
 from novel_core.style_analysis.model_contracts import ModelClient
 from novel_core.style_analysis.runtime_models import JobRecord
 
@@ -47,6 +49,8 @@ def execute_style_job(
             )
         elif job.job_type == "analyze_reference_work":
             _work(connection, job, payload, model_client, model_provider, model_id)
+        elif job.job_type == "recompute_aggregate":
+            _aggregate(connection, job, payload)
         else:
             _fail(connection, job.id, "JOB_TYPE_NOT_IMPLEMENTED", job.job_type)
     except AnalysisCancelledError:
@@ -203,6 +207,76 @@ def _work(
         final,
         warnings,
         {"reference_work_id": work_id, "episodes": results},
+    )
+
+
+def _aggregate(
+    connection: DatabaseConnection,
+    job: JobRecord,
+    payload: Mapping[str, object],
+) -> None:
+    container_type = payload.get("container_type")
+    if container_type not in {"reference_work", "corpus"}:
+        raise ValueError("AGGREGATE_CONTAINER_INVALID")
+    container_id = _positive_int(payload.get("container_id"), "CONTAINER_ID_REQUIRED")
+    target_type = payload.get("measurement_target_type")
+    if target_type not in {"document", "scene"}:
+        raise ValueError("AGGREGATE_TARGET_INVALID")
+    raw_filter = payload.get("filter", {})
+    if not isinstance(raw_filter, dict):
+        raise ValueError("AGGREGATE_FILTER_INVALID")
+    metric_names = payload.get("metric_names")
+    if (
+        not isinstance(metric_names, list)
+        or not metric_names
+        or any(not isinstance(name, str) for name in metric_names)
+    ):
+        raise ValueError("METRIC_NAMES_REQUIRED")
+    filter_json = json.dumps(
+        raw_filter,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    connection.execute(
+        "UPDATE style_jobs SET progress_current = 0, progress_total = ? WHERE id = ?",
+        (len(metric_names), job.id),
+    )
+    connection.commit()
+    service = AggregateService(cast(Any, connection))
+    result = service.recompute(
+        (
+            AggregateSpec(
+                cast(Any, container_type),
+                container_id,
+                cast(Any, target_type),
+                filter_json,
+                metric_names[0],
+                1,
+            ),
+        ),
+        tuple(metric_names),
+    )
+    connection.execute(
+        "UPDATE style_jobs SET progress_current = ? WHERE id = ?",
+        (len(metric_names), job.id),
+    )
+    aggregate_ids: dict[str, dict[str, int]] = {}
+    for aggregate in result.aggregates:
+        aggregate_ids.setdefault(aggregate.metric_name, {})[aggregate.statistic] = (
+            aggregate.id
+        )
+    _store_result(
+        connection,
+        job.id,
+        "succeeded",
+        result.warnings,
+        {
+            "container_type": container_type,
+            "container_id": container_id,
+            "aggregates": aggregate_ids,
+        },
     )
 
 

@@ -4,12 +4,14 @@ import json
 from collections.abc import Sequence
 from typing import Any, cast
 
+from novel_core.style_analysis.aggregate_repository import MeasurementRepository
+from novel_core.style_analysis.aggregate_service import AggregateService
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
 from novel_core.style_analysis.metrics import BASIC_METRIC_DEFINITIONS
+from novel_core.style_analysis.profile_service import ProfileService
 from novel_core.style_analysis.runtime_models import AnalysisRunRecord
-from novel_core.style_analysis.semantic_models import AnnotationRecord
 from novel_core.style_analysis.semantic_repository import SemanticRepository
 from novel_core.style_analysis.source_models import (
     ReferenceEpisodeRecord,
@@ -17,11 +19,15 @@ from novel_core.style_analysis.source_models import (
 )
 from novel_core.style_analysis.source_repository import StyleSourceRepository
 
+from novel_api.style_analysis.catalog_corpus_profile import (
+    StyleAnalysisCorpusProfileMixin,
+)
 from novel_api.style_analysis.catalog_current import (
     resolution_state_changed,
     select_current_runs,
 )
 from novel_api.style_analysis.catalog_effective import effective_outputs
+from novel_api.style_analysis.catalog_outputs import StyleAnalysisOutputsMixin
 from novel_api.style_analysis.job_service import DatabaseConnection
 
 _SA_D_ANALYZERS = (
@@ -47,12 +53,17 @@ def _canonical_json(value: object) -> str:
     )
 
 
-class StyleAnalysisCatalogService:
+class StyleAnalysisCatalogService(
+    StyleAnalysisCorpusProfileMixin, StyleAnalysisOutputsMixin
+):
     def __init__(self, connection: DatabaseConnection) -> None:
         self._repository = StyleSourceRepository(cast(Any, connection))
         self._connection = connection
         self._runs = AnalysisRunRepository(cast(Any, connection))
         self._annotations = SemanticRepository(cast(Any, connection))
+        self._measurements = MeasurementRepository(cast(Any, connection))
+        self._aggregate_service = AggregateService(cast(Any, connection))
+        self._profile_service = ProfileService(cast(Any, connection))
 
     def list_reference_works(self) -> tuple[ReferenceWorkRecord, ...]:
         return self._repository.list_reference_works()
@@ -109,8 +120,21 @@ class StyleAnalysisCatalogService:
         return tuple(outputs)
 
     def list_run_measurements(self, run_id: int) -> tuple[dict[str, object], ...]:
-        # Measurement persistence is introduced by the later metrics phase.
-        return ()
+        return tuple(
+            {
+                "id": measurement.id,
+                "analysis_run_id": measurement.analysis_run_id,
+                "structure_revision_id": measurement.structure_revision_id,
+                "target_type": measurement.target_type,
+                "target_id": measurement.target_id,
+                "metric_name": measurement.metric_name,
+                "metric_version": measurement.metric_version,
+                "value": measurement.value,
+                "sample_count": measurement.sample_count,
+                "created_at": measurement.created_at,
+            }
+            for measurement in self._measurements.list_for_run(run_id)
+        )
 
     def get_semantics(
         self, document_id: int, structure_revision_id: int
@@ -524,77 +548,3 @@ class StyleAnalysisCatalogService:
             }
         }
         return run.config_json == _canonical_json(expected)
-
-    def list_annotations(self, document_id: int) -> tuple[dict[str, object], ...]:
-        rows = self._connection.execute(
-            "SELECT a.id, a.annotation_type, a.subject_type, a.subject_id, "
-            "a.value_json, a.confidence, a.analysis_run_id, a.start_cp, a.end_cp, "
-            "a.created_at FROM style_annotations a "
-            "JOIN style_analysis_runs r ON r.id = a.analysis_run_id "
-            "WHERE r.document_id = ? ORDER BY a.id",
-            (document_id,),
-        ).fetchall()
-        return tuple(
-            {
-                "id": row[0],
-                "annotation_type": row[1],
-                "subject_type": row[2],
-                "subject_id": row[3],
-                "value": json.loads(row[4]),
-                "confidence": row[5],
-                "analysis_run_id": row[6],
-                "start_cp": row[7],
-                "end_cp": row[8],
-                "created_at": row[9],
-            }
-            for row in rows
-        )
-
-    def list_boundary_proposals(
-        self,
-        document_id: int,
-        *,
-        min_confidence: float = 0.60,
-        include_below_threshold: bool = False,
-    ) -> tuple[dict[str, object], ...]:
-        confidence_clause = "" if include_below_threshold else "AND a.confidence >= ? "
-        parameters: tuple[object, ...] = (document_id,)
-        if not include_below_threshold:
-            parameters += (min_confidence,)
-        rows = self._connection.execute(
-            "SELECT a.id, a.subject_id, a.value_json, a.confidence, "
-            "a.analysis_run_id "
-            "FROM style_annotations a "
-            "JOIN style_analysis_runs r ON r.id = a.analysis_run_id "
-            "WHERE r.document_id = ? "
-            "AND a.annotation_type = 'scene_boundary_candidate' "
-            f"{confidence_clause}ORDER BY a.id",
-            parameters,
-        ).fetchall()
-        return tuple(
-            {
-                "id": row[0],
-                "subject_type": "block",
-                "subject_id": row[1],
-                "after_block_id": row[1],
-                "value": json.loads(row[2]),
-                "confidence": row[3],
-                "analysis_run_id": row[4],
-            }
-            for row in rows
-        )
-
-    @staticmethod
-    def _annotation_response(annotation: AnnotationRecord) -> dict[str, object]:
-        return {
-            "id": annotation.id,
-            "annotation_type": annotation.annotation_type,
-            "subject_type": annotation.subject_type,
-            "subject_id": annotation.subject_id,
-            "value": json.loads(annotation.value_json),
-            "confidence": annotation.confidence,
-            "analysis_run_id": annotation.analysis_run_id,
-            "start_cp": annotation.start_cp,
-            "end_cp": annotation.end_cp,
-            "created_at": annotation.created_at,
-        }

@@ -21,6 +21,9 @@ from novel_core.style_analysis.source_models import (
 
 from novel_api.dependencies import resolve_project_target
 from novel_api.routes._phase1 import envelope
+from novel_api.routes.style_analysis_corpus_profile import (
+    router as corpus_profile_router,
+)
 from novel_api.schemas.common import ProjectEnvelope
 from novel_api.schemas.style_analysis import (
     ReferenceEpisodeResponse,
@@ -458,3 +461,6 @@ def _job_response(job: JobRecord) -> StyleJobResponse:
         error_code=job.error_code,
         error_message=job.error_message,
     )
+
+
+router.include_router(corpus_profile_router)

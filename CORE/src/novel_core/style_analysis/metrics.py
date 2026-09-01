@@ -240,6 +240,17 @@ def _percentile(values: list[int], quantile: float) -> float:
     return float(ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower))
 
 
+def percentile(values: list[float], quantile: float) -> float:
+    """Return the v1 linear-interpolation percentile used by all metrics."""
+    if not values:
+        raise ValueError("PERCENTILE_EMPTY")
+    ordered = sorted(float(value) for value in values)
+    index = (len(ordered) - 1) * quantile
+    lower = floor(index)
+    upper = min(lower + 1, len(ordered) - 1)
+    return float(ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower))
+
+
 def _outer_quote_length(value: str) -> int:
     if value.startswith("「") and value.endswith("」") and len(value) >= 2:
         return _metric_char_count(value[1:-1])

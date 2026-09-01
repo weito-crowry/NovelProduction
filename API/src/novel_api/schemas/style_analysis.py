@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    model_validator,
+)
 
 
 class StyleImportResponse(BaseModel):
@@ -72,3 +79,98 @@ class StyleJobResponse(BaseModel):
     warnings: list[Any]
     error_code: str | None
     error_message: str | None
+
+
+class CorpusCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str = ""
+
+
+class CorpusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+
+
+class CorpusWorkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_work_id: int
+    include_all_episodes: bool = True
+
+
+class CorpusEpisodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["include", "exclude"]
+
+
+class AggregateRecomputeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    measurement_target_type: Literal["document", "scene"]
+    filter: dict[str, Any] = Field(default_factory=dict)
+    metric_names: list[str] = Field(min_length=1)
+
+
+class ProfileAggregateGroupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preferred_aggregate_id: int
+    min_aggregate_id: int
+    max_aggregate_id: int
+
+
+class ProfileRuleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_scope: Literal["document", "scene", "character"]
+    scope_selector: dict[str, Any]
+    metric_name: str
+    metric_version: int
+    preferred_value: StrictInt | StrictFloat | None = None
+    min_value: StrictInt | StrictFloat | None = None
+    max_value: StrictInt | StrictFloat | None = None
+    weight: StrictInt | StrictFloat = 1.0
+    enabled: bool = True
+    severity_policy: Literal["standard"] = "standard"
+
+
+class ProfileFromCorpusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    corpus_id: int
+    name: str
+    description: str = ""
+    rules: list[ProfileAggregateGroupRequest]
+
+
+class ProfileManualRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str = ""
+    rules: list[ProfileRuleRequest]
+
+
+class ProfileNewVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parent_version_no: int
+    rules: list[ProfileRuleRequest]
+
+
+class ProfilePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+
+
+class ProfileActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version_no: int
