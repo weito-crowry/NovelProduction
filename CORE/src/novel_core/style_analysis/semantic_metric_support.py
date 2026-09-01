@@ -4,9 +4,20 @@ import json
 import sqlite3
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import cast
 
 from novel_core.style_analysis.structure_models import BlockRecord
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveValue:
+    value: object
+    source: str
+    confidence: float | None = None
+    analysis_run_id: int | None = None
+    override_id: int | None = None
+    stale_override: bool = False
 
 
 def load_annotations(
@@ -47,28 +58,52 @@ def effective_block_label(
     raw: tuple[str, object, object] | None,
     threshold: float,
 ) -> tuple[str | None, str]:
+    result = resolve_block_semantic(connection, block_id, run_id, raw, threshold)
+    return (
+        result.value if isinstance(result.value, str) else None,
+        result.source,
+    )
+
+
+def resolve_block_semantic(
+    connection: sqlite3.Connection,
+    block_id: int,
+    run_id: int,
+    raw: tuple[str, object, object] | None,
+    threshold: float,
+) -> EffectiveValue:
     override = latest_override(connection, "block", block_id, "block.semantic_primary")
     if override is not None:
-        operation, value_json = override
+        override_id, operation, value_json = override
         if operation == "set":
             label = json_field(value_json, "label")
             if label is None and isinstance(value_json, str):
                 label = value_json
-            return (
+            return EffectiveValue(
                 label if isinstance(label, str) else None,
                 "manual" if isinstance(label, str) else "unknown",
+                override_id=override_id,
             )
     review = review_status(
         connection, "block", block_id, "block.semantic_primary", run_id
     )
     if review == "rejected":
-        return None, "unknown"
+        return EffectiveValue(None, "unknown", analysis_run_id=run_id)
     label, confidence, _ = label_value(raw)
     if label is None:
-        return None, "unknown"
+        return EffectiveValue(
+            None, "unknown", confidence=confidence, analysis_run_id=run_id
+        )
     if review == "confirmed" or confidence >= threshold:
-        return label, "inferred"
-    return "unclear", "inferred"
+        return EffectiveValue(
+            label,
+            "confirmed" if review == "confirmed" else "inferred",
+            confidence=confidence,
+            analysis_run_id=run_id,
+        )
+    return EffectiveValue(
+        "unclear", "inferred", confidence=confidence, analysis_run_id=run_id
+    )
 
 
 def effective_speaker(
@@ -78,22 +113,50 @@ def effective_speaker(
     raw: tuple[str, object, object] | None,
     threshold: float,
 ) -> int | None:
-    override = latest_override(connection, "block", block_id, "block.speaker")
+    result = resolve_speaker(connection, block_id, run_id, raw, threshold)
+    return result.value if isinstance(result.value, int) else None
+
+
+def resolve_speaker(
+    connection: sqlite3.Connection,
+    block_id: int,
+    run_id: int,
+    raw: tuple[str, object, object] | None,
+    threshold: float,
+) -> EffectiveValue:
+    override = latest_override(connection, "block", block_id, "block.speaker_entity_id")
     if override is not None:
-        operation, value_json = override
-        if operation != "set":
-            return None
-        value = json_field(value_json, "speaker_entity_id")
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+        override_id, operation, value_json = override
+        if operation == "clear":
+            return EffectiveValue(None, "manual", override_id=override_id)
+        if operation == "set":
+            value = json_field(value_json, "speaker_entity_id")
+            return EffectiveValue(
+                value
+                if isinstance(value, int) and not isinstance(value, bool)
+                else None,
+                "manual",
+                override_id=override_id,
+            )
     review = review_status(connection, "block", block_id, "block.speaker", run_id)
     if review == "rejected":
-        return None
+        return EffectiveValue(None, "unknown", analysis_run_id=run_id)
     entity_id, confidence, reason = speaker_value(raw)
-    if entity_id is None or confidence < threshold:
-        return None
-    if reason == "turn_taking" and review != "confirmed":
-        return None
-    return entity_id
+    if entity_id is None:
+        return EffectiveValue(
+            None, "unknown", confidence=confidence, analysis_run_id=run_id
+        )
+    if review == "confirmed":
+        return EffectiveValue(
+            entity_id, "confirmed", confidence=confidence, analysis_run_id=run_id
+        )
+    if confidence < threshold or reason == "turn_taking":
+        return EffectiveValue(
+            None, "unknown", confidence=confidence, analysis_run_id=run_id
+        )
+    return EffectiveValue(
+        entity_id, "inferred", confidence=confidence, analysis_run_id=run_id
+    )
 
 
 def effective_novelty(
@@ -102,16 +165,33 @@ def effective_novelty(
     run_id: int,
     raw: tuple[int, str, object, object],
 ) -> object:
+    return resolve_term_novelty(connection, term_id, run_id, raw).value
+
+
+def resolve_term_novelty(
+    connection: sqlite3.Connection,
+    term_id: int,
+    run_id: int,
+    raw: tuple[int, str, object, object],
+) -> EffectiveValue:
     override = latest_override(connection, "term", term_id, "term.novelty")
     if override is not None:
-        operation, value_json = override
-        if operation != "set":
-            return None
-        return json_field(value_json, "value")
+        override_id, operation, value_json = override
+        if operation == "clear":
+            return EffectiveValue(None, "manual", override_id=override_id)
+        if operation == "set":
+            return EffectiveValue(
+                json_field(value_json, "value"), "manual", override_id=override_id
+            )
     review = review_status(connection, "term", term_id, "term.novelty", run_id)
     if review == "rejected":
-        return None
-    return annotation_value(raw[1], "value")
+        return EffectiveValue(None, "unknown", analysis_run_id=run_id)
+    return EffectiveValue(
+        annotation_value(raw[1], "value"),
+        "confirmed" if review == "confirmed" else "inferred",
+        confidence=_confidence(raw[2]),
+        analysis_run_id=run_id,
+    )
 
 
 def speaker_value(
@@ -130,7 +210,7 @@ def speaker_value(
         if isinstance(entity_id, int) and not isinstance(entity_id, bool)
         else None,
         float(value[1]) if isinstance(value[1], (int, float)) else 0.0,
-        str(reason),
+        str(raw.get("reason_code", reason)),
     )
 
 
@@ -156,7 +236,9 @@ def annotation_value(value_json: object, key: str) -> object:
         value = json.loads(cast(str, value_json))
     except (TypeError, json.JSONDecodeError):
         return None
-    return value.get(key) if isinstance(value, dict) else None
+    if isinstance(value, dict):
+        return value.get(key)
+    return value if key == "value" else None
 
 
 def json_field(value_json: object, key: str) -> object:
@@ -169,19 +251,147 @@ def json_field(value_json: object, key: str) -> object:
     return value if key in {"value", "label", "speaker_entity_id"} else None
 
 
+def _confidence(value: object) -> float | None:
+    return (
+        float(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        else None
+    )
+
+
+def resolve_mention_entity(
+    connection: sqlite3.Connection,
+    mention_id: int,
+    run_id: int,
+    raw: tuple[str, object, object] | None,
+) -> EffectiveValue:
+    override = latest_override(connection, "mention", mention_id, "mention.entity_id")
+    if override is not None:
+        override_id, operation, value_json = override
+        if operation == "clear":
+            return EffectiveValue(None, "manual", override_id=override_id)
+        if operation == "set":
+            value = json_field(value_json, "value")
+            return EffectiveValue(
+                value
+                if isinstance(value, int) and not isinstance(value, bool)
+                else None,
+                "manual",
+                override_id=override_id,
+            )
+    review = review_status(
+        connection, "mention", mention_id, "mention.entity_resolution", run_id
+    )
+    if review == "rejected":
+        return EffectiveValue(None, "unknown", analysis_run_id=run_id)
+    value = annotation_value(raw[0], "entity_id") if raw is not None else None
+    return EffectiveValue(
+        value if isinstance(value, int) and not isinstance(value, bool) else None,
+        "confirmed" if review == "confirmed" else "inferred",
+        confidence=_confidence(raw[1]) if raw is not None else None,
+        analysis_run_id=run_id,
+    )
+
+
+def resolve_term_mention_explanation(
+    connection: sqlite3.Connection,
+    mention_id: int,
+    explanation_run_id: int | None,
+    threshold: float,
+) -> EffectiveValue:
+    override = latest_override(
+        connection,
+        "term_mention",
+        mention_id,
+        "term_mention.sufficient_explanation_annotation_id",
+    )
+    if override is not None:
+        override_id, operation, value_json = override
+        if operation == "clear":
+            return EffectiveValue(None, "manual", override_id=override_id)
+        if operation == "set":
+            annotation_id = json_field(value_json, "value")
+            if isinstance(annotation_id, int) and not isinstance(annotation_id, bool):
+                row = connection.execute(
+                    "SELECT value_json, confidence, analysis_run_id, start_cp "
+                    "FROM style_annotations WHERE id = ?",
+                    (annotation_id,),
+                ).fetchone()
+                if row is not None and _is_sufficient_explanation(row[0]):
+                    return EffectiveValue(
+                        {
+                            "annotation_id": annotation_id,
+                            "block_id": _json_field(row[0], "block_id"),
+                            "start_cp": row[3],
+                        },
+                        "manual",
+                        confidence=_confidence(row[1]),
+                        analysis_run_id=int(row[2]),
+                        override_id=override_id,
+                    )
+            return EffectiveValue(None, "manual", override_id=override_id)
+    if explanation_run_id is None:
+        return EffectiveValue(None, "unknown")
+    row = connection.execute(
+        "SELECT id, value_json, confidence, start_cp FROM style_annotations "
+        "WHERE analysis_run_id = ? AND annotation_type = 'term_explanation' "
+        "AND subject_type = 'term_mention' AND subject_id = ?",
+        (explanation_run_id, mention_id),
+    ).fetchone()
+    if row is None:
+        return EffectiveValue(None, "inferred", analysis_run_id=explanation_run_id)
+    review = review_status(
+        connection,
+        "term_mention",
+        mention_id,
+        "term_mention.explanation",
+        explanation_run_id,
+    )
+    if review == "rejected":
+        return EffectiveValue(None, "unknown", analysis_run_id=explanation_run_id)
+    sufficient = _is_sufficient_explanation(row[1])
+    confidence = _confidence(row[2])
+    if not sufficient or (review != "confirmed" and (confidence or 0.0) < threshold):
+        return EffectiveValue(
+            None, "unknown", confidence=confidence, analysis_run_id=explanation_run_id
+        )
+    return EffectiveValue(
+        {
+            "annotation_id": int(row[0]),
+            "block_id": _json_field(row[1], "block_id"),
+            "start_cp": row[3],
+        },
+        "confirmed" if review == "confirmed" else "inferred",
+        confidence=confidence,
+        analysis_run_id=explanation_run_id,
+    )
+
+
+def _is_sufficient_explanation(value_json: object) -> bool:
+    return _json_field(value_json, "completeness") == "sufficient"
+
+
+def _json_field(value_json: object, key: str) -> object:
+    try:
+        value = json.loads(cast(str, value_json))
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return value.get(key) if isinstance(value, dict) else None
+
+
 def latest_override(
     connection: sqlite3.Connection,
     subject_type: str,
     subject_id: int,
     field_path: str,
-) -> tuple[str, object] | None:
+) -> tuple[int, str, object] | None:
     row = connection.execute(
-        "SELECT operation, value_json FROM style_manual_overrides "
+        "SELECT id, operation, value_json FROM style_manual_overrides "
         "WHERE subject_type = ? AND subject_id = ? AND field_path = ? "
         "ORDER BY created_at DESC, id DESC LIMIT 1",
         (subject_type, subject_id, field_path),
     ).fetchone()
-    return None if row is None else (str(row[0]), row[1])
+    return None if row is None else (int(row[0]), str(row[1]), row[2])
 
 
 def review_status(
@@ -200,7 +410,14 @@ def review_status(
     return None if row is None else str(row[0])
 
 
-def eligible_persons(connection: sqlite3.Connection, speaker_run_id: int) -> set[int]:
+def eligible_persons(
+    connection: sqlite3.Connection,
+    speaker_run_id: int,
+    *,
+    blocks: Sequence[BlockRecord] = (),
+    entity_run_id: int | None = None,
+    threshold: float = 0.85,
+) -> set[int]:
     resolver = connection.execute(
         "SELECT links.dependency_run_id FROM style_analysis_run_dependencies links "
         "JOIN style_analysis_runs dep ON dep.id = links.dependency_run_id "
@@ -208,17 +425,60 @@ def eligible_persons(connection: sqlite3.Connection, speaker_run_id: int) -> set
         "ORDER BY links.dependency_run_id DESC LIMIT 1",
         (speaker_run_id,),
     ).fetchone()
-    annotation_run_id = resolver[0] if resolver is not None else speaker_run_id
-    annotation_type = "mention.entity_resolution" if resolver is not None else "speaker"
-    key = "entity_id" if resolver is not None else "speaker_entity_id"
+    annotation_run_id = (
+        entity_run_id
+        if entity_run_id is not None
+        else int(resolver[0])
+        if resolver is not None
+        else speaker_run_id
+    )
     result: set[int] = set()
-    rows = connection.execute(
-        "SELECT value_json FROM style_annotations "
-        "WHERE analysis_run_id = ? AND annotation_type = ?",
-        (annotation_run_id, annotation_type),
+    mention_rows = connection.execute(
+        "SELECT subject_id, value_json, confidence FROM style_annotations "
+        "WHERE analysis_run_id = ? AND annotation_type = 'mention.entity_resolution'",
+        (annotation_run_id,),
     ).fetchall()
-    for (value_json,) in rows:
-        entity_id = annotation_value(value_json, key)
+    raw_by_mention = {
+        int(subject_id): (str(value_json), confidence, None)
+        for subject_id, value_json, confidence in mention_rows
+    }
+    structure_row = connection.execute(
+        "SELECT structure_revision_id FROM style_analysis_runs WHERE id = ?",
+        (annotation_run_id,),
+    ).fetchone()
+    mention_ids = {
+        int(row[0])
+        for row in connection.execute(
+            "SELECT id FROM style_mentions WHERE structure_revision_id = ?",
+            (structure_row[0],) if structure_row is not None else (-1,),
+        ).fetchall()
+    }
+    mention_ids.update(raw_by_mention)
+    for subject_id in mention_ids:
+        raw = raw_by_mention.get(subject_id)
+        entity_id = resolve_mention_entity(
+            connection,
+            subject_id,
+            annotation_run_id,
+            raw,
+        ).value
+        if (
+            isinstance(entity_id, int)
+            and not isinstance(entity_id, bool)
+            and enabled_person(connection, entity_id)
+        ):
+            result.add(entity_id)
+    speaker_annotations = load_annotations(connection, speaker_run_id, "speaker")
+    for block in blocks:
+        if block.block_type != "dialogue":
+            continue
+        entity_id = resolve_speaker(
+            connection,
+            block.id,
+            speaker_run_id,
+            speaker_annotations.get(block.id),
+            threshold,
+        ).value
         if (
             isinstance(entity_id, int)
             and not isinstance(entity_id, bool)
@@ -235,9 +495,9 @@ def enabled_person(connection: sqlite3.Connection, entity_id: int) -> bool:
     if row is None or row[0] != "person":
         return False
     override = latest_override(connection, "entity", entity_id, "entity.enabled")
-    if override is None or override[0] != "set":
+    if override is None or override[1] != "set":
         return True
-    return json_field(override[1], "value") is not False
+    return json_field(override[2], "value") is not False
 
 
 def speaker_streaks(

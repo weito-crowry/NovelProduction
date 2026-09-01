@@ -6,6 +6,7 @@ from pathlib import Path
 from test_style_analysis_migration import open_test_database
 
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
+from novel_core.style_analysis.semantic_metric_support import resolve_speaker
 from novel_core.style_analysis.semantic_metrics import calculate_semantic_metrics
 from novel_core.style_analysis.semantic_repository import SemanticRepository
 from novel_core.style_analysis.structure_models import BlockRecord, SceneRecord
@@ -289,5 +290,74 @@ def test_term_metrics_use_first_mentions_and_sufficient_explanation(
         assert values[("document", "term.new_per_1000_chars")] == 1000 / 7
         assert values[("scene", "term.explained_same_scene_ratio")] == 1
         assert values[("document", "term.explanation_delay.p50")] == 0
+    finally:
+        connection.close()
+
+
+def test_confirmed_and_manual_speaker_values_use_registry_field_paths(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, _, blocks = _fixture(tmp_path)
+    try:
+        person_id = connection.execute(
+            "SELECT id FROM style_entities WHERE document_id = ?", (document_id,)
+        ).fetchone()[0]
+        raw = (json.dumps({"speaker_entity_id": person_id}), 0.1, None)
+        connection.execute(
+            "INSERT INTO style_inference_reviews "
+            "(document_id, subject_type, subject_id, field_path, analysis_run_id, "
+            "review_status) VALUES (?, 'block', ?, 'block.speaker', 2, 'confirmed')",
+            (document_id, blocks[0].id),
+        )
+        confirmed = resolve_speaker(connection, blocks[0].id, 2, raw, 0.85)
+        assert confirmed.value == person_id
+
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(document_id, subject_type, subject_id, field_path, operation, "
+            "value_json) "
+            "VALUES (?, 'block', ?, 'block.speaker_entity_id', 'set', ?)",
+            (document_id, blocks[0].id, json.dumps(person_id)),
+        )
+        manual = resolve_speaker(connection, blocks[0].id, 2, None, 0.85)
+        assert manual.value == person_id
+    finally:
+        connection.close()
+
+
+def test_term_explained_ratio_has_no_row_for_zero_denominator(tmp_path: Path) -> None:
+    connection, document_id, scenes, blocks = _fixture(tmp_path)
+    try:
+        run_id = AnalysisRunRepository(connection).insert_run(
+            document_id=document_id,
+            analyzer_id="term-resolver",
+            analyzer_version=1,
+            text_revision_id=1,
+            structure_revision_id=1,
+            status="succeeded",
+            fingerprint="3" * 64,
+            config_json="{}",
+            started_at="2026-09-01T00:00:00+00:00",
+        )
+        result = calculate_semantic_metrics(
+            connection,
+            document_id=document_id,
+            canonical_text="「本当？」\n動く",
+            scenes=scenes,
+            blocks=blocks,
+            speaker_run_id=None,
+            term_run_id=run_id,
+            explanation_run_id=None,
+            block_run_id=None,
+        )
+        assert all(
+            item.metric_name != "term.explained_same_scene_ratio"
+            for item in result.measurements
+        )
+        assert all(
+            item.sample_count == 0
+            for item in result.measurements
+            if item.metric_name == "term.new_per_1000_chars"
+        )
     finally:
         connection.close()

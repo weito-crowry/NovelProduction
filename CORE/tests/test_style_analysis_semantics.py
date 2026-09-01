@@ -600,7 +600,7 @@ def test_document_orchestrator_persists_sa_d_runs_and_annotations(
                 "SELECT COUNT(*) FROM style_measurements WHERE analysis_run_id = ?",
                 (semantic_metric_run[0],),
             ).fetchone()[0]
-            == 14
+            == 12
         )
 
         cancelled_orchestrator = DocumentAnalysisOrchestrator(

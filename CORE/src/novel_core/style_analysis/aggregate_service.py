@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, cast
@@ -22,9 +21,6 @@ from novel_core.style_analysis.aggregate_repository import (
     MeasurementRepository,
     json_object,
 )
-from novel_core.style_analysis.aggregate_runtime_support import semantic_metric_state
-from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
-from novel_core.style_analysis.analysis_runtime import AnalysisRuntime
 from novel_core.style_analysis.corpus_models import (
     AggregateRecord,
     AggregateSpec,
@@ -32,14 +28,9 @@ from novel_core.style_analysis.corpus_models import (
     MeasurementTargetType,
 )
 from novel_core.style_analysis.corpus_repository import CorpusRepository
-from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
-from novel_core.style_analysis.metrics import (
-    BASIC_METRIC_DEFINITIONS,
-    METRIC_DEFINITIONS,
-    SEMANTIC_METRIC_DEFINITIONS,
-)
-from novel_core.style_analysis.runtime_models import AnalysisPolicy
-from novel_core.style_analysis.runtime_registry import ANALYZERS_BY_ID
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
+from novel_core.style_analysis.fingerprints import JsonValue
+from novel_core.style_analysis.metrics import METRIC_DEFINITIONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,14 +53,14 @@ class AggregateService:
         self.corpora = CorpusRepository(connection)
         self.measurements = MeasurementRepository(connection)
         self.aggregates = AggregateRepository(connection)
-        self._runs = AnalysisRunRepository(connection)
-        self._runtime = AnalysisRuntime(self._runs)
+        self._current_runs = CurrentRunResolver(connection)
 
     def recompute(
         self,
         specs: tuple[AggregateSpec, ...],
         metric_names: tuple[str, ...] = (),
     ) -> AggregateRecomputeResult:
+        self._current_runs.clear()
         if not metric_names:
             for spec in specs:
                 if _metric_version(spec.metric_name) != spec.metric_version:
@@ -228,6 +219,7 @@ class AggregateService:
     def _compute(
         self, spec: AggregateSpec
     ) -> tuple[tuple[_Target, ...], tuple[str, ...], tuple[int, ...]]:
+        self._current_runs.clear()
         definition = METRIC_DEFINITIONS.get(spec.metric_name)
         if definition is None or definition.version != spec.metric_version:
             raise ValidationError("METRIC_NOT_FOUND")
@@ -305,8 +297,6 @@ class AggregateService:
                     scene_id, semantic_run, filter_value
                 )
                 warnings.extend(unavailable)
-                if filter_result == "non-match":
-                    continue
                 measurement = None
                 if filter_result == "match":
                     measurement = self._current_measurement(
@@ -390,113 +380,8 @@ class AggregateService:
         structure_id: int,
         analyzer_id: str,
     ) -> Any | None:
-        definition = ANALYZERS_BY_ID.get(analyzer_id)
-        if definition is None:
-            return None
-        config: JsonValue = {}
-        prompt_id = None
-        prompt_version = None
-        if analyzer_id == "style-metrics-basic":
-            config = {
-                "metric_versions": {
-                    name: value.version
-                    for name, value in sorted(BASIC_METRIC_DEFINITIONS.items())
-                }
-            }
-        elif analyzer_id == "style-metrics-semantic":
-            config = {
-                "metric_versions": {
-                    name: value.version
-                    for name, value in sorted(SEMANTIC_METRIC_DEFINITIONS.items())
-                }
-            }
-        elif analyzer_id == "scene-semantic-classifier":
-            config = {"scene_taxonomy_version": 1}
-            from novel_core.style_analysis.model_prompts import get_prompt
-
-            prompt = get_prompt("style.scene_semantics")
-            prompt_id, prompt_version = prompt.prompt_id, prompt.version
-        if analyzer_id == "style-metrics-semantic":
-            expected_config = json_object(config)
-            required = {
-                "speaker-attribution",
-                "term-resolver",
-                "term-explanation-detector",
-                "block-semantic-classifier",
-            }
-            for statuses in (("succeeded",), ("partial",)):
-                candidates = self._runs.runs(
-                    document_id=document_id,
-                    analyzer_id=analyzer_id,
-                    analyzer_version=definition.version,
-                    text_revision_id=text_revision_id,
-                    structure_revision_id=structure_id,
-                    statuses=statuses,
-                )
-                for candidate in candidates:
-                    if (
-                        json_object(json.loads(candidate.config_json))
-                        != expected_config
-                    ):
-                        continue
-                    dependencies = dict(candidate.dependency_runs)
-                    if set(dependencies) != required:
-                        continue
-                    term_run = self._runs.get_run(dependencies["term-resolver"])
-                    if term_run is None:
-                        continue
-                    expected_state = semantic_metric_state(
-                        self._connection,
-                        document_id,
-                        structure_id,
-                        term_run.id,
-                        term_run.status,
-                    )
-                    expected_policy = fingerprint_json(
-                        cast(
-                            JsonValue,
-                            AnalysisPolicy().input_values(
-                                (
-                                    "speaker_effective",
-                                    "term_explanation_effective",
-                                    "block_semantic_effective",
-                                )
-                            ),
-                        )
-                    )
-                    if (
-                        candidate.state_fingerprint != expected_state
-                        or candidate.policy_input_fingerprint != expected_policy
-                        or candidate.analysis_policy_version != AnalysisPolicy().version
-                    ):
-                        continue
-                    dependency_rows = [
-                        self._runs.get_run(dependencies[name]) for name in required
-                    ]
-                    if all(
-                        row is not None
-                        and row.document_id == document_id
-                        and row.text_revision_id == text_revision_id
-                        and row.structure_revision_id == structure_id
-                        and row.status in {"succeeded", "partial"}
-                        for row in dependency_rows
-                    ):
-                        return candidate
-            return None
-        return self._runtime.resolve_current_run(
-            document_id=document_id,
-            analyzer_id=analyzer_id,
-            text_revision_id=text_revision_id,
-            structure_revision_id=structure_id,
-            analyzer_version=definition.version,
-            config_json=json_object(config),
-            state_fingerprint=None,
-            policy_input_fingerprint=None,
-            dependency_runs=(),
-            prompt_id=prompt_id,
-            prompt_version=prompt_version,
-            model_provider=None,
-            model_id=None,
+        return self._current_runs.resolve(
+            document_id, text_revision_id, structure_id, analyzer_id
         )
 
     def _structure_belongs(

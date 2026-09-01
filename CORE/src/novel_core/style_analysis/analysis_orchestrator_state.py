@@ -12,27 +12,36 @@ class AnalysisStateMixin:
     def _metric_effective_state(
         self: Any, document_id: int, structure_id: int
     ) -> list[dict[str, object]]:
-        field_paths = (
+        override_paths = (
+            "block.speaker_entity_id",
+            "block.semantic_primary",
+            "term.novelty",
+            "term_mention.sufficient_explanation_annotation_id",
+            "mention.entity_id",
+        )
+        review_paths = (
             "block.speaker",
             "block.semantic_primary",
             "term.novelty",
             "term_mention.explanation",
+            "mention.entity_resolution",
         )
-        placeholders = ", ".join("?" for _ in field_paths)
+        override_placeholders = ", ".join("?" for _ in override_paths)
+        review_placeholders = ", ".join("?" for _ in review_paths)
         overrides = self.connection.execute(
             "SELECT subject_type, subject_id, field_path, operation, value_json, "
             "structure_revision_id FROM style_manual_overrides "
-            "WHERE document_id = ? AND field_path IN (" + placeholders + ") "
+            "WHERE document_id = ? AND field_path IN (" + override_placeholders + ") "
             "AND (structure_revision_id IS NULL OR structure_revision_id = ?) "
             "ORDER BY subject_type, subject_id, field_path, created_at, id",
-            (document_id, *field_paths, structure_id),
+            (document_id, *override_paths, structure_id),
         ).fetchall()
         reviews = self.connection.execute(
             "SELECT subject_type, subject_id, field_path, review_status, "
             "analysis_run_id FROM style_inference_reviews "
-            "WHERE document_id = ? AND field_path IN (" + placeholders + ") "
+            "WHERE document_id = ? AND field_path IN (" + review_placeholders + ") "
             "ORDER BY subject_type, subject_id, field_path, created_at, id",
-            (document_id, *field_paths),
+            (document_id, *review_paths),
         ).fetchall()
         return [
             {

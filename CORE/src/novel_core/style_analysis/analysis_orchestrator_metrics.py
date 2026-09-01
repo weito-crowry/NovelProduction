@@ -28,6 +28,8 @@ class SemanticMetricsMixin:
         blocks: Sequence[BlockRecord],
         dependency_runs: Sequence[int],
     ) -> tuple[int, list[JsonObject]]:
+        from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
+
         required_analyzers = (
             "speaker-attribution",
             "term-resolver",
@@ -45,6 +47,13 @@ class SemanticMetricsMixin:
             if analyzer_id in runs_by_analyzer
         )
         term_run = self.runs.get_run(runs_by_analyzer.get("term-resolver", -1))
+        current_resolver = CurrentRunResolver(self.connection, self.policy)
+        prefix_entries, prefix_complete = current_resolver.term_prefix(
+            document_id,
+            text_revision_id,
+            structure_id,
+            term_run.id if term_run is not None else None,
+        )
         run_id = self._new_run(
             "style-metrics-semantic",
             document_id=document_id,
@@ -58,17 +67,12 @@ class SemanticMetricsMixin:
                         "metric_effective_state": self._metric_effective_state(
                             document_id, structure_id
                         ),
-                        "term_first_appearance": {
-                            "document_id": document_id,
-                            "text_revision_id": text_revision_id,
-                            "structure_revision_id": structure_id,
-                            "term_resolver_run_id": (
-                                term_run.id if term_run is not None else None
-                            ),
-                            "resolver_status": (
-                                term_run.status if term_run is not None else None
-                            ),
-                        },
+                        "term_first_appearance": current_resolver.term_prefix_state(
+                            document_id,
+                            text_revision_id,
+                            structure_id,
+                            term_run.id if term_run is not None else None,
+                        ),
                     },
                 )
             ),
@@ -104,9 +108,8 @@ class SemanticMetricsMixin:
             speaker_threshold=self.policy.speaker_effective,
             block_threshold=self.policy.block_semantic_effective,
             term_explanation_threshold=self.policy.term_explanation_effective,
-            term_first_appearance_complete=(
-                term_run is not None and term_run.status == "succeeded"
-            ),
+            term_first_appearance_complete=prefix_complete,
+            term_prefix_entries=prefix_entries,
         )
         values: list[JsonObject] = []
         for item in calculated.measurements:
@@ -134,6 +137,12 @@ class SemanticMetricsMixin:
             )
         self._finish(
             run_id,
-            status="partial" if calculated.partial else "succeeded",
+            status=(
+                "failed"
+                if calculated.failed
+                else "partial"
+                if calculated.partial
+                else "succeeded"
+            ),
         )
         return run_id, values
