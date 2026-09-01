@@ -106,12 +106,14 @@ def test_insert_import_persists_catalog_documents_and_current_text(
         assert [episode.current_text for episode in episodes] == ["本文一", "本文二"]
         metadata = json.loads(episodes[1].document_metadata_json)
         assert metadata["structure_hints_raw"] == {"scene_break_offsets_raw": [2]}
-        assert "structure_hints" not in json.loads(episodes[1].document_metadata_json)
+        assert json.loads(episodes[1].document_metadata_json)["structure_hints"] == {
+            "scene_break_offsets_cp": [2]
+        }
     finally:
         connection.close()
 
 
-def test_sa_b_bridge_uses_provisional_identity_and_retains_raw_hints(
+def test_sa_c_import_uses_formal_identity_and_persists_mapped_hints(
     tmp_path: Path,
 ) -> None:
     connection = open_test_database(tmp_path)
@@ -134,7 +136,7 @@ def test_sa_b_bridge_uses_provisional_identity_and_retains_raw_hints(
             "normalizer_id, normalizer_version, metadata_json "
             "FROM style_text_revisions ORDER BY id"
         ).fetchall()
-        assert [row[3] for row in rows] == ["sa-b-provisional-raw-bridge"] * 2
+        assert [row[3] for row in rows] == ["canonical-japanese-fiction"] * 2
         assert [row[4] for row in rows] == [1, 1]
         assert all(row[0] == row[1] for row in rows)
         second_metadata = json.loads(rows[1][5])
@@ -142,17 +144,17 @@ def test_sa_b_bridge_uses_provisional_identity_and_retains_raw_hints(
             "scene_break_offsets_raw": [2]
         }
         assert second_metadata["normalization_input"]["normalizer_id"] == (
-            "sa-b-provisional-raw-bridge"
+            "canonical-japanese-fiction"
         )
         assert second_metadata["normalization_input"]["normalizer_version"] == 1
         assert fingerprint_json(second_metadata["normalization_input"]) == rows[1][2]
-        assert "structure_hints" not in second_metadata
+        assert second_metadata["structure_hints"] == {"scene_break_offsets_cp": [2]}
         assert inserted.work.id > 0
     finally:
         connection.close()
 
 
-def test_sa_b_provisional_revision_reuses_same_input_but_not_changed_hint(
+def test_sa_b_provisional_method_remains_a_legacy_seam(
     tmp_path: Path,
 ) -> None:
     connection = open_test_database(tmp_path)
@@ -174,6 +176,12 @@ def test_sa_b_provisional_revision_reuses_same_input_but_not_changed_hint(
         episode = repository.list_reference_episodes(inserted.work.id)[1]
         assert episode.style_document_id is not None
         service = StyleTextService(connection)
+        provisional = service.insert_reference_revision(
+            document_id=episode.style_document_id,
+            source_snapshot_id=episode.latest_snapshot_id,
+            raw_text="本文二",
+            structure_hints_raw=[2],
+        )
         reused = service.insert_reference_revision(
             document_id=episode.style_document_id,
             source_snapshot_id=episode.latest_snapshot_id,
@@ -187,7 +195,8 @@ def test_sa_b_provisional_revision_reuses_same_input_but_not_changed_hint(
             structure_hints_raw=[1],
         )
 
-        assert reused.id == episode.current_text_revision_id
+        assert provisional.id != episode.current_text_revision_id
+        assert reused.id == provisional.id
         assert changed.id != reused.id
         assert json.loads(changed.metadata_json)["structure_hints_raw"] == {
             "scene_break_offsets_raw": [1]

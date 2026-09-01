@@ -397,7 +397,9 @@ def test_persistence_failure_on_second_episode_rolls_back_entire_import(
     monkeypatch.setattr(TextSourceAdapter, "import_work", two_episode_import_work)
     import novel_core.style_analysis.text_service as text_service_module
 
-    original_insert = text_service_module.StyleTextService.insert_reference_revision
+    original_insert = (
+        text_service_module.StyleTextService.insert_normalized_reference_revision
+    )
     calls = 0
 
     def fail_on_second_revision(self: Any, **kwargs: Any) -> Any:
@@ -409,7 +411,7 @@ def test_persistence_failure_on_second_episode_rolls_back_entire_import(
 
     monkeypatch.setattr(
         text_service_module.StyleTextService,
-        "insert_reference_revision",
+        "insert_normalized_reference_revision",
         fail_on_second_revision,
     )
 

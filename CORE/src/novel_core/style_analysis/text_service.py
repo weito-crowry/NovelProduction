@@ -11,6 +11,11 @@ from novel_core.style_analysis.fingerprints import (
     JsonValue,
     fingerprint_json,
 )
+from novel_core.style_analysis.normalization import (
+    NORMALIZER_ID,
+    NORMALIZER_VERSION,
+    normalize_text,
+)
 from novel_core.style_analysis.text_models import (
     StyleDocumentRecord,
     TextRevisionRecord,
@@ -158,6 +163,152 @@ class StyleTextService:
             (revision_id, document_id),
         )
         return self.get_text_revision(document_id, revision_id)
+
+    def insert_normalized_reference_revision(
+        self,
+        *,
+        document_id: int,
+        source_snapshot_id: int,
+        raw_text: str,
+        structure_hints_raw: object,
+    ) -> TextRevisionRecord:
+        """Insert or reuse an SA-C formal normalized reference revision.
+
+        The SA-B ``insert_reference_revision`` method intentionally remains a
+        provisional compatibility seam. Existing provisional rows are never
+        rewritten; this method creates the formal revision for new/reprocessed
+        input and persists its raw-to-canonical mapping.
+        """
+        document = self._validate_reference_revision_input(
+            document_id=document_id,
+            source_snapshot_id=source_snapshot_id,
+        )
+        normalized = normalize_text(raw_text, structure_hints_raw)
+        raw_sha256 = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        canonical_sha256 = hashlib.sha256(
+            normalized.canonical_text.encode("utf-8")
+        ).hexdigest()
+        structure_hints_raw_value = _normalize_scene_break_offsets(
+            structure_hints_raw, len(raw_text)
+        )
+        fingerprint_input: JsonObject = {
+            "raw_sha256": raw_sha256,
+            "normalizer_id": NORMALIZER_ID,
+            "normalizer_version": NORMALIZER_VERSION,
+            "structure_hints_raw": {
+                "scene_break_offsets_raw": cast(JsonValue, structure_hints_raw_value)
+            },
+        }
+        normalization_input_fingerprint = fingerprint_json(fingerprint_input)
+        existing_row = self._connection.execute(
+            "SELECT id FROM style_text_revisions "
+            "WHERE document_id = ? AND normalization_input_fingerprint = ?",
+            (document_id, normalization_input_fingerprint),
+        ).fetchone()
+        if existing_row is not None:
+            revision_id = cast(int, existing_row[0])
+            if document.current_text_revision_id != revision_id:
+                self._connection.execute(
+                    "UPDATE style_documents SET current_text_revision_id = ?, "
+                    "current_structure_revision_id = NULL WHERE id = ?",
+                    (revision_id, document_id),
+                )
+            return self.get_text_revision(document_id, revision_id)
+
+        revision_no = self._connection.execute(
+            "SELECT COALESCE(MAX(revision_no), 0) + 1 "
+            "FROM style_text_revisions WHERE document_id = ?",
+            (document_id,),
+        ).fetchone()[0]
+        metadata: JsonObject = {
+            "normalization_input": fingerprint_input,
+            "structure_hints_raw": {
+                "scene_break_offsets_raw": cast(JsonValue, structure_hints_raw_value)
+            },
+            "structure_hints": {
+                "scene_break_offsets_cp": cast(
+                    JsonValue, list(normalized.scene_break_offsets_cp)
+                )
+            },
+            "normalization_warnings": cast(JsonValue, list(normalized.warnings)),
+        }
+        cursor = self._connection.execute(
+            "INSERT INTO style_text_revisions "
+            "(document_id, revision_no, source_snapshot_id, raw_text, "
+            "canonical_text, raw_sha256, canonical_sha256, "
+            "normalization_input_fingerprint, normalizer_id, "
+            "normalizer_version, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                document_id,
+                revision_no,
+                source_snapshot_id,
+                raw_text,
+                normalized.canonical_text,
+                raw_sha256,
+                canonical_sha256,
+                normalization_input_fingerprint,
+                NORMALIZER_ID,
+                NORMALIZER_VERSION,
+                _json(metadata),
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("normalized text revision insert did not return an id")
+        revision_id = cursor.lastrowid
+        self._connection.executemany(
+            "INSERT INTO style_text_mappings "
+            "(text_revision_id, segment_order, raw_start, raw_end, "
+            "canonical_start, canonical_end, operation) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                (
+                    revision_id,
+                    order_index,
+                    segment.raw_start,
+                    segment.raw_end,
+                    segment.canonical_start,
+                    segment.canonical_end,
+                    segment.operation,
+                )
+                for order_index, segment in enumerate(normalized.segments, start=1)
+            ),
+        )
+        self._connection.execute(
+            "UPDATE style_documents SET current_text_revision_id = ?, "
+            "current_structure_revision_id = NULL WHERE id = ?",
+            (revision_id, document_id),
+        )
+        return self.get_text_revision(document_id, revision_id)
+
+    def _validate_reference_revision_input(
+        self, *, document_id: int, source_snapshot_id: int
+    ) -> StyleDocumentRecord:
+        document = self.get_document(document_id)
+        if document is None:
+            raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
+        if (
+            document.kind != "reference_episode"
+            or document.reference_episode_id is None
+        ):
+            raise ValidationError("REFERENCE_DOCUMENT_REQUIRED")
+        snapshot_row = self._connection.execute(
+            "SELECT source_id FROM style_source_snapshots WHERE id = ?",
+            (source_snapshot_id,),
+        ).fetchone()
+        if snapshot_row is None:
+            raise ValidationError("SOURCE_SNAPSHOT_NOT_FOUND")
+        document_source_row = self._connection.execute(
+            "SELECT rw.source_id FROM style_reference_episodes AS re "
+            "JOIN style_reference_works AS rw ON rw.id = re.reference_work_id "
+            "WHERE re.id = ?",
+            (document.reference_episode_id,),
+        ).fetchone()
+        if document_source_row is None:
+            raise ValidationError("REFERENCE_EPISODE_NOT_FOUND")
+        if document_source_row[0] != snapshot_row[0]:
+            raise ValidationError("SOURCE_SNAPSHOT_DOCUMENT_MISMATCH")
+        return document
 
     def set_current_text(self, document_id: int, revision_id: int) -> None:
         try:

@@ -133,7 +133,7 @@ class StyleSourceRepository:
                 (episode_id,),
             )
             document_id = _lastrowid(document_cursor, "style document")
-            self._text_service.insert_reference_revision(
+            self._text_service.insert_normalized_reference_revision(
                 document_id=document_id,
                 source_snapshot_id=snapshot_id,
                 raw_text=episode.raw_text,
