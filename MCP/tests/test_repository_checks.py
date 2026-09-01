@@ -192,9 +192,7 @@ def test_boundary_checker_accepts_style_analysis_api_modules() -> None:
         tool_names=tuple(str(index) for index in range(59)),
     )
 
-    assert not [
-        failure for failure in failures if "sqlite3 is restricted" in failure
-    ]
+    assert not [failure for failure in failures if "sqlite3 is restricted" in failure]
 
 
 @pytest.mark.parametrize(
