@@ -7,6 +7,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_model_object,
@@ -45,7 +46,8 @@ def attribute_speaker(
     if subject_block.get("block_type") != "dialogue":
         raise ValueError("DIALOGUE_BLOCK_REQUIRED")
     prompt = get_prompt("style.speaker_attribution")
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
@@ -56,7 +58,8 @@ def attribute_speaker(
                 "next_blocks": list(next_blocks),
                 "people": list(people),
             },
-        )
+        ),
+        _validate_response_shape,
     )
     obj = validate_model_object(
         response,
@@ -103,4 +106,22 @@ def attribute_speaker(
         validate_confidence(obj["confidence"]),
         tuple(sorted({require_int(item) for item in evidence})),
         str(reason),
+    )
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    return validate_model_object(
+        value,
+        required=(
+            "speaker_entity_id",
+            "confidence",
+            "evidence_block_ids",
+            "reason_code",
+        ),
+        allowed=(
+            "speaker_entity_id",
+            "confidence",
+            "evidence_block_ids",
+            "reason_code",
+        ),
     )

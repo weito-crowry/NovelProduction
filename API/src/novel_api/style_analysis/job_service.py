@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from novel_core.config import DatabaseConfig
-from novel_core.database import default_migration_dir, open_database
+from novel_core.database import (
+    default_migration_dir,
+    open_database,
+    open_database_readonly,
+)
 from novel_core.style_analysis.fingerprints import JsonObject
 from novel_core.style_analysis.runtime_models import JobRecord, JobStatus, JobType
 
@@ -97,7 +101,7 @@ class StyleJobService:
         return job
 
     def get(self, project_id: str, job_id: int) -> JobRecord | None:
-        with self._open_connection(project_id) as connection:
+        with self._open_readonly_connection(project_id) as connection:
             return self._get_from_connection(connection, job_id)
 
     def cancel(self, project_id: str, job_id: int) -> JobRecord:
@@ -200,6 +204,22 @@ class StyleJobService:
     def _open_connection(self, project_id: str) -> Iterator[DatabaseConnection]:
         project_dir = self._registry.resolve_path(project_id)
         connection = open_database(
+            DatabaseConfig(
+                db_path=project_dir / "story.db",
+                migration_dir=default_migration_dir(),
+            )
+        )
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def _open_readonly_connection(
+        self, project_id: str
+    ) -> Iterator[DatabaseConnection]:
+        project_dir = self._registry.resolve_path(project_id)
+        connection = open_database_readonly(
             DatabaseConfig(
                 db_path=project_dir / "story.db",
                 migration_dir=default_migration_dir(),

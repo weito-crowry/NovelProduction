@@ -104,7 +104,7 @@ class AnalysisRunRepository:
         self, structure_revision_id: int, boundary_analysis_run_id: int
     ) -> None:
         self._connection.execute(
-            "INSERT INTO style_structure_analysis_sources "
+            "INSERT OR IGNORE INTO style_structure_analysis_sources "
             "(structure_revision_id, boundary_analysis_run_id) VALUES (?, ?)",
             (structure_revision_id, boundary_analysis_run_id),
         )

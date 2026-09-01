@@ -84,6 +84,32 @@ class EntityService:
             if not isinstance(payload.get(field), str) or not payload[field]:
                 raise ValueError("MENTION_FIELD_INVALID")
 
+    def insert_inferred_alias_if_missing(
+        self,
+        *,
+        entity_id: int,
+        alias: str,
+        alias_kind: str,
+        analysis_run_id: int,
+        source_mention_id: int,
+    ) -> None:
+        if not alias or alias_kind in {"title", "role"}:
+            return
+        entity = self.repository.get(entity_id)
+        values = [self._effective_name(entity)] + [
+            item.alias for item in self.repository.aliases_for(entity_id)
+        ]
+        if comparison_key(alias) in {comparison_key(value) for value in values}:
+            return
+        self.repository.insert_alias(
+            entity_id=entity_id,
+            alias=alias,
+            alias_kind=alias_kind,
+            origin="inferred",
+            analysis_run_id=analysis_run_id,
+            source_mention_id=source_mention_id,
+        )
+
     def _scope(self, document_id: int) -> dict[str, int]:
         row = self._connection.execute(
             "SELECT reference_episode_id FROM style_documents WHERE id = ?",

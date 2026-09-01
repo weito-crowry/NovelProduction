@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from novel_core.style_analysis.analyzers.common import split_blocks
 from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_model_object,
@@ -31,8 +33,47 @@ def detect_scene_boundaries(
     existing_after_block_ids: set[int] | frozenset[int] = frozenset(),
     client: ModelClient,
 ) -> tuple[BoundaryCandidate, ...]:
+    merged: dict[int, BoundaryCandidate] = {}
+    for chunk in split_blocks([dict(block) for block in blocks]):
+        for candidate in _detect_chunk(
+            base_structure_revision_id=base_structure_revision_id,
+            scene_id=scene_id,
+            blocks=chunk,
+            existing_after_block_ids=existing_after_block_ids,
+            client=client,
+        ):
+            old = merged.get(candidate.after_block_id)
+            if old is None or candidate.confidence > old.confidence:
+                merged[candidate.after_block_id] = candidate
+            elif candidate.confidence == old.confidence:
+                merged[candidate.after_block_id] = BoundaryCandidate(
+                    candidate.after_block_id,
+                    tuple(sorted(set(old.reasons) | set(candidate.reasons))),
+                    old.confidence,
+                )
+    return tuple(merged[key] for key in sorted(merged))
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    obj = validate_model_object(
+        value, required=("boundaries",), allowed=("boundaries",)
+    )
+    if not isinstance(obj["boundaries"], list):
+        raise ValueError("MODEL_CONTRACT_INVALID")
+    return obj
+
+
+def _detect_chunk(
+    *,
+    base_structure_revision_id: int,
+    scene_id: int,
+    blocks: Sequence[JsonObject],
+    existing_after_block_ids: set[int] | frozenset[int],
+    client: ModelClient,
+) -> tuple[BoundaryCandidate, ...]:
     prompt = get_prompt("style.scene_boundary")
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
@@ -42,14 +83,9 @@ def detect_scene_boundaries(
                 "scene_id": scene_id,
                 "blocks": list(blocks),
             },
-        )
+        ),
+        _validate_response_shape,
     )
-    obj = validate_model_object(
-        response, required=("boundaries",), allowed=("boundaries",)
-    )
-    values = obj["boundaries"]
-    if not isinstance(values, list):
-        raise ValueError("MODEL_CONTRACT_INVALID")
     block_ids = [
         require_int(block["block_id"])
         for block in blocks
@@ -57,6 +93,9 @@ def detect_scene_boundaries(
     ]
     allowed_after = set(block_ids[:-1]) - set(existing_after_block_ids)
     merged: dict[int, BoundaryCandidate] = {}
+    values = response["boundaries"]
+    if not isinstance(values, list):
+        raise ValueError("MODEL_CONTRACT_INVALID")
     for value in values:
         item = validate_model_object(
             value,

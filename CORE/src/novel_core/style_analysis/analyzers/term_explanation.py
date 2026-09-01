@@ -7,6 +7,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_model_object,
@@ -37,7 +38,8 @@ def detect_term_explanations(
     client: ModelClient,
 ) -> tuple[TermExplanationCandidate, ...]:
     prompt = get_prompt("style.term_explanation")
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
@@ -50,11 +52,10 @@ def detect_term_explanations(
                 "mention_end_in_block": mention_end_in_block,
                 "blocks": list(blocks),
             },
-        )
+        ),
+        _validate_response_shape,
     )
-    obj = validate_model_object(
-        response, required=("explanations",), allowed=("explanations",)
-    )
+    obj = response
     values = obj["explanations"]
     if not isinstance(values, list):
         raise ValueError("MODEL_CONTRACT_INVALID")
@@ -127,3 +128,12 @@ def detect_term_explanations(
             ),
         )
     )
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    obj = validate_model_object(
+        value, required=("explanations",), allowed=("explanations",)
+    )
+    if not isinstance(obj["explanations"], list):
+        raise ValueError("MODEL_CONTRACT_INVALID")
+    return obj

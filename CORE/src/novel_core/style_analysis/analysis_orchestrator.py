@@ -42,6 +42,7 @@ from novel_core.style_analysis.model_contracts import (
     validate_confidence,
 )
 from novel_core.style_analysis.model_prompts import get_prompt
+from novel_core.style_analysis.resolver_candidates import build_identity_shortlist
 from novel_core.style_analysis.runtime_models import (
     AnalysisPolicy,
     DependencyRunExpectation,
@@ -125,17 +126,30 @@ class DocumentAnalysisOrchestrator:
         document = self.text.get_document(document_id)
         if document is None:
             raise ValueError("STYLE_DOCUMENT_NOT_FOUND")
-        revision_id = text_revision_id or document.current_text_revision_id
+        if text_revision_id is None:
+            raise ValueError("TEXT_REVISION_REQUIRED")
+        if structure_revision_id is not None and rebuild_structure:
+            raise ValueError("STRUCTURE_REBUILD_CONFLICT")
+        revision_id = text_revision_id
         if revision_id is None:
             raise ValueError("TEXT_REVISION_REQUIRED")
         revision = self.text.get_text_revision(document_id, revision_id)
+        explicit_structure = structure_revision_id is not None
+        request_is_current_text = document.current_text_revision_id == revision.id
+        current_structure_id = (
+            document.current_structure_revision_id if request_is_current_text else None
+        )
         final_structure_id = structure_revision_id
+        pointer_update_allowed = False
         if final_structure_id is None and not rebuild_structure:
-            final_structure_id = document.current_structure_revision_id
+            final_structure_id = current_structure_id
         if final_structure_id is None:
             final_structure_id = self.structure.build_automatic_structure(
-                document_id=document_id, text_revision_id=revision.id
+                document_id=document_id,
+                text_revision_id=revision.id,
+                set_current=False,
             ).id
+            pointer_update_allowed = not explicit_structure and request_is_current_text
         structure = self.structure.get_structure_revision(
             document_id, final_structure_id
         )
@@ -153,13 +167,26 @@ class DocumentAnalysisOrchestrator:
         if (
             preset == "full"
             and structure.source_kind == "automatic"
-            and structure_revision_id is None
+            and not explicit_structure
         ):
             try:
                 run_id = self._boundary(
                     document_id, revision.id, structure.id, scenes, blocks
                 )
                 run_ids.append(run_id)
+                structure = self.structure.materialize_semantic_structure(
+                    document_id=document_id,
+                    text_revision_id=revision.id,
+                    parent_structure_revision_id=structure.id,
+                    boundary_analysis_run_id=run_id,
+                    auto_apply_threshold=self.policy.scene_boundary_auto_apply,
+                )
+                if structure.id != final_structure_id:
+                    final_structure_id = structure.id
+                    pointer_update_allowed = request_is_current_text
+                    scenes = self.structure.list_scenes(structure.id)
+                    blocks = self.structure.list_blocks(structure.id)
+                    sentences = self.structure.list_sentences(structure.id)
             except Exception as exc:
                 warnings.append(f"BOUNDARY_FAILED:{exc}")
 
@@ -190,6 +217,10 @@ class DocumentAnalysisOrchestrator:
             run = self.runs.get_run(run_id)
             if run is not None and run.status != "succeeded":
                 warnings.append(f"ANALYZER_{run.status.upper()}:{run.analyzer_id}")
+        if pointer_update_allowed:
+            self.structure.set_current_structure_if_current_text(
+                document_id, final_structure_id
+            )
         self.runs.commit()
         return DocumentAnalysisResult(
             status="partial" if warnings else "succeeded",
@@ -211,6 +242,7 @@ class DocumentAnalysisOrchestrator:
         state_fingerprint: str | None = None,
         policy_inputs: tuple[str, ...] = (),
         registry_input_fingerprint: str | None = None,
+        config: JsonValue | None = None,
         reuse: bool = True,
     ) -> int:
         definition = ANALYZERS_BY_ID[analyzer_id]
@@ -231,7 +263,7 @@ class DocumentAnalysisOrchestrator:
         if analyzer_id in prompt_map:
             prompt = get_prompt(prompt_map[analyzer_id])
             prompt_id, prompt_version = prompt.prompt_id, prompt.version
-        config_json = _json({})
+        config_json = _json(config if config is not None else {})
         dependency_pairs_list: list[tuple[str, int]] = []
         for run_id in dependencies:
             dependency = self.runs.get_run(run_id)
@@ -260,21 +292,25 @@ class DocumentAnalysisOrchestrator:
                         )
                     )
             expectations = tuple(expectation_list)
-            existing = self.runtime.resolve_current_run(
-                document_id=document_id,
-                analyzer_id=analyzer_id,
-                text_revision_id=text_revision_id,
-                structure_revision_id=structure_revision_id,
-                analyzer_version=definition.version,
-                config_json=config_json,
-                state_fingerprint=state_fingerprint,
-                policy_input_fingerprint=policy_input_fingerprint,
-                dependency_runs=dependency_pairs,
-                dependency_expectations=expectations,
-                prompt_id=prompt_id,
-                prompt_version=prompt_version,
-                model_provider=self.model_provider,
-                model_id=self.model_id,
+            existing = (
+                self.runtime.resolve_cache_hit(
+                    document_id=document_id,
+                    analyzer_id=analyzer_id,
+                    text_revision_id=text_revision_id,
+                    structure_revision_id=structure_revision_id,
+                    analyzer_version=definition.version,
+                    config_json=config_json,
+                    state_fingerprint=state_fingerprint,
+                    policy_input_fingerprint=policy_input_fingerprint,
+                    dependency_runs=dependency_pairs,
+                    dependency_expectations=expectations,
+                    prompt_id=prompt_id,
+                    prompt_version=prompt_version,
+                    model_provider=self.model_provider,
+                    model_id=self.model_id,
+                )
+                if definition.cacheable
+                else None
             )
             if existing is not None:
                 self._reused_run_ids.add(existing.id)
@@ -284,7 +320,7 @@ class DocumentAnalysisOrchestrator:
             analyzer_version=definition.version,
             text_revision_id=text_revision_id,
             structure_revision_id=structure_revision_id,
-            config={},
+            config=config if config is not None else {},
             state_fingerprint=state_fingerprint,
             policy_input_fingerprint=policy_input_fingerprint,
             dependency_runs=dependency_pairs,
@@ -370,9 +406,10 @@ class DocumentAnalysisOrchestrator:
                 for candidate in candidates:
                     self.semantic.insert_raw(
                         annotation_type="scene_boundary_candidate",
-                        subject_type="scene",
-                        subject_id=scene.id,
+                        subject_type="block",
+                        subject_id=candidate.after_block_id,
                         value={
+                            "base_structure_revision_id": structure_id,
                             "after_block_id": candidate.after_block_id,
                             "reasons": list(candidate.reasons),
                         },
@@ -451,19 +488,50 @@ class DocumentAnalysisOrchestrator:
                 )
         except Exception as exc:
             self._finish(mention_run, status="failed", error=exc)
-            raise
         result.append(mention_run)
-        resolution_run = self._resolve_entities(
-            document_id, text_revision_id, structure_id, blocks, mention_run
-        )
+        mention_failed = self.runs.get_run(mention_run)
+        if mention_failed is not None and mention_failed.status == "failed":
+            resolution_run = self._skip_dependent_run(
+                "entity-resolver",
+                document_id=document_id,
+                text_revision_id=text_revision_id,
+                structure_id=structure_id,
+                dependency=mention_run,
+            )
+        else:
+            resolution_run = self._resolve_entities(
+                document_id, text_revision_id, structure_id, blocks, mention_run
+            )
         result.append(resolution_run)
-        speaker_run = self._speakers(
-            document_id, text_revision_id, structure_id, blocks, resolution_run
-        )
+        resolution_failed = self.runs.get_run(resolution_run)
+        if resolution_failed is not None and resolution_failed.status == "failed":
+            speaker_run = self._skip_dependent_run(
+                "speaker-attribution",
+                document_id=document_id,
+                text_revision_id=text_revision_id,
+                structure_id=structure_id,
+                dependency=resolution_run,
+            )
+            pov_run = self._skip_dependent_run(
+                "pov-classifier",
+                document_id=document_id,
+                text_revision_id=text_revision_id,
+                structure_id=structure_id,
+                dependency=resolution_run,
+            )
+        else:
+            speaker_run = self._speakers(
+                document_id, text_revision_id, structure_id, blocks, resolution_run
+            )
+            pov_run = self._pov(
+                document_id,
+                text_revision_id,
+                structure_id,
+                scenes,
+                blocks,
+                resolution_run,
+            )
         result.append(speaker_run)
-        pov_run = self._pov(
-            document_id, text_revision_id, structure_id, scenes, blocks, resolution_run
-        )
         result.append(pov_run)
         term_candidate_run = self._new_run(
             "term-candidate-extractor",
@@ -510,15 +578,37 @@ class DocumentAnalysisOrchestrator:
                 )
         except Exception as exc:
             self._finish(term_candidate_run, status="failed", error=exc)
-            raise
         result.append(term_candidate_run)
-        term_resolution_run = self._resolve_terms(
-            document_id, text_revision_id, structure_id, blocks, term_candidate_run
-        )
+        term_failed = self.runs.get_run(term_candidate_run)
+        if term_failed is not None and term_failed.status == "failed":
+            term_resolution_run = self._skip_dependent_run(
+                "term-resolver",
+                document_id=document_id,
+                text_revision_id=text_revision_id,
+                structure_id=structure_id,
+                dependency=term_candidate_run,
+            )
+        else:
+            term_resolution_run = self._resolve_terms(
+                document_id, text_revision_id, structure_id, blocks, term_candidate_run
+            )
         result.append(term_resolution_run)
-        explanation_run = self._explanations(
-            document_id, text_revision_id, structure_id, blocks, term_resolution_run
-        )
+        term_resolution_failed = self.runs.get_run(term_resolution_run)
+        if (
+            term_resolution_failed is not None
+            and term_resolution_failed.status == "failed"
+        ):
+            explanation_run = self._skip_dependent_run(
+                "term-explanation-detector",
+                document_id=document_id,
+                text_revision_id=text_revision_id,
+                structure_id=structure_id,
+                dependency=term_resolution_run,
+            )
+        else:
+            explanation_run = self._explanations(
+                document_id, text_revision_id, structure_id, blocks, term_resolution_run
+            )
         result.append(explanation_run)
         scene_run = self._scene_semantics(
             document_id, text_revision_id, structure_id, scenes, all_json
@@ -529,6 +619,30 @@ class DocumentAnalysisOrchestrator:
         )
         result.append(block_run)
         return result
+
+    def _skip_dependent_run(
+        self,
+        analyzer_id: str,
+        *,
+        document_id: int,
+        text_revision_id: int,
+        structure_id: int,
+        dependency: int,
+    ) -> int:
+        run_id = self._new_run(
+            analyzer_id,
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_id,
+            dependencies=(dependency,),
+            reuse=False,
+        )
+        self._finish(
+            run_id,
+            status="failed",
+            error=ValueError("DEPENDENCY_FAILED"),
+        )
+        return run_id
 
     def _resolve_entities(
         self,
@@ -552,7 +666,10 @@ class DocumentAnalysisOrchestrator:
             structure_revision_id=structure_id,
             dependencies=(mention_run,),
             state_fingerprint=fingerprint_json(
-                cast(JsonValue, {"scope": scope, "registry": registry})
+                cast(
+                    JsonValue,
+                    {"scope": scope, "manual_state": self._manual_state("entity")},
+                )
             ),
             policy_inputs=("entity_resolution_auto_merge",),
             registry_input_fingerprint=fingerprint_json(cast(JsonValue, registry)),
@@ -564,6 +681,7 @@ class DocumentAnalysisOrchestrator:
         try:
             if self._is_reused(run_id):
                 return run_id
+            resolved_by_scene: dict[int, set[int]] = {}
             for mention in self.entities.repository.list_mentions(
                 analysis_run_id=mention_run
             ):
@@ -573,6 +691,9 @@ class DocumentAnalysisOrchestrator:
                 decision = None
                 if len(exact) == 1:
                     decision_id = exact[0].id
+                    resolved_by_scene.setdefault(mention.scene_id, set()).add(
+                        decision_id
+                    )
                     self.semantic.insert_raw(
                         annotation_type="mention.entity_resolution",
                         subject_type="mention",
@@ -591,8 +712,21 @@ class DocumentAnalysisOrchestrator:
                     document_id=document_id,
                     entity_type=mention.entity_type_candidate,
                     surface=mention.surface,
-                    same_scene_ids=set(),
+                    same_scene_ids=resolved_by_scene.get(mention.scene_id, set()),
                 )
+                candidates = build_identity_shortlist(
+                    surface=mention.surface,
+                    canonical_name=mention.canonical_name_candidate,
+                    candidate_type=mention.entity_type_candidate,
+                    identities=candidates,
+                    same_scene_ids=resolved_by_scene.get(mention.scene_id, set()),
+                )
+                if mention.mention_type in {"pronoun", "role_title"}:
+                    candidates = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.get("same_scene") is True
+                    ]
                 decision = resolve_entity_mention(
                     mention={
                         "mention_id": mention.id,
@@ -618,15 +752,14 @@ class DocumentAnalysisOrchestrator:
                         confidence=decision.confidence,
                         analysis_run_id=run_id,
                     )
-                    if entity.canonical_name != mention.surface:
-                        self.entities.repository.insert_alias(
-                            entity_id=entity.id,
-                            alias=mention.surface,
-                            alias_kind=_alias_kind(mention.mention_type),
-                            origin="inferred",
-                            analysis_run_id=run_id,
-                            source_mention_id=mention.id,
-                        )
+                    resolved_by_scene.setdefault(mention.scene_id, set()).add(entity.id)
+                    self.entities.insert_inferred_alias_if_missing(
+                        entity_id=entity.id,
+                        alias=mention.surface,
+                        alias_kind=_alias_kind(mention.mention_type),
+                        analysis_run_id=run_id,
+                        source_mention_id=mention.id,
+                    )
                 elif (
                     decision.decision == "new"
                     and decision.new_entity_type
@@ -648,15 +781,7 @@ class DocumentAnalysisOrchestrator:
                         confidence=decision.confidence,
                         analysis_run_id=run_id,
                     )
-                    if decision.new_canonical_name != mention.surface:
-                        self.entities.repository.insert_alias(
-                            entity_id=entity.id,
-                            alias=mention.surface,
-                            alias_kind=_alias_kind(mention.mention_type),
-                            origin="inferred",
-                            analysis_run_id=run_id,
-                            source_mention_id=mention.id,
-                        )
+                    resolved_by_scene.setdefault(mention.scene_id, set()).add(entity.id)
             self._finish(run_id)
         except Exception as exc:
             self._finish(run_id, status="partial", error=exc)
@@ -676,6 +801,12 @@ class DocumentAnalysisOrchestrator:
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
             dependencies=(dependency,),
+            state_fingerprint=fingerprint_json(
+                cast(
+                    JsonValue,
+                    {"mention_resolution": self._mention_resolution_state(dependency)},
+                )
+            ),
         )
         revision = self.text.get_text_revision(document_id, text_revision_id)
         block_json = [
@@ -684,16 +815,10 @@ class DocumentAnalysisOrchestrator:
         try:
             if self._is_reused(run_id):
                 return run_id
-            people = [
-                {"entity_id": entity.id, "canonical_name": entity.canonical_name}
-                for entity in self.entities.repository.list_for_scope(
-                    **self.entities._scope(document_id)
-                )
-                if entity.entity_type == "person"
-            ]
             for block in blocks:
                 if block.block_type != "dialogue":
                     continue
+                people = self._people_for_scene(document_id, dependency, block.scene_id)
                 previous, subject, following = self._context(block_json, block.id, 4, 4)
                 value = attribute_speaker(
                     previous_blocks=previous,
@@ -734,25 +859,25 @@ class DocumentAnalysisOrchestrator:
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
             dependencies=(dependency,),
-            state_fingerprint=fingerprint_json({"mention_resolution": dependency}),
+            state_fingerprint=fingerprint_json(
+                cast(
+                    JsonValue,
+                    {"mention_resolution": self._mention_resolution_state(dependency)},
+                )
+            ),
+            config={"taxonomy_version": 1},
         )
         revision = self.text.get_text_revision(document_id, text_revision_id)
         try:
             if self._is_reused(run_id):
                 return run_id
-            people = [
-                {"entity_id": entity.id, "canonical_name": entity.canonical_name}
-                for entity in self.entities.repository.list_for_scope(
-                    **self.entities._scope(document_id)
-                )
-                if entity.entity_type == "person"
-            ]
             for scene in scenes:
                 scene_json = [
                     self._block_json(block, revision.canonical_text)
                     for block in blocks
                     if block.scene_id == scene.id
                 ]
+                people = self._people_for_scene(document_id, dependency, scene.id)
                 value = classify_pov(
                     scene_id=scene.id,
                     blocks=scene_json,
@@ -793,7 +918,10 @@ class DocumentAnalysisOrchestrator:
             structure_revision_id=structure_id,
             dependencies=(candidate_run,),
             state_fingerprint=fingerprint_json(
-                cast(JsonValue, {"scope": scope, "registry": registry})
+                cast(
+                    JsonValue,
+                    {"scope": scope, "manual_state": self._manual_state("term")},
+                )
             ),
             policy_inputs=("term_resolution_auto_merge",),
             registry_input_fingerprint=fingerprint_json(
@@ -811,6 +939,8 @@ class DocumentAnalysisOrchestrator:
             if self._is_reused(run_id):
                 return run_id
             annotations = self.semantic.repository.list_for_run(candidate_run)
+            resolved_by_scene: dict[int, set[int]] = {}
+            novelty_by_term: dict[int, list[tuple[str, float]]] = {}
             for annotation in annotations:
                 if annotation.annotation_type != "term_candidate":
                     continue
@@ -831,7 +961,21 @@ class DocumentAnalysisOrchestrator:
                     candidates = self.terms.candidate_rows(
                         document_id=document_id,
                         term_type=str(value["term_type_candidate"]),
-                        same_scene_ids=set(),
+                        same_scene_ids=resolved_by_scene.get(
+                            self._block_scene(blocks, annotation.subject_id), set()
+                        ),
+                    )
+                    candidates = build_identity_shortlist(
+                        surface=str(value["surface"]),
+                        canonical_name=str(value["canonical_label_candidate"]),
+                        candidate_type=str(value["term_type_candidate"]),
+                        identities=candidates,
+                        same_scene_ids=resolved_by_scene.get(
+                            self._block_scene(blocks, annotation.subject_id), set()
+                        ),
+                        id_key="term_id",
+                        type_key="term_type",
+                        name_key="canonical_label",
                     )
                     decision = resolve_term_candidate(
                         candidate={
@@ -853,13 +997,11 @@ class DocumentAnalysisOrchestrator:
                     if decision.decision == "existing" and decision.term_id is not None:
                         term = self.terms.repository.get(decision.term_id)
                         term_id, confidence = decision.term_id, decision.confidence
-                        if term.canonical_label != str(value["surface"]):
-                            self.terms.repository.insert_alias(
-                                term_id=term.id,
-                                alias=str(value["surface"]),
-                                origin="inferred",
-                                analysis_run_id=run_id,
-                            )
+                        self.terms.insert_inferred_alias_if_missing(
+                            term_id=term.id,
+                            alias=str(value["surface"]),
+                            analysis_run_id=run_id,
+                        )
                     elif decision.new_term_type and decision.new_canonical_label:
                         term = self.terms.repository.create_inferred(
                             reference_work_id=scope.get("reference_work_id"),
@@ -869,13 +1011,6 @@ class DocumentAnalysisOrchestrator:
                             run_id=run_id,
                         )
                         term_id, confidence = term.id, decision.confidence
-                        if decision.new_canonical_label != str(value["surface"]):
-                            self.terms.repository.insert_alias(
-                                term_id=term.id,
-                                alias=str(value["surface"]),
-                                origin="inferred",
-                                analysis_run_id=run_id,
-                            )
                     else:
                         continue
                 self.terms.repository.insert_mention(
@@ -888,13 +1023,24 @@ class DocumentAnalysisOrchestrator:
                     surface=str(value["surface"]),
                     analysis_run_id=run_id,
                 )
+                scene_id = self._block_scene(blocks, annotation.subject_id)
+                resolved_by_scene.setdefault(scene_id, set()).add(term_id)
                 novelty = str(value.get("novelty_candidate", "uncertain"))
+                values = novelty_by_term.setdefault(term_id, [])
+                values.append((novelty, confidence))
+            for term_id, values in novelty_by_term.items():
+                novelty_values = {item[0] for item in values}
+                reduced = (
+                    next(iter(novelty_values))
+                    if len(novelty_values) == 1
+                    else "uncertain"
+                )
                 self.semantic.insert_raw(
                     annotation_type="term.novelty",
                     subject_type="term",
                     subject_id=term_id,
-                    value={"value": novelty},
-                    confidence=confidence,
+                    value={"value": reduced},
+                    confidence=min(item[1] for item in values),
                     analysis_run_id=run_id,
                 )
             self._finish(run_id)
@@ -941,7 +1087,9 @@ class DocumentAnalysisOrchestrator:
                     ),
                     0,
                 )
-                window = scene_blocks[max(0, position - 2) : position + 7]
+                window_start = max(0, position - 2)
+                window_end = min(len(scene_blocks), position + 7)
+                window = scene_blocks[window_start:window_end]
                 block = next(block for block in blocks if block.id == mention.block_id)
                 candidates = detect_term_explanations(
                     term_mention_id=mention.id,
@@ -952,8 +1100,31 @@ class DocumentAnalysisOrchestrator:
                     blocks=window,
                     client=cast(ModelClient, self.client),
                 )
+                if not candidates and window_end < len(scene_blocks):
+                    candidates = detect_term_explanations(
+                        term_mention_id=mention.id,
+                        term_label=term.canonical_label,
+                        mention_block_id=mention.block_id,
+                        mention_start_in_block=mention.start_cp - block.start_cp,
+                        mention_end_in_block=mention.end_cp - block.start_cp,
+                        blocks=scene_blocks[window_start:],
+                        client=cast(ModelClient, self.client),
+                    )
                 if candidates:
-                    selected = candidates[0]
+                    selected = min(
+                        candidates,
+                        key=lambda candidate: (
+                            abs(
+                                self._block_start(blocks, candidate.block_id)
+                                + candidate.start_in_block
+                                - mention.start_cp
+                            ),
+                            -candidate.confidence,
+                            candidate.block_id,
+                            candidate.start_in_block,
+                            candidate.end_in_block,
+                        ),
+                    )
                     self.semantic.insert_raw(
                         annotation_type="term_explanation",
                         subject_type="term_mention",
@@ -988,6 +1159,7 @@ class DocumentAnalysisOrchestrator:
             document_id=document_id,
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
+            config={"taxonomy_version": 1},
         )
         try:
             if self._is_reused(run_id):
@@ -1044,6 +1216,7 @@ class DocumentAnalysisOrchestrator:
             document_id=document_id,
             text_revision_id=text_revision_id,
             structure_revision_id=structure_id,
+            config={"taxonomy_version": 1},
         )
         try:
             if self._is_reused(run_id):
@@ -1105,6 +1278,79 @@ class DocumentAnalysisOrchestrator:
         except Exception as exc:
             self._finish(run_id, status="failed", error=exc)
             raise
+
+    def _manual_state(self, subject_type: str) -> list[dict[str, object]]:
+        rows = self.connection.execute(
+            "SELECT subject_id, field_path, operation, value_json "
+            "FROM style_manual_overrides WHERE subject_type = ? "
+            "ORDER BY subject_id, field_path, created_at, id",
+            (subject_type,),
+        ).fetchall()
+        return [
+            {
+                "subject_id": int(row[0]),
+                "field_path": str(row[1]),
+                "operation": str(row[2]),
+                "value_json": str(row[3]),
+            }
+            for row in rows
+        ]
+
+    def _mention_resolution_state(self, run_id: int) -> list[dict[str, object]]:
+        state: list[dict[str, object]] = []
+        for annotation in self.semantic.repository.list_for_run(run_id):
+            if annotation.annotation_type != "mention.entity_resolution":
+                continue
+            try:
+                value = json.loads(annotation.value_json)
+            except json.JSONDecodeError:
+                value = None
+            state.append(
+                {
+                    "mention_id": annotation.subject_id,
+                    "value": value,
+                    "confidence": annotation.confidence,
+                }
+            )
+        return state
+
+    def _people_for_scene(
+        self, document_id: int, resolution_run_id: int, scene_id: int | None
+    ) -> list[ModelJsonObject]:
+        if scene_id is None:
+            return []
+        entity_ids: set[int] = set()
+        for annotation in self.semantic.repository.list_for_run(resolution_run_id):
+            if annotation.annotation_type != "mention.entity_resolution":
+                continue
+            try:
+                value = json.loads(annotation.value_json)
+            except json.JSONDecodeError:
+                continue
+            entity_id = value.get("entity_id") if isinstance(value, dict) else None
+            if not isinstance(entity_id, int) or isinstance(entity_id, bool):
+                continue
+            try:
+                mention = self.entities.repository.get_mention(annotation.subject_id)
+            except ValueError:
+                continue
+            if mention.scene_id == scene_id:
+                entity_ids.add(entity_id)
+        people: list[ModelJsonObject] = []
+        for entity_id in sorted(entity_ids):
+            try:
+                entity = self.entities.repository.get(entity_id)
+            except ValueError:
+                continue
+            if entity.entity_type != "person" or not self.entities._enabled(entity.id):
+                continue
+            people.append(
+                {
+                    "entity_id": entity.id,
+                    "canonical_name": self.entities._effective_name(entity),
+                }
+            )
+        return people
 
     @staticmethod
     def _block_json(block: BlockRecord, text: str) -> ModelJsonObject:

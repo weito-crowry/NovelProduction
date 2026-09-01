@@ -7,6 +7,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_model_object,
@@ -36,7 +37,8 @@ def resolve_term_candidate(
     client: ModelClient,
 ) -> TermResolutionDecision:
     prompt = get_prompt("style.term_resolution")
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
@@ -48,7 +50,8 @@ def resolve_term_candidate(
                 "next_blocks": list(next_blocks),
                 "candidates": list(candidates),
             },
-        )
+        ),
+        _validate_response_shape,
     )
     obj = validate_model_object(
         response,
@@ -109,4 +112,24 @@ def resolve_term_candidate(
         new_type if isinstance(new_type, str) else None,
         new_label if isinstance(new_label, str) else None,
         confidence,
+    )
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    return validate_model_object(
+        value,
+        required=(
+            "decision",
+            "term_id",
+            "new_term_type",
+            "new_canonical_label",
+            "confidence",
+        ),
+        allowed=(
+            "decision",
+            "term_id",
+            "new_term_type",
+            "new_canonical_label",
+            "confidence",
+        ),
     )

@@ -112,7 +112,19 @@ CREATE TABLE style_annotations (
 
 CREATE UNIQUE INDEX idx_style_annotations_one_per_subject
     ON style_annotations(analysis_run_id, subject_type, subject_id, annotation_type)
-    WHERE annotation_type NOT IN ('term_candidate', 'scene_boundary_candidate');
+    WHERE annotation_type IN (
+        'mention.entity_resolution',
+        'speaker',
+        'term.novelty',
+        'term_explanation',
+        'scene.pov',
+        'scene.function',
+        'scene.tone',
+        'scene.pace',
+        'scene.information_load',
+        'scene.interaction',
+        'block.semantic_primary'
+    );
 
 CREATE TABLE style_review_items (
     id INTEGER PRIMARY KEY,

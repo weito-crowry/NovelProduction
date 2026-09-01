@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class StyleImportResponse(BaseModel):
@@ -42,8 +42,21 @@ class ReferenceEpisodeResponse(BaseModel):
 class StyleAnalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text_revision_id: int | None = None
+    text_revision_id: int
     structure_revision_id: int | None = None
+    preset: Literal["deterministic", "full"] = "full"
+    rebuild_structure: bool = False
+
+    @model_validator(mode="after")
+    def validate_structure_rebuild(self) -> StyleAnalyzeRequest:
+        if self.structure_revision_id is not None and self.rebuild_structure:
+            raise ValueError("STRUCTURE_REBUILD_CONFLICT")
+        return self
+
+
+class StyleWorkAnalyzeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     preset: Literal["deterministic", "full"] = "full"
     rebuild_structure: bool = False
 

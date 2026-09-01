@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, cast
 
 JsonObject: TypeAlias = dict[str, object]  # noqa: UP040
 
@@ -18,6 +18,23 @@ class ModelRequest:
 
 class ModelClient(Protocol):
     def complete_json(self, request: ModelRequest) -> JsonObject: ...
+
+
+def complete_validated_json(
+    client: ModelClient,
+    request: ModelRequest,
+    validator: Callable[[JsonObject], JsonObject],
+) -> JsonObject:
+    """Complete one response and validate its analyzer-level JSON contract.
+
+    API clients may implement ``complete_json_validated`` to include the
+    contract error in their single repair attempt.  The fallback keeps CORE
+    analyzers compatible with small test fakes and other existing clients.
+    """
+    validated = getattr(client, "complete_json_validated", None)
+    if callable(validated):
+        return cast(JsonObject, validated(request, validator))
+    return validator(client.complete_json(request))
 
 
 def validate_model_object(
@@ -74,9 +91,18 @@ def validate_span(
         or end > len(block_text)
     ):
         raise ValueError("SPAN_INVALID")
-    if not isinstance(surface, str) or block_text[start:end] != surface:
+    if not isinstance(surface, str):
         raise ValueError("SPAN_SURFACE_MISMATCH")
-    return start, end
+    if block_text[start:end] == surface:
+        return start, end
+    occurrences: list[tuple[int, int]] = []
+    cursor = block_text.find(surface)
+    while cursor >= 0:
+        occurrences.append((cursor, cursor + len(surface)))
+        cursor = block_text.find(surface, cursor + 1)
+    if len(occurrences) == 1:
+        return occurrences[0]
+    raise ValueError("SPAN_SURFACE_MISMATCH")
 
 
 def validate_enum(value: object, allowed: Iterable[str], *, code: str = "ENUM") -> str:
@@ -98,10 +124,12 @@ def validate_block_item(
     text = block_texts.get(block_id)
     if text is None:
         raise ValueError("MODEL_ITEM_ID_INVALID")
-    validate_span(
+    normalized_start, normalized_end = validate_span(
         text,
         obj.get("start_in_block"),
         obj.get("end_in_block"),
         obj.get("surface"),
     )
+    obj["start_in_block"] = normalized_start
+    obj["end_in_block"] = normalized_end
     return obj

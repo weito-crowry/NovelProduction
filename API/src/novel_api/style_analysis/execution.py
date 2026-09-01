@@ -119,6 +119,7 @@ def _work(
         "UPDATE style_jobs SET progress_current = 0, progress_total = ? WHERE id = ?",
         (total, job.id),
     )
+    connection.commit()
     for index, (episode_id, document_id, text_revision_id) in enumerate(rows, start=1):
         state = connection.execute(
             "SELECT cancel_requested FROM style_jobs WHERE id = ?", (job.id,)
@@ -162,6 +163,7 @@ def _work(
         connection.execute(
             "UPDATE style_jobs SET progress_current = ? WHERE id = ?", (index, job.id)
         )
+        connection.commit()
     final = (
         "succeeded"
         if all(status == "succeeded" for status in statuses)
@@ -187,7 +189,8 @@ def _store_result(
 ) -> None:
     connection.execute(
         "UPDATE style_jobs SET status = ?, result_json = ?, "
-        "warning_json = ? WHERE id = ?",
+        "warning_json = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP) "
+        "WHERE id = ?",
         (
             status,
             json.dumps(

@@ -7,6 +7,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     validate_confidence,
     validate_enum,
     validate_model_object,
@@ -28,20 +29,23 @@ def classify_scene(
     chunks = split_blocks([dict(block) for block in blocks])
     responses: list[JsonObject] = []
     for chunk in chunks:
-        response = client.complete_json(
+        response = complete_validated_json(
+            client,
             ModelRequest(
                 prompt.prompt_id,
                 prompt.version,
                 prompt.system_prompt,
                 {"mode": "classify", "scene_id": scene_id, "blocks": chunk},
-            )
+            ),
+            lambda value: _validate_scene_response(value, allow_reduce=False),
         )
-        responses.append(_validate_scene_response(response, allow_reduce=False))
+        responses.append(response)
     if len(responses) == 1:
         return responses[0]
     functions = _reduce_labels(responses, "function")
     tones = _reduce_labels(responses, "tone")
-    reduce_response = client.complete_json(
+    reduce_response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
@@ -60,9 +64,10 @@ def classify_scene(
                     for chunk, result in zip(chunks, responses, strict=False)
                 ],
             },
-        )
+        ),
+        lambda value: _validate_scene_response(value, allow_reduce=True),
     )
-    reduced = _validate_scene_response(reduce_response, allow_reduce=True)
+    reduced = reduce_response
     return {
         "function": functions,
         "tone": tones,

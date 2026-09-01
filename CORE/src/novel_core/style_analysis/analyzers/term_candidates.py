@@ -8,6 +8,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_block_item,
     validate_confidence,
@@ -37,15 +38,17 @@ def extract_term_candidates(
     valid: list[Mapping[str, object]] = []
     warnings: list[str] = []
     for chunk in split_blocks([dict(block) for block in blocks]):
-        response = client.complete_json(
+        response = complete_validated_json(
+            client,
             ModelRequest(
                 prompt_id=prompt.prompt_id,
                 prompt_version=prompt.version,
                 system_prompt=prompt.system_prompt,
                 user_payload={"scene_id": scene_id, "blocks": chunk},
-            )
+            ),
+            _validate_response_shape,
         )
-        obj = validate_model_object(response, required=("terms",), allowed=("terms",))
+        obj = response
         terms = obj["terms"]
         if not isinstance(terms, list):
             raise ValueError("MODEL_CONTRACT_INVALID")
@@ -125,3 +128,10 @@ def extract_term_candidates(
         )
     )
     return AnalyzerResult(result, tuple(warnings), bool(warnings))
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    obj = validate_model_object(value, required=("terms",), allowed=("terms",))
+    if not isinstance(obj["terms"], list):
+        raise ValueError("MODEL_CONTRACT_INVALID")
+    return obj

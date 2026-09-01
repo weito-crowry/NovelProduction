@@ -66,6 +66,7 @@ def candidate_score(surface: str, candidate_values: Sequence[str]) -> float:
 def build_identity_shortlist(
     *,
     surface: str,
+    canonical_name: str = "",
     candidate_type: str,
     identities: Sequence[Mapping[str, object]],
     same_scene_ids: set[int] | frozenset[int] = frozenset(),
@@ -95,7 +96,10 @@ def build_identity_shortlist(
             values.extend(alias for alias in aliases if isinstance(alias, str))
         row = dict(identity)
         row["same_scene"] = identity_id in same_scene_ids
-        score = candidate_score(surface, values)
+        score = max(
+            candidate_score(surface, values),
+            candidate_score(canonical_name, values),
+        )
         result.append(
             (-(1 if identity_id in same_scene_ids else 0), -score, identity_id, row)
         )

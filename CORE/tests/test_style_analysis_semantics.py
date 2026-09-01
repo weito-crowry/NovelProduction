@@ -104,6 +104,9 @@ def test_context_window_is_scene_bounded_and_subject_is_once() -> None:
 
 
 class _FakeModel:
+    def __init__(self, *, boundary: bool = False) -> None:
+        self.boundary = boundary
+
     def complete_json(self, request: ModelRequest) -> dict[str, object]:
         if request.prompt_id == "style.entity_mentions":
             return {"mentions": []}
@@ -119,6 +122,22 @@ class _FakeModel:
         if request.prompt_id == "style.pov":
             return {"pov_mode": "unclear", "pov_entity_id": None, "confidence": 0.1}
         if request.prompt_id == "style.scene_boundary":
+            if self.boundary:
+                blocks = request.user_payload.get("blocks")
+                if isinstance(blocks, list) and len(blocks) >= 2:
+                    first = blocks[0]
+                    if isinstance(first, dict) and isinstance(
+                        first.get("block_id"), int
+                    ):
+                        return {
+                            "boundaries": [
+                                {
+                                    "after_block_id": first["block_id"],
+                                    "reasons": ["time_shift"],
+                                    "confidence": 0.95,
+                                }
+                            ]
+                        }
             return {"boundaries": []}
         if request.prompt_id == "style.scene_semantics":
             return {
@@ -226,5 +245,83 @@ def test_document_orchestrator_persists_sa_d_runs_and_annotations(
         assert connection.execute(
             "SELECT COUNT(*) FROM style_annotations"
         ).fetchone() >= (5,)
+    finally:
+        connection.close()
+
+
+def test_full_automatic_structure_materializes_semantic_structure(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        connection.execute("INSERT INTO works (slug, working_title) VALUES ('x', 'X')")
+        work_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO chapters (work_id, position, title) VALUES (?, 1, 'c')",
+            (work_id,),
+        )
+        chapter_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO episodes (work_id, chapter_id, position, title) "
+            "VALUES (?, ?, 1, 'e')",
+            (work_id, chapter_id),
+        )
+        episode_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_documents "
+            "(kind, project_work_id, project_episode_id) VALUES "
+            "('project_episode_draft', ?, ?)",
+            (work_id, episode_id),
+        )
+        document_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        digest = "c" * 64
+        connection.execute(
+            "INSERT INTO style_text_revisions "
+            "(document_id, revision_no, project_draft_id, raw_text, canonical_text, "
+            "raw_sha256, canonical_sha256, normalization_input_fingerprint, "
+            "normalizer_id, normalizer_version) VALUES "
+            "(?, 1, 1, ?, ?, ?, ?, ?, 'test', 1)",
+            (
+                document_id,
+                "朝。\n\n「行こう」",
+                "朝。\n\n「行こう」",
+                digest,
+                digest,
+                digest,
+            ),
+        )
+        text_revision_id = connection.execute("SELECT last_insert_rowid()").fetchone()[
+            0
+        ]
+        connection.commit()
+
+        result = DocumentAnalysisOrchestrator(
+            connection,
+            model_client=_FakeModel(boundary=True),
+            model_provider="test",
+            model_id="fake",
+        ).analyze_document(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+        )
+
+        assert result.status == "succeeded"
+        structure = connection.execute(
+            "SELECT source_kind, parent_structure_revision_id "
+            "FROM style_structure_revisions WHERE id = ?",
+            (result.structure_revision_id,),
+        ).fetchone()
+        assert structure is not None
+        assert structure[0] == "semantic"
+        assert structure[1] is not None
+        assert connection.execute(
+            "SELECT COUNT(*) FROM style_structure_analysis_sources "
+            "WHERE structure_revision_id = ?",
+            (result.structure_revision_id,),
+        ).fetchone() == (1,)
+        assert connection.execute(
+            "SELECT DISTINCT subject_type FROM style_annotations "
+            "WHERE annotation_type = 'scene_boundary_candidate'"
+        ).fetchone() == ("block",)
     finally:
         connection.close()

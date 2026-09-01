@@ -28,6 +28,7 @@ from novel_api.schemas.style_analysis import (
     StyleAnalyzeRequest,
     StyleImportResponse,
     StyleJobResponse,
+    StyleWorkAnalyzeRequest,
 )
 from novel_api.service_container import (
     open_project_read_services,
@@ -121,7 +122,27 @@ def list_reference_episodes(
         if services.style_analysis.get_reference_work(work_id) is None:
             raise HTTPException(status_code=404, detail="NOT_FOUND")
         records = services.style_analysis.list_reference_episodes(work_id)
-    return envelope(project_id, [_episode_response(record) for record in records])
+        status_by_document = {
+            record.style_document_id: services.style_analysis.analysis_status(
+                record.style_document_id,
+                record.current_text_revision_id,
+                record.current_structure_revision_id,
+            )
+            for record in records
+            if record.style_document_id is not None
+        }
+    return envelope(
+        project_id,
+        [
+            _episode_response(
+                record,
+                status_by_document.get(record.style_document_id)
+                if record.style_document_id is not None
+                else None,
+            )
+            for record in records
+        ],
+    )
 
 
 @router.get(
@@ -134,9 +155,18 @@ def get_reference_episode(
     target = resolve_project_target(request, project_id)
     with open_project_read_services(target) as services:
         record = services.style_analysis.get_reference_episode(episode_id)
+        status = (
+            services.style_analysis.analysis_status(
+                record.style_document_id,
+                record.current_text_revision_id,
+                record.current_structure_revision_id,
+            )
+            if record is not None and record.style_document_id is not None
+            else None
+        )
     if record is None:
         raise HTTPException(status_code=404, detail="NOT_FOUND")
-    return envelope(project_id, _episode_response(record))
+    return envelope(project_id, _episode_response(record, status))
 
 
 @router.delete("/reference-works/{work_id}", status_code=204)
@@ -188,7 +218,7 @@ def analyze_reference_work(
     request: Request,
     project_id: str,
     work_id: int,
-    payload: StyleAnalyzeRequest,
+    payload: StyleWorkAnalyzeRequest,
 ) -> ProjectEnvelope[StyleJobResponse]:
     if (
         payload.preset == "full"
@@ -273,6 +303,69 @@ def list_analysis_runs(
         )
 
 
+@router.get("/analysis-runs")
+def list_analysis_runs_canonical(
+    request: Request,
+    project_id: str,
+    document_id: int | None = Query(None, gt=0),
+) -> ProjectEnvelope[list[object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        runs = services.style_analysis.list_analysis_runs(document_id)
+    return envelope(project_id, list(runs))
+
+
+@router.get("/analysis-runs/{run_id}")
+def get_analysis_run(
+    request: Request, project_id: str, run_id: int
+) -> ProjectEnvelope[object]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        run = services.style_analysis.get_analysis_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    return envelope(project_id, run)
+
+
+@router.get("/analysis-runs/{run_id}/outputs")
+def list_analysis_run_outputs(
+    request: Request, project_id: str, run_id: int
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_analysis_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        outputs = services.style_analysis.list_run_outputs(run_id)
+    return envelope(project_id, list(outputs))
+
+
+@router.get("/analysis-runs/{run_id}/measurements")
+def list_analysis_run_measurements(
+    request: Request, project_id: str, run_id: int
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_analysis_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        measurements = services.style_analysis.list_run_measurements(run_id)
+    return envelope(project_id, list(measurements))
+
+
+@router.get("/documents/{document_id}/semantics")
+def get_document_semantics(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    structure_revision_id: int = Query(..., gt=0),
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        semantics = services.style_analysis.get_semantics(
+            document_id, structure_revision_id
+        )
+    return envelope(project_id, semantics)
+
+
 @router.get("/documents/{document_id}/annotations")
 def list_analysis_annotations(
     request: Request, project_id: str, document_id: int
@@ -303,6 +396,22 @@ def list_boundary_proposals(
         )
 
 
+@router.get("/documents/{document_id}/structure/boundary-proposals")
+def list_structure_boundary_proposals(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    include_below_threshold: bool = Query(False),
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        proposals = services.style_analysis.list_boundary_proposals(
+            document_id,
+            include_below_threshold=include_below_threshold,
+        )
+    return envelope(project_id, list(proposals))
+
+
 def _work_response(record: ReferenceWorkRecord) -> ReferenceWorkResponse:
     return ReferenceWorkResponse(
         reference_work_id=record.id,
@@ -315,7 +424,10 @@ def _work_response(record: ReferenceWorkRecord) -> ReferenceWorkResponse:
     )
 
 
-def _episode_response(record: ReferenceEpisodeRecord) -> ReferenceEpisodeResponse:
+def _episode_response(
+    record: ReferenceEpisodeRecord,
+    analysis_status: dict[str, object] | None = None,
+) -> ReferenceEpisodeResponse:
     return ReferenceEpisodeResponse(
         reference_episode_id=record.id,
         reference_work_id=record.reference_work_id,
@@ -325,7 +437,8 @@ def _episode_response(record: ReferenceEpisodeRecord) -> ReferenceEpisodeRespons
         current_text_revision_id=record.current_text_revision_id,
         current_structure_revision_id=record.current_structure_revision_id,
         current_structure_kind=record.current_structure_kind,
-        analysis_status={
+        analysis_status=analysis_status
+        or {
             "basic": {"state": "not_analyzed", "reasons": []},
             "semantic": {"state": "not_analyzed", "reasons": []},
         },

@@ -60,6 +60,38 @@ def test_openai_compatible_client_repairs_invalid_json_once() -> None:
     assert calls == 2
 
 
+def test_openai_compatible_client_repairs_valid_json_contract_once() -> None:
+    calls = 0
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        requests.append(request)
+        content = '{"unexpected":true}' if calls == 1 else '{"ok":true}'
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": content}}]}
+        )
+
+    client = OpenAICompatibleModelClient(
+        base_url="http://local/v1",
+        model_id="style-model",
+        transport=httpx.MockTransport(handler),
+        sleep=lambda _seconds: None,
+    )
+
+    def validator(value: dict[str, object]) -> dict[str, object]:
+        if set(value) != {"ok"}:
+            raise ValueError("REQUIRED_KEY_MISSING:ok")
+        return value
+
+    assert client.complete_json_validated(
+        ModelRequest("style.test", 1, "system", {}), validator
+    ) == {"ok": True}
+    assert calls == 2
+    assert b"validation_errors" in requests[1].content
+
+
 def test_api_settings_validates_style_provider() -> None:
     with pytest.raises(ValueError, match="ANALYZER_PROVIDER_UNAVAILABLE"):
         ApiSettings(data_root=Path("."), style_model_provider="openai_compatible")

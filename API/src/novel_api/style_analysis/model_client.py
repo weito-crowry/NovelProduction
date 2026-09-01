@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 import httpx
@@ -46,27 +47,62 @@ class OpenAICompatibleModelClient:
         try:
             return self._parse_object(content)
         except ModelClientError as first_error:
-            if first_error.code not in {
-                "MODEL_RESPONSE_INVALID",
-                "MODEL_CONTRACT_INVALID",
-            }:
-                raise
-            repair_request = ModelRequest(
-                prompt_id=request.prompt_id,
-                prompt_version=request.prompt_version,
-                system_prompt=REPAIR_SYSTEM_PROMPT,
-                user_payload={
-                    "original_request": request.user_payload,
-                    "invalid_response": content,
-                    "validation_errors": [first_error.code],
-                },
+            return self._repair(
+                request,
+                content=content,
+                validation_errors=[first_error.code],
             )
-            try:
-                return self._parse_object(self._complete_content(repair_request))
-            except ModelClientError as second_error:
-                raise ModelClientError(
-                    "MODEL_CONTRACT_INVALID", str(second_error)
-                ) from second_error
+
+    def complete_json_validated(
+        self,
+        request: ModelRequest,
+        validator: Callable[[JsonObject], JsonObject],
+    ) -> JsonObject:
+        content = self._complete_content(request)
+        try:
+            return validator(self._parse_object(content))
+        except ModelClientError as first_error:
+            if first_error.code != "MODEL_RESPONSE_INVALID":
+                raise
+            return self._repair(
+                request,
+                content=content,
+                validation_errors=[first_error.code],
+                validator=validator,
+            )
+        except ValueError as first_error:
+            return self._repair(
+                request,
+                content=content,
+                validation_errors=[str(first_error)],
+                validator=validator,
+            )
+
+    def _repair(
+        self,
+        request: ModelRequest,
+        *,
+        content: str,
+        validation_errors: list[str],
+        validator: Callable[[JsonObject], JsonObject] | None = None,
+    ) -> JsonObject:
+        repair_request = ModelRequest(
+            prompt_id=request.prompt_id,
+            prompt_version=request.prompt_version,
+            system_prompt=REPAIR_SYSTEM_PROMPT,
+            user_payload={
+                "original_request": request.user_payload,
+                "invalid_response": content,
+                "validation_errors": validation_errors,
+            },
+        )
+        try:
+            repaired = self._parse_object(self._complete_content(repair_request))
+            return validator(repaired) if validator is not None else repaired
+        except (ModelClientError, ValueError) as second_error:
+            raise ModelClientError(
+                "MODEL_CONTRACT_INVALID", str(second_error)
+            ) from second_error
 
     def _complete_content(self, request: ModelRequest) -> str:
         payload = {

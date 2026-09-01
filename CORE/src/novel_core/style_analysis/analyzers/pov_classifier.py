@@ -7,6 +7,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_enum,
@@ -28,7 +29,8 @@ def classify_pov(
     chunks = split_blocks([dict(block) for block in blocks])
     values: list[JsonObject] = []
     for chunk in chunks:
-        response = client.complete_json(
+        response = complete_validated_json(
+            client,
             ModelRequest(
                 prompt.prompt_id,
                 prompt.version,
@@ -39,12 +41,14 @@ def classify_pov(
                     "blocks": chunk,
                     "people": list(people),
                 },
-            )
+            ),
+            lambda value: _validate(value, people),
         )
-        values.append(_validate(response, people))
+        values.append(response)
     if len(values) == 1:
         return values[0]
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
@@ -62,7 +66,8 @@ def classify_pov(
                     for chunk, value in zip(chunks, values, strict=False)
                 ],
             },
-        )
+        ),
+        lambda value: _validate(value, people),
     )
     return _validate(response, people)
 

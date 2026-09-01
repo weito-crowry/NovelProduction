@@ -150,8 +150,6 @@ class AnalysisRuntime:
                     dependency_runs=requested_dependencies,
                     prompt_id=prompt_id,
                     prompt_version=prompt_version,
-                    model_provider=model_provider,
-                    model_id=model_id,
                 ):
                     return candidate
         return None
@@ -336,8 +334,6 @@ class AnalysisRuntime:
         dependency_runs: tuple[tuple[str, int], ...] | None,
         prompt_id: str | None,
         prompt_version: int | None,
-        model_provider: str | None = None,
-        model_id: str | None = None,
     ) -> bool:
         return (
             candidate.analyzer_id == analyzer_id
@@ -353,8 +349,6 @@ class AnalysisRuntime:
             )
             and candidate.prompt_id == prompt_id
             and candidate.prompt_version == prompt_version
-            and (model_provider is None or candidate.model_provider == model_provider)
-            and (model_id is None or candidate.model_id == model_id)
         )
 
     @staticmethod

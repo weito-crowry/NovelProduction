@@ -6,6 +6,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_enum,
@@ -19,13 +20,17 @@ def classify_narration_block(
     *, block_id: int, text: str, client: ModelClient
 ) -> JsonObject:
     prompt = get_prompt("style.block_semantic")
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt.prompt_id,
             prompt.version,
             prompt.system_prompt,
             {"block_id": block_id, "text": text},
-        )
+        ),
+        lambda value: validate_model_object(
+            value, required=("label", "confidence"), allowed=("label", "confidence")
+        ),
     )
     obj = validate_model_object(
         response, required=("label", "confidence"), allowed=("label", "confidence")

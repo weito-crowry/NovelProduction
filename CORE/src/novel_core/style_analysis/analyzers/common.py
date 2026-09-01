@@ -18,19 +18,25 @@ class AnalyzerResult(Generic[T]):  # noqa: UP046
 def split_blocks(
     blocks: list[JsonObject], *, max_code_points: int = 15_000
 ) -> list[list[JsonObject]]:
-    chunks: list[list[JsonObject]] = []
+    core_chunks: list[tuple[int, int, list[JsonObject]]] = []
     current: list[JsonObject] = []
     current_size = 0
-    for block in blocks:
+    core_start = 0
+    for index, block in enumerate(blocks):
         text = block.get("text")
         size = len(text) if isinstance(text, str) else 0
         if current and current_size + size > max_code_points:
-            chunks.append(current)
-            overlap = current[-2:] if len(current) >= 2 else current[:]
-            current = [dict(item) for item in overlap]
-            current_size = sum(len(str(item.get("text", ""))) for item in current)
+            core_chunks.append((core_start, index, current))
+            core_start = index
+            current = []
+            current_size = 0
         current.append(block)
         current_size += size
     if current:
-        chunks.append(current)
+        core_chunks.append((core_start, len(blocks), current))
+    chunks: list[list[JsonObject]] = []
+    for start, end, _core in core_chunks:
+        context_start = max(0, start - 2)
+        context_end = min(len(blocks), end + 2)
+        chunks.append([dict(block) for block in blocks[context_start:context_end]])
     return chunks or [[]]

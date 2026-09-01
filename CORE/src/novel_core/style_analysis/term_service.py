@@ -72,6 +72,24 @@ class TermService:
         if not isinstance(payload.get("surface"), str) or not payload["surface"]:
             raise ValueError("TERM_FIELD_INVALID")
 
+    def insert_inferred_alias_if_missing(
+        self, *, term_id: int, alias: str, analysis_run_id: int
+    ) -> None:
+        if not alias:
+            return
+        term = self.repository.get(term_id)
+        values = [self._effective_label(term)] + [
+            item.alias for item in self.repository.aliases_for(term_id)
+        ]
+        if comparison_key(alias) in {comparison_key(value) for value in values}:
+            return
+        self.repository.insert_alias(
+            term_id=term_id,
+            alias=alias,
+            origin="inferred",
+            analysis_run_id=analysis_run_id,
+        )
+
     def _scope(self, document_id: int) -> dict[str, int]:
         row = self._connection.execute(
             "SELECT reference_episode_id FROM style_documents WHERE id = ?",

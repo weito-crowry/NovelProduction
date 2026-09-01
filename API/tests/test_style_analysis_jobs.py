@@ -7,13 +7,17 @@ import pytest
 from fastapi.testclient import TestClient
 from novel_core.config import DatabaseConfig
 from novel_core.database import default_migration_dir, open_database
+from novel_core.style_analysis.model_contracts import ModelRequest
 from novel_core.style_analysis.runtime_models import JobRecord
 
 from novel_api.app import create_app
 from novel_api.config import ApiSettings
 from novel_api.project_registry import ProjectRegistry
+from novel_api.service_container import ProjectDescriptor, ProjectTarget
 from novel_api.style_analysis import job_service as job_service_module
 from novel_api.style_analysis import job_worker as job_worker_module
+from novel_api.style_analysis.execution import execute_style_job
+from novel_api.style_analysis.ingestion_service import import_source
 from novel_api.style_analysis.job_service import StyleJobService
 from novel_api.style_analysis.job_worker import StyleAnalysisWorker
 
@@ -50,6 +54,100 @@ def read_job(project_db: Path, job_id: int) -> JobRecord:
     job = service.get(project_db.parent.name, job_id)
     assert job is not None
     return job
+
+
+class _WorkFakeModel:
+    def complete_json(self, request: ModelRequest) -> dict[str, object]:
+        if request.prompt_id == "style.entity_mentions":
+            return {"mentions": []}
+        if request.prompt_id == "style.term_candidates":
+            return {"terms": []}
+        if request.prompt_id == "style.speaker_attribution":
+            return {
+                "speaker_entity_id": None,
+                "confidence": 0.0,
+                "evidence_block_ids": [],
+                "reason_code": "unknown",
+            }
+        if request.prompt_id == "style.pov":
+            return {"pov_mode": "unclear", "pov_entity_id": None, "confidence": 0.1}
+        if request.prompt_id == "style.scene_boundary":
+            return {"boundaries": []}
+        if request.prompt_id == "style.scene_semantics":
+            return {
+                "function": [{"label": "daily", "confidence": 0.9}],
+                "tone": [{"label": "calm", "confidence": 0.9}],
+                "pace": {"label": "medium", "confidence": 0.9},
+                "information_load": {"label": "low", "confidence": 0.9},
+                "interaction": {"label": "dialogue", "confidence": 0.9},
+            }
+        if request.prompt_id == "style.block_semantic":
+            return {"label": "description", "confidence": 0.9}
+        raise AssertionError(request.prompt_id)
+
+
+def test_fresh_reference_work_full_analysis_does_not_nest_transactions(
+    data_root: Path,
+) -> None:
+    registry = ProjectRegistry(data_root)
+    registry.create("Reference", project_id="reference")
+    project_dir = data_root / "reference"
+    target = ProjectTarget(
+        project_id="reference",
+        descriptor=ProjectDescriptor(
+            project_dir=project_dir, story_db=project_dir / "story.db"
+        ),
+    )
+    imported = import_source(
+        target,
+        source_type="text",
+        filename="reference.txt",
+        payload="Episode 1\n\n本文。".encode(),
+        media_type="text/plain",
+    )
+    connection = open_database(
+        DatabaseConfig(
+            db_path=project_dir / "story.db", migration_dir=default_migration_dir()
+        )
+    )
+    try:
+        cursor = connection.execute(
+            "INSERT INTO style_jobs (job_type, payload_json, status) "
+            "VALUES ('analyze_reference_work', ?, 'running')",
+            (
+                json.dumps(
+                    {"reference_work_id": imported.reference_work_id, "preset": "full"}
+                ),
+            ),
+        )
+        assert cursor.lastrowid is not None
+        connection.commit()
+        row = connection.execute(
+            "SELECT id, job_type, payload_json, status, cancel_requested, "
+            "progress_current, progress_total, result_json, warning_json, created_at, "
+            "started_at, finished_at, error_code, error_message, version "
+            "FROM style_jobs WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        assert row is not None
+        job = StyleJobService._record_from_row(row)
+
+        execute_style_job(
+            connection,
+            job,
+            model_client=_WorkFakeModel(),
+            model_provider="test",
+            model_id="fake",
+        )
+
+        assert connection.execute(
+            "SELECT status FROM style_jobs WHERE id = ?", (job.id,)
+        ).fetchone() == ("succeeded",)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM style_structure_revisions"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
 
 
 def test_enqueue_commits_before_worker_notification(data_root: Path) -> None:

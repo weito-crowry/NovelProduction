@@ -9,6 +9,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_block_item,
     validate_confidence,
@@ -44,7 +45,8 @@ def extract_entity_mentions(
     for chunk_index, chunk in enumerate(
         split_blocks([dict(block) for block in blocks])
     ):
-        response = client.complete_json(
+        response = complete_validated_json(
+            client,
             ModelRequest(
                 prompt_id=prompt.prompt_id,
                 prompt_version=prompt.version,
@@ -58,11 +60,10 @@ def extract_entity_mentions(
                     else [],
                     "blocks": chunk,
                 },
-            )
+            ),
+            _validate_response_shape,
         )
-        result = validate_model_object(
-            response, required=("mentions",), allowed=("mentions",)
-        )
+        result = response
         mentions = result["mentions"]
         if not isinstance(mentions, list):
             raise ValueError("MODEL_CONTRACT_INVALID")
@@ -168,3 +169,10 @@ def extract_entity_mentions(
         )
     )
     return AnalyzerResult(items, tuple(warnings), bool(warnings))
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    result = validate_model_object(value, required=("mentions",), allowed=("mentions",))
+    if not isinstance(result["mentions"], list):
+        raise ValueError("MODEL_CONTRACT_INVALID")
+    return result

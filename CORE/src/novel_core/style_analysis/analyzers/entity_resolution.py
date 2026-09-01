@@ -8,6 +8,7 @@ from novel_core.style_analysis.model_contracts import (
     JsonObject,
     ModelClient,
     ModelRequest,
+    complete_validated_json,
     require_int,
     validate_confidence,
     validate_model_object,
@@ -39,7 +40,8 @@ def resolve_entity_mention(
     if mention_type not in MENTION_TYPES:
         raise ValueError("MENTION_TYPE_INVALID")
     prompt = get_prompt("style.entity_resolution")
-    response = client.complete_json(
+    response = complete_validated_json(
+        client,
         ModelRequest(
             prompt_id=prompt.prompt_id,
             prompt_version=prompt.version,
@@ -51,7 +53,8 @@ def resolve_entity_mention(
                 "next_blocks": list(next_blocks),
                 "candidates": list(candidates),
             },
-        )
+        ),
+        _validate_response_shape,
     )
     obj = validate_model_object(
         response,
@@ -114,4 +117,24 @@ def resolve_entity_mention(
         new_type if isinstance(new_type, str) else None,
         new_name if isinstance(new_name, str) else None,
         confidence,
+    )
+
+
+def _validate_response_shape(value: JsonObject) -> JsonObject:
+    return validate_model_object(
+        value,
+        required=(
+            "decision",
+            "entity_id",
+            "new_entity_type",
+            "new_canonical_name",
+            "confidence",
+        ),
+        allowed=(
+            "decision",
+            "entity_id",
+            "new_entity_type",
+            "new_canonical_name",
+            "confidence",
+        ),
     )
