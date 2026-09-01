@@ -51,6 +51,34 @@ class AnalyzerDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisRunRecord:
+    id: int
+    document_id: int
+    analyzer_id: str
+    analyzer_version: int
+    text_revision_id: int
+    structure_revision_id: int
+    status: RunStatus
+    fingerprint: str
+    config_json: str
+    analysis_policy_version: int | None
+    policy_input_fingerprint: str | None
+    state_fingerprint: str | None
+    registry_input_fingerprint: str | None
+    model_provider: str | None
+    model_id: str | None
+    prompt_id: str | None
+    prompt_version: int | None
+    started_at: str
+    finished_at: str | None
+    error_code: str | None
+    error_message: str | None
+    warning_json: str
+    created_at: str
+    dependency_runs: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AnalysisPolicy:
     version: int = 1
     entity_resolution_auto_merge: float = 0.90
