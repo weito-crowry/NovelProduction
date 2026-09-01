@@ -26,7 +26,9 @@ from .model import (
 )
 from .projections import (
     ContextProjectionResult,
+    PlainTextProjectionResult,
     render_context_html,
+    render_plain_text_projection,
     render_web_html,
 )
 from .schema import (
@@ -43,6 +45,7 @@ __all__ = [
     "AuthoringResolution",
     "AuthoringBlockInput",
     "ContextProjectionResult",
+    "PlainTextProjectionResult",
     "ExportResult",
     "ExportWarning",
     "JsonValue",
@@ -58,6 +61,7 @@ __all__ = [
     "parse_authoring_html",
     "parse_document_json",
     "render_context_html",
+    "render_plain_text_projection",
     "render_web_html",
     "resolve_authoring",
     "export_document",

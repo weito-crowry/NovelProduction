@@ -8,6 +8,7 @@ from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.aggregate_service import AggregateService
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.corpus_models import AggregateSpec
+from novel_core.style_analysis.lint_service import StyleLintService
 from novel_core.style_analysis.model_contracts import ModelClient
 from novel_core.style_analysis.runtime_models import JobRecord
 
@@ -51,6 +52,21 @@ def execute_style_job(
             _work(connection, job, payload, model_client, model_provider, model_id)
         elif job.job_type == "recompute_aggregate":
             _aggregate(connection, job, payload)
+        elif job.job_type == "run_lint":
+            result = _lint(connection, job, payload)
+            _store_result(
+                connection,
+                job.id,
+                "succeeded",
+                json.loads(result.run.warning_json),
+                {
+                    "lint_run_id": result.run.id,
+                    "coverage_ratio": result.run.coverage_ratio,
+                    "enabled_rule_count": result.run.enabled_rule_count,
+                    "applicable_rule_count": result.run.applicable_rule_count,
+                    "missing_rule_count": result.run.missing_rule_count,
+                },
+            )
         else:
             _fail(connection, job.id, "JOB_TYPE_NOT_IMPLEMENTED", job.job_type)
     except AnalysisCancelledError:
@@ -303,6 +319,47 @@ def _aggregate(
             "aggregates": aggregate_ids,
         },
     )
+
+
+def _lint(
+    connection: DatabaseConnection,
+    job: JobRecord,
+    payload: Mapping[str, object],
+) -> Any:
+    document_id = _positive_int(payload.get("document_id"), "DOCUMENT_ID_REQUIRED")
+    text_revision_id = _positive_int(
+        payload.get("text_revision_id"), "TEXT_REVISION_ID_REQUIRED"
+    )
+    structure_revision_id = _positive_int(
+        payload.get("structure_revision_id"), "STRUCTURE_REVISION_ID_REQUIRED"
+    )
+    profile_id = _positive_int(payload.get("profile_id"), "PROFILE_ID_REQUIRED")
+    profile_version_no = _positive_int(
+        payload.get("profile_version_no"), "PROFILE_VERSION_NO_REQUIRED"
+    )
+    scene_id = payload.get("scene_id")
+    if scene_id is not None:
+        scene_id = _positive_int(scene_id, "SCENE_ID_INVALID")
+    connection.execute(
+        "UPDATE style_jobs SET progress_current = 0, progress_total = 1 WHERE id = ?",
+        (job.id,),
+    )
+    connection.commit()
+    if _is_cancel_requested(connection, job.id):
+        _cancel(connection, job.id)
+        raise AnalysisCancelledError()
+    result = StyleLintService(cast(Any, connection)).run(
+        document_id=document_id,
+        text_revision_id=text_revision_id,
+        structure_revision_id=structure_revision_id,
+        profile_id=profile_id,
+        profile_version_no=profile_version_no,
+        scene_id=scene_id,
+    )
+    connection.execute(
+        "UPDATE style_jobs SET progress_current = 1 WHERE id = ?", (job.id,)
+    )
+    return result
 
 
 def _store_result(

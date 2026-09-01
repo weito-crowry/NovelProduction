@@ -30,6 +30,7 @@ from novel_api.style_analysis.catalog_current import (
     select_current_runs,
 )
 from novel_api.style_analysis.catalog_effective import effective_outputs
+from novel_api.style_analysis.catalog_lint import StyleAnalysisLintMixin
 from novel_api.style_analysis.catalog_outputs import StyleAnalysisOutputsMixin
 from novel_api.style_analysis.catalog_review import StyleAnalysisReviewMixin
 from novel_api.style_analysis.job_service import DatabaseConnection
@@ -61,6 +62,7 @@ class StyleAnalysisCatalogService(
     StyleAnalysisCorpusProfileMixin,
     StyleAnalysisOutputsMixin,
     StyleAnalysisReviewMixin,
+    StyleAnalysisLintMixin,
 ):
     def __init__(self, connection: DatabaseConnection) -> None:
         self._repository = StyleSourceRepository(cast(Any, connection))
@@ -73,6 +75,9 @@ class StyleAnalysisCatalogService(
         self._entities = EntityService(cast(Any, connection))
         self._terms = TermService(cast(Any, connection))
         self._reviews = ReviewService(cast(Any, connection))
+        from novel_core.style_analysis.lint_service import StyleLintService
+
+        self._lint = StyleLintService(cast(Any, connection))
 
     def list_reference_works(self) -> tuple[ReferenceWorkRecord, ...]:
         return self._repository.list_reference_works()

@@ -281,6 +281,132 @@ class StyleTextService:
         )
         return self.get_text_revision(document_id, revision_id)
 
+    def insert_project_draft_revision(
+        self,
+        *,
+        document_id: int,
+        project_draft_id: int,
+        raw_text: str,
+        structure_hints_raw: object,
+    ) -> TextRevisionRecord:
+        """Insert or reuse a formally normalized project-draft revision."""
+
+        document = self.get_document(document_id)
+        if document is None:
+            raise ValidationError("STYLE_DOCUMENT_NOT_FOUND")
+        if (
+            document.kind != "project_episode_draft"
+            or document.project_work_id is None
+            or document.project_episode_id is None
+        ):
+            raise ValidationError("PROJECT_DOCUMENT_REQUIRED")
+        draft = self._connection.execute(
+            "SELECT work_id, episode_id FROM drafts WHERE id = ?",
+            (project_draft_id,),
+        ).fetchone()
+        if draft is None:
+            raise ValidationError("DRAFT_NOT_FOUND")
+        if (int(draft[0]), int(draft[1])) != (
+            document.project_work_id,
+            document.project_episode_id,
+        ):
+            raise ValidationError("PROJECT_DRAFT_DOCUMENT_MISMATCH")
+
+        normalized = normalize_text(raw_text, structure_hints_raw)
+        raw_sha256 = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        canonical_sha256 = hashlib.sha256(
+            normalized.canonical_text.encode("utf-8")
+        ).hexdigest()
+        raw_offsets = _normalize_scene_break_offsets(structure_hints_raw, len(raw_text))
+        fingerprint_input: JsonObject = {
+            "raw_sha256": raw_sha256,
+            "normalizer_id": NORMALIZER_ID,
+            "normalizer_version": NORMALIZER_VERSION,
+            "structure_hints_raw": {
+                "scene_break_offsets_raw": cast(JsonValue, raw_offsets)
+            },
+        }
+        input_fingerprint = fingerprint_json(fingerprint_input)
+        existing = self._connection.execute(
+            "SELECT id FROM style_text_revisions "
+            "WHERE document_id = ? AND normalization_input_fingerprint = ?",
+            (document_id, input_fingerprint),
+        ).fetchone()
+        if existing is not None:
+            revision_id = int(existing[0])
+            if document.current_text_revision_id != revision_id:
+                self._connection.execute(
+                    "UPDATE style_documents SET current_text_revision_id = ?, "
+                    "current_structure_revision_id = NULL WHERE id = ?",
+                    (revision_id, document_id),
+                )
+            return self.get_text_revision(document_id, revision_id)
+
+        revision_no = self._connection.execute(
+            "SELECT COALESCE(MAX(revision_no), 0) + 1 "
+            "FROM style_text_revisions WHERE document_id = ?",
+            (document_id,),
+        ).fetchone()[0]
+        metadata: JsonObject = {
+            "normalization_input": fingerprint_input,
+            "structure_hints_raw": {
+                "scene_break_offsets_raw": cast(JsonValue, raw_offsets)
+            },
+            "structure_hints": {
+                "scene_break_offsets_cp": cast(
+                    JsonValue, list(normalized.scene_break_offsets_cp)
+                )
+            },
+            "normalization_warnings": cast(JsonValue, list(normalized.warnings)),
+        }
+        cursor = self._connection.execute(
+            "INSERT INTO style_text_revisions "
+            "(document_id, revision_no, project_draft_id, raw_text, "
+            "canonical_text, raw_sha256, canonical_sha256, "
+            "normalization_input_fingerprint, normalizer_id, "
+            "normalizer_version, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                document_id,
+                revision_no,
+                project_draft_id,
+                raw_text,
+                normalized.canonical_text,
+                raw_sha256,
+                canonical_sha256,
+                input_fingerprint,
+                NORMALIZER_ID,
+                NORMALIZER_VERSION,
+                _json(metadata),
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("project text revision insert did not return an id")
+        revision_id = int(cursor.lastrowid)
+        self._connection.executemany(
+            "INSERT INTO style_text_mappings "
+            "(text_revision_id, segment_order, raw_start, raw_end, "
+            "canonical_start, canonical_end, operation) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                (
+                    revision_id,
+                    order_index,
+                    segment.raw_start,
+                    segment.raw_end,
+                    segment.canonical_start,
+                    segment.canonical_end,
+                    segment.operation,
+                )
+                for order_index, segment in enumerate(normalized.segments, start=1)
+            ),
+        )
+        self._connection.execute(
+            "UPDATE style_documents SET current_text_revision_id = ?, "
+            "current_structure_revision_id = NULL WHERE id = ?",
+            (revision_id, document_id),
+        )
+        return self.get_text_revision(document_id, revision_id)
+
     def _validate_reference_revision_input(
         self, *, document_id: int, source_snapshot_id: int
     ) -> StyleDocumentRecord:

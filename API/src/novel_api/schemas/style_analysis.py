@@ -20,6 +20,29 @@ class StyleImportResponse(BaseModel):
     source_id: int
 
 
+class ProjectDraftCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: int = Field(gt=0)
+
+
+class StyleLintRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text_revision_id: int = Field(gt=0)
+    structure_revision_id: int = Field(gt=0)
+    profile_id: int = Field(gt=0)
+    profile_version_no: int = Field(gt=0)
+    scene_id: int | None = Field(default=None, gt=0)
+
+
+class StyleFindingReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["acknowledged", "ignored"]
+    note: str | None = None
+
+
 class ReferenceWorkResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

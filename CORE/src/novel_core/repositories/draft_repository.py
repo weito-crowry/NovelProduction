@@ -59,6 +59,12 @@ class DraftRepository:
         ).fetchone()
         return None if row is None else DraftRecord(*row)
 
+    def get_by_id(self, draft_id: int) -> DraftRecord | None:
+        row = self._connection.execute(
+            f"SELECT {_RECORD_COLUMNS} FROM drafts WHERE id = ?", (draft_id,)
+        ).fetchone()
+        return None if row is None else DraftRecord(*row)
+
     def get(
         self, *, work_id: int, episode_id: int, revision: int | None
     ) -> DraftRecord | None:

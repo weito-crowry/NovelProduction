@@ -27,11 +27,14 @@ from novel_api.routes.style_analysis_corpus_profile import (
 from novel_api.routes.style_analysis_review import router as review_router
 from novel_api.schemas.common import ProjectEnvelope
 from novel_api.schemas.style_analysis import (
+    ProjectDraftCaptureRequest,
     ReferenceEpisodeResponse,
     ReferenceWorkResponse,
     StyleAnalyzeRequest,
+    StyleFindingReviewRequest,
     StyleImportResponse,
     StyleJobResponse,
+    StyleLintRequest,
     StyleWorkAnalyzeRequest,
 )
 from novel_api.service_container import (
@@ -48,6 +51,24 @@ router = APIRouter(
     prefix="/api/v1/projects/{project_id}/style-analysis",
     tags=["style-analysis"],
 )
+
+
+@router.post(
+    "/project-episodes/{episode_id}/capture",
+    response_model=ProjectEnvelope[dict[str, object]],
+)
+def capture_project_episode(
+    request: Request,
+    project_id: str,
+    episode_id: int,
+    payload: ProjectDraftCaptureRequest,
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target) as services:
+        result = services.style_analysis.capture_project_draft(
+            episode_id=episode_id, draft_id=payload.draft_id
+        )
+    return envelope(project_id, result)
 
 
 @router.post(
@@ -242,6 +263,83 @@ def analyze_reference_work(
         {"reference_work_id": work_id, **payload.model_dump(exclude_none=True)},
     )
     return envelope(project_id, _job_response(job))
+
+
+@router.post(
+    "/documents/{document_id}/lint",
+    response_model=ProjectEnvelope[StyleJobResponse],
+    status_code=202,
+)
+def lint_document(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    payload: StyleLintRequest,
+) -> ProjectEnvelope[StyleJobResponse]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target):
+        pass
+    service = StyleJobService(
+        data_root=request.app.state.settings.data_root,
+        notify=request.app.state.style_analysis_worker.notify,
+    )
+    job = service.enqueue(
+        project_id,
+        "run_lint",
+        {"document_id": document_id, **payload.model_dump(exclude_none=True)},
+    )
+    return envelope(project_id, _job_response(job))
+
+
+@router.get("/lint-runs")
+def list_lint_runs(
+    request: Request,
+    project_id: str,
+    document_id: int | None = Query(None, gt=0),
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        runs = services.style_analysis.list_lint_runs(document_id)
+    return envelope(project_id, list(runs))
+
+
+@router.get("/lint-runs/{lint_run_id}")
+def get_lint_run(
+    request: Request, project_id: str, lint_run_id: int
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        run = services.style_analysis.get_lint_run(lint_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    return envelope(project_id, run)
+
+
+@router.get("/lint-runs/{lint_run_id}/findings")
+def list_lint_findings(
+    request: Request, project_id: str, lint_run_id: int
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_lint_run(lint_run_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        findings = services.style_analysis.list_lint_findings(lint_run_id)
+    return envelope(project_id, list(findings))
+
+
+@router.post("/findings/{finding_id}/review")
+def review_lint_finding(
+    request: Request,
+    project_id: str,
+    finding_id: int,
+    payload: StyleFindingReviewRequest,
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target) as services:
+        finding = services.style_analysis.review_lint_finding(
+            finding_id, payload.status, payload.note
+        )
+    return envelope(project_id, finding)
 
 
 @router.get(
