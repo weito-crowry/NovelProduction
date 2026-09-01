@@ -171,6 +171,13 @@ def test_nfc_alignment_handles_non_hangul_canonical_composition() -> None:
     assert unicodedata.is_normalized("NFC", result.canonical_text)
 
 
+def test_nfc_alignment_handles_decomposing_mark_reordering() -> None:
+    raw_text = "A\u0305\u0f73"
+    result = normalize_text(raw_text, [])
+    assert result.canonical_text == unicodedata.normalize("NFC", raw_text)
+    assert unicodedata.is_normalized("NFC", result.canonical_text)
+
+
 def test_normalization_collapses_and_trims_blank_lines_after_space_removal() -> None:
     assert normalize_text("A\n \n \nB", []).canonical_text == "A\n\nB"
     assert normalize_text("\n\n\n本文", []).canonical_text == "本文"

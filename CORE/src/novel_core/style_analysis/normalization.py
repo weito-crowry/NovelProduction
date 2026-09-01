@@ -192,7 +192,14 @@ def _nfc_composition_components() -> frozenset[str]:
     for codepoint in range(0x110000):
         decomposition = unicodedata.decomposition(chr(codepoint))
         if decomposition and not decomposition.startswith("<"):
-            components.update(chr(int(value, 16)) for value in decomposition.split())
+            values = [int(value, 16) for value in decomposition.split()]
+            components.update(chr(value) for value in values)
+            character = chr(codepoint)
+            if any(
+                unicodedata.combining(mark)
+                for mark in unicodedata.normalize("NFD", character)
+            ):
+                components.add(character)
     components.update(chr(codepoint) for codepoint in range(0x1100, 0x1200))
     components.update(chr(codepoint) for codepoint in range(0xA960, 0xA97D))
     components.update(chr(codepoint) for codepoint in range(0xD7B0, 0xD7FC))
