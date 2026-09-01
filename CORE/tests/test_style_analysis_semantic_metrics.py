@@ -6,7 +6,11 @@ from pathlib import Path
 from test_style_analysis_migration import open_test_database
 
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
-from novel_core.style_analysis.semantic_metric_support import resolve_speaker
+from novel_core.style_analysis.semantic_metric_support import (
+    enabled_person,
+    resolve_entity_type,
+    resolve_speaker,
+)
 from novel_core.style_analysis.semantic_metrics import calculate_semantic_metrics
 from novel_core.style_analysis.semantic_repository import SemanticRepository
 from novel_core.style_analysis.structure_models import BlockRecord, SceneRecord
@@ -177,6 +181,66 @@ def test_semantic_metrics_use_registry_effective_values_and_outer_quotes(
         assert values[("character", "speaker.utterance_count")] == 1
         assert values[("character", "speaker.utterance_len.p50")] == 3
         assert values[("character", "speaker.question_ratio")] == 1
+    finally:
+        connection.close()
+
+
+def test_effective_entity_type_controls_character_metrics(tmp_path: Path) -> None:
+    connection, document_id, scenes, blocks = _fixture(tmp_path)
+    try:
+        person_id = connection.execute(
+            "SELECT id FROM style_entities WHERE canonical_name = 'A'"
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE style_entities SET entity_type = 'other' WHERE id = ?",
+            (person_id,),
+        )
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(document_id, subject_type, subject_id, field_path, operation, "
+            "value_json, structure_revision_id) VALUES (?, 'entity', ?, "
+            "'entity.entity_type', 'set', '\"person\"', 1)",
+            (document_id, person_id),
+        )
+        assert resolve_entity_type(connection, person_id).value == "person"
+        assert enabled_person(connection, person_id)
+        result = calculate_semantic_metrics(
+            connection,
+            document_id=document_id,
+            canonical_text="「本当？」\n動く",
+            scenes=scenes,
+            blocks=blocks,
+            speaker_run_id=2,
+            term_run_id=None,
+            explanation_run_id=None,
+            block_run_id=3,
+        )
+        assert any(
+            item.target_type == "character" and item.target_id == person_id
+            for item in result.measurements
+        )
+
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(document_id, subject_type, subject_id, field_path, operation, "
+            "value_json, structure_revision_id) VALUES (?, 'entity', ?, "
+            "'entity.entity_type', 'set', '\"other\"', 1)",
+            (document_id, person_id),
+        )
+        assert resolve_entity_type(connection, person_id).value == "other"
+        assert not enabled_person(connection, person_id)
+        result = calculate_semantic_metrics(
+            connection,
+            document_id=document_id,
+            canonical_text="「本当？」\n動く",
+            scenes=scenes,
+            blocks=blocks,
+            speaker_run_id=2,
+            term_run_id=None,
+            explanation_run_id=None,
+            block_run_id=3,
+        )
+        assert not any(item.target_type == "character" for item in result.measurements)
     finally:
         connection.close()
 

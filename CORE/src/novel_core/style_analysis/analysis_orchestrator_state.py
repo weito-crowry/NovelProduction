@@ -15,36 +15,56 @@ class AnalysisStateMixin:
     def _metric_effective_state(
         self: Any, document_id: int, structure_id: int
     ) -> list[dict[str, object]]:
-        override_paths = (
+        document_override_paths = (
             "block.speaker_entity_id",
             "block.semantic_primary",
-            "term.novelty",
             "term_mention.sufficient_explanation_annotation_id",
-            "mention.entity_id",
         )
-        review_paths = (
+        document_review_paths = (
             "block.speaker",
             "block.semantic_primary",
-            "term.novelty",
             "term_mention.explanation",
         )
-        override_placeholders = ", ".join("?" for _ in override_paths)
-        review_placeholders = ", ".join("?" for _ in review_paths)
+        document_override_placeholders = ", ".join("?" for _ in document_override_paths)
+        document_review_placeholders = ", ".join("?" for _ in document_review_paths)
         overrides = self.connection.execute(
             "SELECT subject_type, subject_id, field_path, operation, value_json, "
             "structure_revision_id FROM style_manual_overrides "
-            "WHERE document_id = ? AND field_path IN (" + override_placeholders + ") "
+            "WHERE document_id = ? AND field_path IN ("
+            + document_override_placeholders
+            + ") "
             "AND (structure_revision_id IS NULL OR structure_revision_id = ?) "
             "ORDER BY subject_type, subject_id, field_path, created_at, id",
-            (document_id, *override_paths, structure_id),
+            (document_id, *document_override_paths, structure_id),
         ).fetchall()
         reviews = self.connection.execute(
             "SELECT subject_type, subject_id, field_path, review_status, "
             "analysis_run_id FROM style_inference_reviews "
-            "WHERE document_id = ? AND field_path IN (" + review_placeholders + ") "
-            "ORDER BY subject_type, subject_id, field_path, created_at, id",
-            (document_id, *review_paths),
+            "WHERE document_id = ? AND field_path IN ("
+            + document_review_placeholders
+            + ") ORDER BY subject_type, subject_id, field_path, created_at, id",
+            (document_id, *document_review_paths),
         ).fetchall()
+        scope_field, scope_value = next(iter(self.terms._scope(document_id).items()))
+        term_overrides = self.connection.execute(
+            "SELECT subject_type, subject_id, field_path, operation, value_json, "
+            "structure_revision_id FROM style_manual_overrides "
+            "WHERE subject_type = 'term' AND field_path = 'term.novelty' AND "
+            + scope_field
+            + " = ? AND (structure_revision_id IS NULL OR structure_revision_id = ?) "
+            "ORDER BY subject_type, subject_id, field_path, created_at, id",
+            (scope_value, structure_id),
+        ).fetchall()
+        term_reviews = self.connection.execute(
+            "SELECT subject_type, subject_id, field_path, review_status, "
+            "analysis_run_id FROM style_inference_reviews "
+            "WHERE subject_type = 'term' AND field_path = 'term.novelty' AND "
+            + scope_field
+            + " = ? ORDER BY subject_type, subject_id, field_path, created_at, id",
+            (scope_value,),
+        ).fetchall()
+        overrides += term_overrides
+        reviews += term_reviews
         return [
             {
                 "kind": "override",
@@ -170,7 +190,10 @@ class AnalysisStateMixin:
                             }
                         )
         state["manual_overrides"] = self._scoped_manual_overrides(
-            "term", scope_field, scope_value
+            "term",
+            scope_field,
+            scope_value,
+            ("term.enabled", "term.canonical_label", "term.term_type"),
         )
         return [
             {key: sorted(values, key=lambda item: tuple(map(repr, item.values())))}
@@ -178,13 +201,24 @@ class AnalysisStateMixin:
         ]
 
     def _scoped_manual_overrides(
-        self: Any, subject_type: str, scope_field: str, scope_value: int
+        self: Any,
+        subject_type: str,
+        scope_field: str,
+        scope_value: int,
+        field_paths: Sequence[str] = (),
     ) -> list[dict[str, object]]:
+        field_filter = ""
+        parameters: tuple[object, ...] = (subject_type, scope_value)
+        if field_paths:
+            placeholders = ", ".join("?" for _ in field_paths)
+            field_filter = f" AND field_path IN ({placeholders})"
+            parameters = (subject_type, scope_value, *field_paths)
         rows = self.connection.execute(
             "SELECT subject_id, field_path, operation, value_json "
             "FROM style_manual_overrides WHERE subject_type = ? "
-            f"AND {scope_field} = ? ORDER BY subject_id, field_path, created_at, id",
-            (subject_type, scope_value),
+            f"AND {scope_field} = ?{field_filter} "
+            "ORDER BY subject_id, field_path, created_at, id",
+            parameters,
         ).fetchall()
         return [
             {

@@ -161,6 +161,102 @@ def test_term_prefix_uses_in_flight_target_lineage_before_pointer_update(
         connection.close()
 
 
+def test_metric_state_uses_reference_term_scope_without_registry_novelty(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path)
+    try:
+        work_id = import_work(connection, count=2)
+        episode = StyleSourceRepository(connection).list_reference_episodes(work_id)[0]
+        assert episode.style_document_id is not None
+        assert episode.current_structure_revision_id is not None
+        term_cursor = connection.execute(
+            "INSERT INTO style_terms "
+            "(reference_work_id, canonical_label, term_type, origin) "
+            "VALUES (?, '固有語', 'other', 'manual')",
+            (work_id,),
+        )
+        assert term_cursor.lastrowid is not None
+        term_id = int(term_cursor.lastrowid)
+        run_id = connection.execute(
+            "SELECT id FROM style_analysis_runs WHERE document_id = ? "
+            "ORDER BY id LIMIT 1",
+            (episode.style_document_id,),
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO style_inference_reviews "
+            "(reference_work_id, subject_type, subject_id, field_path, "
+            "analysis_run_id, review_status) VALUES (?, 'term', ?, "
+            "'term.novelty', ?, 'confirmed')",
+            (work_id, term_id, run_id),
+        )
+        connection.commit()
+
+        resolver = CurrentRunResolver(connection)
+        metric_state = resolver.state._metric_effective_state(
+            episode.style_document_id, episode.current_structure_revision_id
+        )
+        assert any(
+            item["kind"] == "review"
+            and item["subject_type"] == "term"
+            and item["subject_id"] == term_id
+            and item["field_path"] == "term.novelty"
+            for item in metric_state
+        )
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(reference_work_id, subject_type, subject_id, field_path, operation, "
+            "value_json, structure_revision_id) VALUES (?, 'mention', 999, "
+            "'mention.entity_id', 'set', '{\"value\":1}', ?)",
+            (work_id, episode.current_structure_revision_id),
+        )
+        connection.commit()
+        metric_state = resolver.state._metric_effective_state(
+            episode.style_document_id, episode.current_structure_revision_id
+        )
+        assert not any(
+            item["field_path"] == "mention.entity_id" for item in metric_state
+        )
+        assert resolver.state._mention_resolution_state(
+            episode.style_document_id,
+            episode.current_structure_revision_id,
+            run_id,
+        ) == [
+            {
+                "mention_id": 999,
+                "manual_override": {
+                    "field_path": "mention.entity_id",
+                    "operation": "set",
+                    "value_json": '{"value":1}',
+                },
+            }
+        ]
+        registry_state = resolver.state._term_registry_state(episode.style_document_id)
+        connection.execute(
+            "INSERT INTO style_manual_overrides "
+            "(reference_work_id, subject_type, subject_id, field_path, operation, "
+            "value_json, structure_revision_id) VALUES (?, 'term', ?, "
+            "'term.novelty', 'set', '{\"value\":\"work_specific\"}', ?)",
+            (work_id, term_id, episode.current_structure_revision_id),
+        )
+        connection.commit()
+        metric_state = resolver.state._metric_effective_state(
+            episode.style_document_id, episode.current_structure_revision_id
+        )
+        assert any(
+            item["kind"] == "override"
+            and item["subject_id"] == term_id
+            and item["field_path"] == "term.novelty"
+            for item in metric_state
+        )
+        assert (
+            resolver.state._term_registry_state(episode.style_document_id)
+            == registry_state
+        )
+    finally:
+        connection.close()
+
+
 def test_corpus_membership_and_document_aggregate_use_current_rows(
     tmp_path: Path,
 ) -> None:

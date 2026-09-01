@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from novel_core.style_analysis.entity_models import ENTITY_TYPES
 from novel_core.style_analysis.structure_models import BlockRecord
 
 
@@ -489,15 +490,40 @@ def eligible_persons(
 
 
 def enabled_person(connection: sqlite3.Connection, entity_id: int) -> bool:
-    row = connection.execute(
-        "SELECT entity_type FROM style_entities WHERE id = ?", (entity_id,)
-    ).fetchone()
-    if row is None or row[0] != "person":
+    if resolve_entity_type(connection, entity_id).value != "person":
         return False
     override = latest_override(connection, "entity", entity_id, "entity.enabled")
     if override is None or override[1] != "set":
         return True
     return json_field(override[2], "value") is not False
+
+
+def resolve_entity_type(
+    connection: sqlite3.Connection, entity_id: int
+) -> EffectiveValue:
+    row = connection.execute(
+        "SELECT entity_type FROM style_entities WHERE id = ?", (entity_id,)
+    ).fetchone()
+    if row is None:
+        return EffectiveValue(None, "unknown")
+    override = latest_override(connection, "entity", entity_id, "entity.entity_type")
+    if override is not None:
+        override_id, operation, value_json = override
+        if operation == "set":
+            value = json_field(value_json, "value")
+            return EffectiveValue(
+                value if isinstance(value, str) and value in ENTITY_TYPES else None,
+                "manual"
+                if isinstance(value, str) and value in ENTITY_TYPES
+                else "unknown",
+                override_id=override_id,
+            )
+    value = row[0]
+    return EffectiveValue(
+        value if isinstance(value, str) and value in ENTITY_TYPES else None,
+        "inferred" if isinstance(value, str) and value in ENTITY_TYPES else "unknown",
+        override_id=override[0] if override is not None else None,
+    )
 
 
 def speaker_streaks(
