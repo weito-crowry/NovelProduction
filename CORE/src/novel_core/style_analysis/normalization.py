@@ -24,6 +24,7 @@ class NormalizationResult:
 
 NORMALIZER_ID = "canonical-japanese-fiction"
 NORMALIZER_VERSION = 1
+MAX_TEXT_CODE_POINTS = 2_000_000
 
 
 def normalize_text(
@@ -31,8 +32,12 @@ def normalize_text(
 ) -> NormalizationResult:
     if not isinstance(raw_text, str):
         raise ValidationError("TEXT_INVALID")
+    if len(raw_text) > MAX_TEXT_CODE_POINTS:
+        raise ValidationError("TEXT_TOO_LARGE")
     raw_offsets = _normalize_offsets(scene_break_offsets_raw, len(raw_text))
     canonical_text = _canonicalize(raw_text)
+    if not canonical_text:
+        raise ValidationError("TEXT_EMPTY")
     segments = _build_segments(raw_text, canonical_text)
     mapped: list[int] = []
     warnings: list[str] = []
@@ -97,6 +102,16 @@ def _is_removed_control(character: str) -> bool:
 
 
 def _build_segments(raw_text: str, canonical_text: str) -> tuple[TextMapSegment, ...]:
+    if raw_text == canonical_text:
+        return (
+            TextMapSegment(
+                raw_start=0,
+                raw_end=len(raw_text),
+                canonical_start=0,
+                canonical_end=len(canonical_text),
+                operation="identity",
+            ),
+        )
     matcher = difflib.SequenceMatcher(a=raw_text, b=canonical_text, autojunk=False)
     result: list[TextMapSegment] = []
     for (
@@ -115,6 +130,21 @@ def _build_segments(raw_text: str, canonical_text: str) -> tuple[TextMapSegment,
                 raw_text[raw_start:raw_end],
                 canonical_text[canonical_start:canonical_end],
             )
+        elif tag == "insert":
+            if not result or result[-1].canonical_end != canonical_start:
+                raise ValidationError("TEXT_MAPPING_INVALID")
+            previous = result.pop()
+            operation = "replace"
+            result.append(
+                TextMapSegment(
+                    raw_start=previous.raw_start,
+                    raw_end=previous.raw_end,
+                    canonical_start=previous.canonical_start,
+                    canonical_end=canonical_end,
+                    operation=operation,
+                )
+            )
+            continue
         else:
             raise ValidationError("TEXT_MAPPING_INVALID")
         if raw_start == raw_end and canonical_start == canonical_end:

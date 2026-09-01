@@ -64,6 +64,15 @@ def build_automatic_structure(
             )
         )
 
+    usable_boundary_offsets = {
+        block.end_cp
+        for index, block in enumerate(blocks)
+        if block.block_type != "separator"
+        and any(
+            next_block.block_type != "separator" for next_block in blocks[index + 1 :]
+        )
+        and block.end_cp in offsets
+    }
     scenes: list[SceneDraft] = []
     current: list[int] = []
     for block_index, block in enumerate(blocks):
@@ -74,20 +83,16 @@ def build_automatic_structure(
         if block.block_type == "heading" and current:
             _append_scene(scenes, blocks, current)
             current = []
-        if current and blocks[current[-1]].end_cp in offsets:
+        if current and blocks[current[-1]].end_cp in usable_boundary_offsets:
             _append_scene(scenes, blocks, current)
             current = []
         current.append(block_index)
-        if block.end_cp in offsets and block_index + 1 < len(blocks):
+        if block.end_cp in usable_boundary_offsets:
             _append_scene(scenes, blocks, current)
             current = []
     _append_scene(scenes, blocks, current)
 
-    valid_boundaries = {
-        block.end_cp
-        for block in blocks
-        if block.block_type != "separator" and block.end_cp in offsets
-    }
+    valid_boundaries = usable_boundary_offsets
     for offset in offsets:
         if offset not in valid_boundaries:
             warnings.append("scene_break_hint_not_on_block_boundary")

@@ -41,6 +41,12 @@ def test_automatic_structure_applies_only_exact_block_boundary_hints() -> None:
     assert draft.scenes[0].end_cp == exact
 
 
+def test_boundary_hint_without_following_text_is_dropped_with_warning() -> None:
+    draft = build_automatic_structure("第一文。\n\n---", [4])
+    assert len(draft.scenes) == 1
+    assert "scene_break_hint_not_on_block_boundary" in draft.warnings
+
+
 def test_sentence_splitter_keeps_closing_quote_on_sentence() -> None:
     draft = build_automatic_structure("「一。」\n\n「二」", [])
     dialogue_sentences = [
@@ -101,10 +107,28 @@ def test_automatic_structure_is_persisted_and_reused(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM style_blocks WHERE structure_revision_id = ?",
             (first.id,),
         ).fetchone() == (1,)
+        connection.execute(
+            "INSERT INTO style_structure_revisions "
+            "(text_revision_id, revision_no, segmenter_id, segmenter_version, "
+            "source_kind, fingerprint) VALUES (?, 2, ?, 1, 'manual', ?)",
+            (episode.current_text_revision_id, "manual-test", "c" * 64),
+        )
+        connection.commit()
+        manual_id = connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+        StyleStructureService(connection).set_current_structure(
+            episode.style_document_id, manual_id
+        )
+        reused_with_manual_current = StyleStructureService(
+            connection
+        ).build_automatic_structure(
+            document_id=episode.style_document_id,
+            text_revision_id=episode.current_text_revision_id,
+        )
+        assert reused_with_manual_current.id == first.id
         document = connection.execute(
             "SELECT current_structure_revision_id FROM style_documents WHERE id = ?",
             (episode.style_document_id,),
         ).fetchone()
-        assert document == (first.id,)
+        assert document == (manual_id,)
     finally:
         connection.close()

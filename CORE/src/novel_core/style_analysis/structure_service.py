@@ -171,10 +171,15 @@ class StyleStructureService:
                             ),
                         )
             current = self._connection.execute(
-                "SELECT current_text_revision_id FROM style_documents WHERE id = ?",
+                "SELECT current_text_revision_id, current_structure_revision_id "
+                "FROM style_documents WHERE id = ?",
                 (document_id,),
             ).fetchone()
-            if current is not None and current[0] == text_revision_id:
+            if (
+                current is not None
+                and current[0] == text_revision_id
+                and current[1] is None
+            ):
                 self._connection.execute(
                     "UPDATE style_documents SET current_structure_revision_id = ? "
                     "WHERE id = ?",

@@ -89,9 +89,18 @@ def calculate_basic_metrics(
     result: list[MetricMeasurement] = []
     result.extend(
         _scope_metrics(
-            "document", document_id, canonical_text, usable_blocks, sentences
+            "document",
+            document_id,
+            canonical_text,
+            usable_blocks,
+            sentences,
+            blocks,
         )
     )
+    all_by_scene = {
+        scene.id: tuple(block for block in blocks if block.scene_id == scene.id)
+        for scene in scenes
+    }
     for scene in scenes:
         result.extend(
             _scope_metrics(
@@ -106,6 +115,7 @@ def calculate_basic_metrics(
                         block.id == sentence.block_id for block in by_scene[scene.id]
                     )
                 ),
+                all_by_scene[scene.id],
             )
         )
     return tuple(result)
@@ -117,15 +127,21 @@ def _scope_metrics(
     text: str,
     blocks: tuple[BlockRecord, ...],
     sentences: tuple[SentenceRecord, ...],
+    ordered_blocks: tuple[BlockRecord, ...],
 ) -> list[MetricMeasurement]:
     result: list[MetricMeasurement] = []
-    block_lengths = [block.end_cp - block.start_cp for block in blocks]
-    sentence_lengths = [sentence.end_cp - sentence.start_cp for sentence in sentences]
+    block_lengths = [
+        _metric_char_count(text[block.start_cp : block.end_cp]) for block in blocks
+    ]
+    sentence_lengths = [
+        _metric_char_count(text[sentence.start_cp : sentence.end_cp])
+        for sentence in sentences
+    ]
     paragraph_lengths: dict[int, int] = {}
     for block in blocks:
         paragraph_lengths[block.paragraph_index] = paragraph_lengths.get(
             block.paragraph_index, 0
-        ) + (block.end_cp - block.start_cp)
+        ) + _metric_char_count(text[block.start_cp : block.end_cp])
     result.append(
         _measurement(target_type, target_id, "text.char_count", sum(block_lengths), 1)
     )
@@ -139,7 +155,9 @@ def _scope_metrics(
         )
     )
     dialogue = tuple(block for block in blocks if block.block_type == "dialogue")
-    dialogue_chars = sum(block.end_cp - block.start_cp for block in dialogue)
+    dialogue_chars = sum(
+        _metric_char_count(text[block.start_cp : block.end_cp]) for block in dialogue
+    )
     total_chars = sum(block_lengths)
     if total_chars:
         result.append(
@@ -164,11 +182,11 @@ def _scope_metrics(
             target_type, target_id, "dialogue.utterance_len", utterance_lengths
         )
     )
-    turn_counts = _turn_counts(blocks)
+    turn_counts = _turn_counts(ordered_blocks)
     result.extend(
         _percentiles(target_type, target_id, "dialogue.turn_count", turn_counts)
     )
-    narration_runs = _narration_runs(blocks)
+    narration_runs = _narration_runs(ordered_blocks, text)
     result.extend(
         _percentiles(target_type, target_id, "narration.run_len", narration_runs)
     )
@@ -228,10 +246,20 @@ def _outer_quote_length(value: str) -> int:
     return len(value)
 
 
+def _metric_char_count(value: str) -> int:
+    return sum(not character.isspace() for character in value)
+
+
 def _turn_counts(blocks: tuple[BlockRecord, ...]) -> list[int]:
     counts: list[int] = []
     current = 0
+    current_scene: int | None = None
     for index, block in enumerate(blocks):
+        if current and block.scene_id != current_scene:
+            counts.append(current)
+            current = 0
+        if block.block_type == "dialogue" and current_scene != block.scene_id:
+            current_scene = block.scene_id
         if block.block_type == "dialogue":
             current += 1
             continue
@@ -252,19 +280,21 @@ def _turn_counts(blocks: tuple[BlockRecord, ...]) -> list[int]:
     return counts
 
 
-def _narration_runs(blocks: tuple[BlockRecord, ...]) -> list[int]:
+def _narration_runs(blocks: tuple[BlockRecord, ...], text: str) -> list[int]:
     result: list[int] = []
     current_scene: int | None = None
     current = 0
     for block in blocks:
         if block.block_type == "narration" and block.scene_id == current_scene:
-            current += block.end_cp - block.start_cp
+            current += _metric_char_count(text[block.start_cp : block.end_cp])
         else:
             if current:
                 result.append(current)
             current_scene = block.scene_id
             current = (
-                block.end_cp - block.start_cp if block.block_type == "narration" else 0
+                _metric_char_count(text[block.start_cp : block.end_cp])
+                if block.block_type == "narration"
+                else 0
             )
     if current:
         result.append(current)

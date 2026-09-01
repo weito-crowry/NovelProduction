@@ -15,20 +15,20 @@ def _structure() -> tuple[
     tuple[SceneRecord, ...], tuple[BlockRecord, ...], tuple[SentenceRecord, ...]
 ]:
     scenes = (
-        SceneRecord(1, 10, 1, 0, 19),
-        SceneRecord(2, 10, 2, 21, 25),
+        SceneRecord(1, 10, 1, 0, 17),
+        SceneRecord(2, 10, 2, 19, 23),
     )
     blocks = (
         BlockRecord(11, 10, 1, 1, 1, "narration", 0, 5),
         BlockRecord(12, 10, 1, 2, 1, "dialogue", 5, 15),
-        BlockRecord(13, 10, 1, 3, 2, "narration", 15, 19),
-        BlockRecord(14, 10, 2, 4, 3, "dialogue", 21, 25),
+        BlockRecord(13, 10, 1, 3, 2, "narration", 15, 17),
+        BlockRecord(14, 10, 2, 4, 3, "dialogue", 19, 23),
     )
     sentences = (
         SentenceRecord(21, 11, 1, 0, 5),
         SentenceRecord(22, 12, 1, 5, 10),
         SentenceRecord(23, 12, 2, 10, 15),
-        SentenceRecord(24, 14, 1, 21, 25),
+        SentenceRecord(24, 14, 1, 19, 23),
     )
     return scenes, blocks, sentences
 
@@ -47,7 +47,7 @@ def test_basic_metrics_calculate_document_and_scene_scopes() -> None:
     scenes, blocks, sentences = _structure()
     results = calculate_basic_metrics(
         document_id=99,
-        canonical_text="春です。「はい。いいえ。」静か。\n\n「また。」",
+        canonical_text="abcde1234567890xy\n\nwxyz",
         scenes=scenes,
         blocks=blocks,
         sentences=sentences,
@@ -57,9 +57,9 @@ def test_basic_metrics_calculate_document_and_scene_scopes() -> None:
         for result in results
         if result.target_type == "document"
     }
-    assert document["text.char_count"].value == 23
+    assert document["text.char_count"].value == 21
     assert document["dialogue.utterance_count"].value == 2
-    assert document["dialogue.char_ratio"].value == 14 / 23
+    assert document["dialogue.char_ratio"].value == 14 / 21
     assert document["sentence.len.p50"].sample_count == 4
     assert document["dialogue.turn_count.p50"].value == 1.0
     scene_results = [result for result in results if result.target_type == "scene"]
@@ -96,3 +96,48 @@ def test_basic_metrics_missing_percentiles_are_omitted_and_zero_dialogue_is_vali
         ).value
         == 0.0
     )
+
+
+def test_basic_metric_char_count_excludes_unicode_whitespace() -> None:
+    scenes = (SceneRecord(1, 10, 1, 0, 5),)
+    blocks = (BlockRecord(11, 10, 1, 1, 1, "narration", 0, 5),)
+    results = calculate_basic_metrics(
+        document_id=1,
+        canonical_text="A B C",
+        scenes=scenes,
+        blocks=blocks,
+        sentences=(SentenceRecord(21, 11, 1, 0, 5),),
+    )
+    assert (
+        next(
+            result for result in results if result.metric_name == "text.char_count"
+        ).value
+        == 3
+    )
+
+
+def test_turn_count_terminates_at_scene_and_structural_boundaries() -> None:
+    scenes = (
+        SceneRecord(1, 10, 1, 0, 3),
+        SceneRecord(2, 10, 2, 4, 7),
+    )
+    blocks = (
+        BlockRecord(11, 10, 1, 1, 1, "dialogue", 0, 1),
+        BlockRecord(12, 10, 1, 2, 1, "separator", 1, 2),
+        BlockRecord(13, 10, 2, 3, 2, "dialogue", 4, 5),
+        BlockRecord(14, 10, 2, 4, 2, "unknown", 5, 6),
+    )
+    results = calculate_basic_metrics(
+        document_id=1,
+        canonical_text="A-X\nB C",
+        scenes=scenes,
+        blocks=blocks,
+        sentences=(),
+    )
+    turn_p50 = next(
+        result
+        for result in results
+        if result.target_type == "document"
+        and result.metric_name == "dialogue.turn_count.p50"
+    )
+    assert turn_p50.value == 1.0

@@ -54,8 +54,26 @@ def map_canonical_span_to_raw(
     ]
     if not overlapping:
         return None
-    raw_start = min(segment.raw_start for segment in overlapping)
-    raw_end = max(segment.raw_end for segment in overlapping)
+    raw_bounds = [
+        (
+            max(canonical_start, segment.canonical_start),
+            min(canonical_end, segment.canonical_end),
+            segment,
+        )
+        for segment in overlapping
+    ]
+    raw_start = min(
+        segment.raw_start
+        if segment.operation != "identity"
+        else segment.raw_start + start - segment.canonical_start
+        for start, _, segment in raw_bounds
+    )
+    raw_end = max(
+        segment.raw_end
+        if segment.operation != "identity"
+        else segment.raw_start + end - segment.canonical_start
+        for _, end, segment in raw_bounds
+    )
     covering = [
         segment
         for segment in segments

@@ -142,3 +142,17 @@ def test_normalization_rules_are_nfc_only_and_preserve_full_width_space() -> Non
     assert not result.canonical_text.endswith("\n")
     assert "\x00" not in result.canonical_text
     assert "\x0b" not in result.canonical_text
+
+
+def test_nfc_alignment_handles_repeated_precomposed_character() -> None:
+    result = normalize_text("e\u0301é", [])
+    assert result.canonical_text == "éé"
+    assert result.segments
+
+
+def test_normalization_empty_and_code_point_limit_errors() -> None:
+    with pytest.raises(ValidationError, match="TEXT_EMPTY"):
+        normalize_text("\x00\n\n", [])
+    with pytest.raises(ValidationError, match="TEXT_TOO_LARGE"):
+        normalize_text("a" * 2_000_001, [])
+    assert normalize_text("a" * 2_000_000, []).canonical_text == "a" * 2_000_000
