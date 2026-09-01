@@ -111,4 +111,30 @@ export const projectQueryKeys = {
   ) => ["project", projectId, "timeline-relations", eventId, limit, offset] as const,
   timelineRelationsFamily: (projectId: string) =>
     ["project", projectId, "timeline-relations"] as const,
+  styleAnalysis: (projectId: string, section = "overview") =>
+    ["project", projectId, "style-analysis", section] as const,
+  styleAnalysisFamily: (projectId: string) =>
+    ["project", projectId, "style-analysis"] as const,
+  styleReferenceWorks: (projectId: string) =>
+    ["project", projectId, "style-analysis", "reference-works"] as const,
+  styleReferenceWork: (projectId: string, workId: number) =>
+    ["project", projectId, "style-analysis", "reference-work", workId] as const,
+  styleReferenceEpisodes: (projectId: string, workId: number) =>
+    ["project", projectId, "style-analysis", "reference-episodes", workId] as const,
+  styleJob: (projectId: string, jobId: number) =>
+    ["project", projectId, "style-analysis", "job", jobId] as const,
+  styleCorpora: (projectId: string) =>
+    ["project", projectId, "style-analysis", "corpora"] as const,
+  styleCorpus: (projectId: string, corpusId: number) =>
+    ["project", projectId, "style-analysis", "corpus", corpusId] as const,
+  styleProfiles: (projectId: string) =>
+    ["project", projectId, "style-analysis", "profiles"] as const,
+  styleProfile: (projectId: string, profileId: number) =>
+    ["project", projectId, "style-analysis", "profile", profileId] as const,
+  styleReviewItems: (projectId: string, status: string) =>
+    ["project", projectId, "style-analysis", "review-items", status] as const,
+  styleLintRuns: (projectId: string, documentId?: number) =>
+    ["project", projectId, "style-analysis", "lint-runs", documentId] as const,
+  styleLintFindings: (projectId: string, lintRunId: number) =>
+    ["project", projectId, "style-analysis", "lint-findings", lintRunId] as const,
 };

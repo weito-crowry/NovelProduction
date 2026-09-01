@@ -175,4 +175,28 @@ describe("apiRequest", () => {
 
     await expect(apiRequest("/api/v1/projects/A")).resolves.toBeUndefined();
   });
+
+  it("passes FormData through without forcing JSON headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ project_id: "A", data: { imported: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const body = new FormData();
+    body.set("source_type", "text");
+
+    await expect(
+      apiRequest<{ imported: boolean }>("/api/v1/projects/A/style-analysis/imports/file", {
+        method: "POST",
+        body,
+        projectId: "A",
+      }),
+    ).resolves.toEqual({ imported: true });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.body).toBe(body);
+    expect(new Headers(request.headers).has("Content-Type")).toBe(false);
+  });
 });

@@ -16,7 +16,9 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const { body, projectId, headers, ...requestInit } = options;
   const requestHeaders = new Headers(headers);
-  if (body !== undefined) {
+  const isFormDataBody =
+    typeof FormData !== "undefined" && body instanceof FormData;
+  if (body !== undefined && !isFormDataBody) {
     requestHeaders.set("Content-Type", "application/json");
   }
 
@@ -25,7 +27,12 @@ export async function apiRequest<T>(
     response = await fetch(path, {
       ...requestInit,
       headers: requestHeaders,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body:
+        body === undefined
+          ? undefined
+          : isFormDataBody
+            ? body
+            : JSON.stringify(body),
     });
   } catch {
     throw new ApiError(
