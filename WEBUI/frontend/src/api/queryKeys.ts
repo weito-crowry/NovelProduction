@@ -115,6 +115,10 @@ export const projectQueryKeys = {
     ["project", projectId, "style-analysis", section] as const,
   styleAnalysisFamily: (projectId: string) =>
     ["project", projectId, "style-analysis"] as const,
+  styleDocumentRevisions: (projectId: string, documentId: number) =>
+    ["project", projectId, "style-analysis", "document-revisions", documentId] as const,
+  styleDocumentStructures: (projectId: string, documentId: number) =>
+    ["project", projectId, "style-analysis", "document-structures", documentId] as const,
   styleReferenceWorks: (projectId: string) =>
     ["project", projectId, "style-analysis", "reference-works"] as const,
   styleReferenceWork: (projectId: string, workId: number) =>

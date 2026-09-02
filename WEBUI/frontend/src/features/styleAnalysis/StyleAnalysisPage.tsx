@@ -23,6 +23,7 @@ import {
   createInferenceReview,
   createManualProfile,
   createOverride,
+  createProfileVersion,
   createProfileFromCorpus,
   createReviewItem,
   createStyleEntity,
@@ -71,6 +72,7 @@ import type {
   ReferenceEpisode,
   ReviewItem,
   StyleJob,
+  StyleRule,
   StyleSemanticOutput,
 } from "./styleAnalysisApi";
 import {
@@ -203,6 +205,13 @@ const STYLE_OVERRIDE_FIELDS: StyleOverrideField[] = [
   { fieldPath: "scene.pov_mode", subjectType: "scene", label: "Scene POV mode", structureBound: true },
   { fieldPath: "scene.pov_entity_id", subjectType: "scene", label: "Scene POV entity ID", structureBound: true },
 ];
+
+const CLEARABLE_OVERRIDE_FIELDS = new Set([
+  "block.speaker_entity_id",
+  "mention.entity_id",
+  "term_mention.sufficient_explanation_annotation_id",
+  "scene.pov_entity_id",
+]);
 
 type InferenceTarget = StyleSemanticOutput & { fieldPath: string };
 
@@ -488,7 +497,17 @@ function SemanticCorrectionEditor({
     enabled: entry.kind === "project_draft",
     retry: false,
   });
-  const activeLinkedCharacterId = linkedCharacterId ?? characterLinks.data?.[0]?.project_character_id ?? null;
+  const characterLinkRows = characterLinks.data ?? [];
+  const visibleCharacterLinks = characterLinkRows.length || linkedCharacterId === null
+    ? characterLinkRows
+    : [{ project_character_id: linkedCharacterId, style_entity_id: positiveId(linkedEntityId) ?? 0, document_id: documentId }];
+  const selectedOverrideField = STYLE_OVERRIDE_FIELDS.find((field) => field.fieldPath === overrideFieldPath) ?? STYLE_OVERRIDE_FIELDS[0];
+  const overrideOperations = useMemo<Array<"set" | "clear" | "revert">>(() => CLEARABLE_OVERRIDE_FIELDS.has(selectedOverrideField.fieldPath)
+    ? ["set", "clear", "revert"]
+    : ["set", "revert"], [selectedOverrideField.fieldPath]);
+  useEffect(() => {
+    if (!overrideOperations.includes(overrideOperation)) setOverrideOperation("set");
+  }, [overrideOperation, overrideOperations]);
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `semantics-${documentId}-${structureRevisionId ?? 0}`) });
@@ -537,12 +556,12 @@ function SemanticCorrectionEditor({
     },
   });
   const characterUnlinkMutation = useMutation({
-    mutationFn: () => {
-      if (activeLinkedCharacterId === null) throw new Error("Linked characterがありません。");
-      return unlinkStyleCharacter(projectId, documentId, activeLinkedCharacterId);
+    mutationFn: (projectCharacterId: number) => {
+      if (projectCharacterId <= 0) throw new Error("Linked characterがありません。");
+      return unlinkStyleCharacter(projectId, documentId, projectCharacterId);
     },
-    onSuccess: () => {
-      setLinkedCharacterId(null);
+    onSuccess: (_result, projectCharacterId) => {
+      if (linkedCharacterId === projectCharacterId) setLinkedCharacterId(null);
       invalidate();
     },
   });
@@ -571,7 +590,6 @@ function SemanticCorrectionEditor({
       if (typeof result.job_id === "number" && result.job_id > 0) onCorrectionJob(result.job_id);
     },
   });
-  const selectedOverrideField = STYLE_OVERRIDE_FIELDS.find((field) => field.fieldPath === overrideFieldPath) ?? STYLE_OVERRIDE_FIELDS[0];
   return <div className="style-analysis-grid">
     <Card>
       <h3>Manual Entity</h3>
@@ -619,7 +637,7 @@ function SemanticCorrectionEditor({
         <div className="field-group"><FieldLabel htmlFor="style-linked-entity-id">Linked Entity ID</FieldLabel><TextInput id="style-linked-entity-id" inputMode="numeric" value={linkedEntityId} onChange={(event) => setLinkedEntityId(event.target.value)} required /></div>
          <Button type="submit" disabled={characterLinkMutation.isPending || !positiveId(projectCharacterId) || !positiveId(linkedEntityId)}>Link Character</Button>
        </form>
-       {activeLinkedCharacterId !== null ? <p className="helper-text">Linked project character #{activeLinkedCharacterId} <Button variant="ghost" onClick={() => characterUnlinkMutation.mutate()} disabled={characterUnlinkMutation.isPending}>Unlink Character</Button></p> : <p className="helper-text">Character Linkはありません。</p>}
+       {visibleCharacterLinks.length ? <div className="record-list">{visibleCharacterLinks.map((link) => <p className="helper-text" key={link.project_character_id}>Linked project character #{link.project_character_id} → Entity #{link.style_entity_id} <Button variant="ghost" onClick={() => characterUnlinkMutation.mutate(link.project_character_id)} disabled={characterUnlinkMutation.isPending}>Unlink Character</Button></p>)}</div> : <p className="helper-text">Character Linkはありません。</p>}
        {characterLinkMutation.error ? <p role="alert">Character Linkエラー: {displayError(characterLinkMutation.error)}</p> : null}
        {characterUnlinkMutation.error ? <p role="alert">Character Unlinkエラー: {displayError(characterUnlinkMutation.error)}</p> : null}
     </Card> : null}
@@ -630,7 +648,7 @@ function SemanticCorrectionEditor({
         <div className="field-group"><FieldLabel htmlFor="style-override-field">Override field</FieldLabel><select id="style-override-field" className="field-control" value={overrideFieldPath} onChange={(event) => setOverrideFieldPath(event.target.value)}>{STYLE_OVERRIDE_FIELDS.map((field) => <option key={field.fieldPath} value={field.fieldPath}>{field.label} · {field.fieldPath}</option>)}</select></div>
        <p className="helper-text">Subject type: {selectedOverrideField.subjectType}{selectedOverrideField.structureBound ? ` · structure #${structureRevisionId ?? "未選択"}` : ""}</p>
        <div className="field-group"><FieldLabel htmlFor="style-override-subject-id">Override subject ID</FieldLabel><TextInput id="style-override-subject-id" inputMode="numeric" value={overrideSubjectId} onChange={(event) => setOverrideSubjectId(event.target.value)} required /></div>
-       <div className="field-group"><FieldLabel htmlFor="style-override-operation">Operation</FieldLabel><select id="style-override-operation" className="field-control" value={overrideOperation} onChange={(event) => setOverrideOperation(event.target.value as typeof overrideOperation)}><option value="set">set</option><option value="clear">clear</option><option value="revert">revert</option></select></div>
+       <div className="field-group"><FieldLabel htmlFor="style-override-operation">Operation</FieldLabel><select id="style-override-operation" className="field-control" value={overrideOperation} onChange={(event) => setOverrideOperation(event.target.value as typeof overrideOperation)}>{overrideOperations.map((operation) => <option key={operation} value={operation}>{operation}</option>)}</select></div>
        <div className="field-group"><FieldLabel htmlFor="style-override-value">Override value JSON</FieldLabel><TextArea id="style-override-value" value={overrideValue} onChange={(event) => setOverrideValue(event.target.value)} required={overrideOperation === "set"} disabled={overrideOperation !== "set"} /></div>
        <div className="field-group"><FieldLabel htmlFor="style-override-note">Override note</FieldLabel><TextInput id="style-override-note" value={overrideNote} onChange={(event) => setOverrideNote(event.target.value)} /></div>
        <Button type="submit" disabled={overrideMutation.isPending || !positiveId(overrideSubjectId) || (overrideOperation === "set" && !overrideValue.trim())}>Save Semantic Override</Button>
@@ -655,8 +673,8 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
   const [mergeNextSceneId, setMergeNextSceneId] = useState("");
   const episodes = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`), queryFn: () => loadDocumentEpisodes(projectId), enabled: documentId !== null, retry: false });
   const episode = episodes.data?.find((item) => item.documentId === documentId);
-  const textRevisions = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${documentId ?? 0}`), queryFn: () => fetchStyleTextRevisions(projectId, documentId as number), enabled: documentId !== null, retry: false });
-  const structures = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`), queryFn: () => fetchStyleStructures(projectId, documentId as number), enabled: documentId !== null, retry: false });
+  const textRevisions = useQuery({ queryKey: projectQueryKeys.styleDocumentRevisions(projectId, documentId ?? 0), queryFn: () => fetchStyleTextRevisions(projectId, documentId as number), enabled: documentId !== null, retry: false });
+  const structures = useQuery({ queryKey: projectQueryKeys.styleDocumentStructures(projectId, documentId ?? 0), queryFn: () => fetchStyleStructures(projectId, documentId as number), enabled: documentId !== null, retry: false });
   const runs = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`), queryFn: () => fetchAnalysisRuns(projectId, documentId as number), enabled: documentId !== null, retry: false });
   const selectedTextId = positiveId(selectedTextRevisionId);
   const textRevisionIds = useMemo(() => (textRevisions.data ?? []).map((revision) => revision.id), [textRevisions.data]);
@@ -694,14 +712,14 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
     },
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`) });
-      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleDocumentStructures(projectId, documentId ?? 0) });
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
     },
   });
   const invalidateManualStructureData = (nextStructureId: number) => {
     setSelectedStructureRevisionId(String(nextStructureId));
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`) });
-    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleDocumentStructures(projectId, documentId ?? 0) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
   };
@@ -744,8 +762,8 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
     if (episode?.kind === "project_draft" && structureRevisionId !== null) {
       updateRememberedStyleDocument(projectId, episode.documentId, { currentStructureRevisionId: structureRevisionId, currentStructureKind: "automatic" });
     }
-    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${documentId ?? 0}`) });
-    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleDocumentRevisions(projectId, documentId ?? 0) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleDocumentStructures(projectId, documentId ?? 0) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-text-${documentId ?? 0}-${selectedTextId ?? 0}`) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structure-${documentId ?? 0}-${selectedStructureId ?? 0}`) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-metrics-${documentId ?? 0}-${selectedStructureId ?? 0}`) });
@@ -790,7 +808,7 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
             <h2>Structure</h2>
             <p>Structure revision #{selectedStructureRevisionId || "未選択"} ({structure.data?.source_kind ?? episode.currentStructureKind ?? "-"})</p>
             <div className="form-actions">
-              <Button variant="secondary" onClick={() => selectCurrentMutation.mutate()} disabled={selectCurrentMutation.isPending || selectedStructureId === null || selectedStructureId === episode.currentStructureRevisionId}>Select current structure</Button>
+              <Button variant="secondary" onClick={() => selectCurrentMutation.mutate()} disabled={selectCurrentMutation.isPending || selectedStructureId === null || selectedStructureId === episode.currentStructureRevisionId || selectedTextId !== episode.currentTextRevisionId}>Select current structure</Button>
             </div>
             {selectCurrentMutation.error ? <p role="alert">Current Structure更新エラー: {displayError(selectCurrentMutation.error)}</p> : null}
             <QueryState loading={structure.isPending} error={structure.error}>
@@ -896,6 +914,13 @@ function ProfilesPage({ projectId, profileId }: { projectId: string; profileId: 
   const corpusMutation = useMutation({ mutationFn: () => { if (!selectedAggregateGroup) throw new Error("median/p25/p75を含むAggregate groupを選択してください。"); const median = selectedAggregateGroup.statistics.median; const p25 = selectedAggregateGroup.statistics.p25; const p75 = selectedAggregateGroup.statistics.p75; if (!median || !p25 || !p75) throw new Error("Aggregate groupに必要なStatisticがありません。"); return createProfileFromCorpus(projectId, { corpus_id: Number(corpusId), name: corpusName, description, rules: [{ preferred_aggregate_id: median.id, min_aggregate_id: p25.id, max_aggregate_id: p75.id }] }); }, onSuccess: () => { setCorpusName(""); void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfiles(projectId) }); } });
   const activateMutation = useMutation({ mutationFn: (versionNo: number) => activateProfile(projectId, profileId as number, versionNo), onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfiles(projectId) }); void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfile(projectId, profileId ?? 0) }); } });
   const archiveMutation = useMutation({ mutationFn: () => archiveProfile(projectId, profileId as number), onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfiles(projectId) }); void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfile(projectId, profileId ?? 0) }); } });
+  const versionMutation = useMutation({
+    mutationFn: ({ parentVersionNo, rules }: { parentVersionNo: number; rules: Array<Record<string, unknown>> }) => createProfileVersion(projectId, profileId as number, { parent_version_no: parentVersionNo, rules }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfiles(projectId) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleProfile(projectId, profileId ?? 0) });
+    },
+  });
   useEffect(() => {
     if (!aggregateGroups.length) {
       setAggregateGroupKey("");
@@ -915,13 +940,99 @@ function ProfilesPage({ projectId, profileId }: { projectId: string; profileId: 
       <PageHeader title="Profiles" description="Profileは保存したVersionを確認してからActivateします。Archived profileはLint候補にしません。" />
       <Card><h2>Manual profile</h2><form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); if (name.trim() && (!manualRule.enabled || (manualRule.minValue.trim() && manualRule.maxValue.trim()))) manualMutation.mutate(); }}><div className="field-group"><FieldLabel htmlFor="style-profile-name">Name</FieldLabel><TextInput id="style-profile-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="field-group"><FieldLabel htmlFor="style-profile-description">Description</FieldLabel><TextArea id="style-profile-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-target-scope">Target scope</FieldLabel><select id="style-profile-target-scope" className="field-control" value={manualRule.targetScope} onChange={(event) => setManualRule((current) => ({ ...current, targetScope: event.target.value as ManualRuleEditorState["targetScope"] }))}><option value="document">document</option><option value="scene">scene</option><option value="character">character</option></select></div>{manualRule.targetScope === "scene" ? <div className="field-group"><FieldLabel htmlFor="style-profile-selector">Scope selector JSON</FieldLabel><TextArea id="style-profile-selector" value={manualSelectorText} onChange={(event) => setManualSelectorText(event.target.value)} /></div> : null}{manualRule.targetScope === "character" ? <div className="field-group"><FieldLabel htmlFor="style-profile-character-id">Project character ID</FieldLabel><TextInput id="style-profile-character-id" inputMode="numeric" value={manualCharacterId} onChange={(event) => setManualCharacterId(event.target.value)} /></div> : null}<div className="field-group"><FieldLabel htmlFor="style-profile-metric">Metric</FieldLabel><select id="style-profile-metric" className="field-control" value={manualRule.metricName} onChange={(event) => setManualRule((current) => ({ ...current, metricName: event.target.value }))}>{manualMetricOptions.map((metric) => <option key={metric} value={metric}>{metric}</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-preferred">Preferred value</FieldLabel><TextInput id="style-profile-preferred" inputMode="decimal" value={manualRule.preferredValue} onChange={(event) => setManualRule((current) => ({ ...current, preferredValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-minimum">Minimum</FieldLabel><TextInput id="style-profile-minimum" inputMode="decimal" value={manualRule.minValue} onChange={(event) => setManualRule((current) => ({ ...current, minValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-maximum">Maximum</FieldLabel><TextInput id="style-profile-maximum" inputMode="decimal" value={manualRule.maxValue} onChange={(event) => setManualRule((current) => ({ ...current, maxValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-weight">Weight</FieldLabel><TextInput id="style-profile-weight" inputMode="decimal" value={manualRule.weight} onChange={(event) => setManualRule((current) => ({ ...current, weight: event.target.value }))} /></div><label><input id="style-profile-enabled" type="checkbox" checked={manualRule.enabled} onChange={(event) => setManualRule((current) => ({ ...current, enabled: event.target.checked }))} /> Enabled</label><Button type="submit" disabled={manualMutation.isPending || !name.trim() || (manualRule.enabled && (!manualRule.minValue.trim() || !manualRule.maxValue.trim()))}>Save draft profile</Button></form>{manualMutation.error ? <p role="alert">Profile作成エラー: {displayError(manualMutation.error)}</p> : null}</Card>
       <Card><h2>From corpus</h2><form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); if (positiveId(corpusId) && selectedAggregateGroup?.statistics.median && selectedAggregateGroup.statistics.p25 && selectedAggregateGroup.statistics.p75 && corpusName.trim()) corpusMutation.mutate(); }}><div className="field-group"><FieldLabel htmlFor="style-profile-corpus-name">Name</FieldLabel><TextInput id="style-profile-corpus-name" value={corpusName} onChange={(event) => setCorpusName(event.target.value)} required /></div><div className="field-group"><FieldLabel htmlFor="style-profile-corpus">Corpus</FieldLabel><select id="style-profile-corpus" className="field-control" value={corpusId} onChange={(event) => { setCorpusId(event.target.value); setAggregateGroupKey(""); }}><option value="">選択してください</option>{corpora.data?.map((corpus) => <option key={corpus.id} value={corpus.id}>{corpus.name} (#{corpus.id})</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-aggregate-group">Aggregate group</FieldLabel><select id="style-profile-aggregate-group" className="field-control" value={aggregateGroupKey} onChange={(event) => setAggregateGroupKey(event.target.value)} disabled={aggregates.isPending || !aggregateGroups.length}><option value="">選択してください</option>{aggregateGroups.map((group) => <option key={group.key} value={group.key}>{group.metricName} v{group.metricVersion} · {group.measurementTargetType} · policy v{group.aggregatePolicyVersion}{group.stale ? " · stale" : ""}</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-aggregates">preferred,min,max aggregate IDs</FieldLabel><TextInput id="style-profile-aggregates" value={aggregateIds} readOnly placeholder="Aggregate groupを選択してください" /></div>{selectedAggregateGroup?.warningJson.length ? <p role="alert">Aggregate warnings: {selectedAggregateGroup.warningJson.join(", ")}</p> : null}{selectedAggregateGroup?.stale ? <p role="alert">選択したAggregate groupはstaleです。</p> : null}{aggregates.error ? <p role="alert">Aggregate取得エラー: {displayError(aggregates.error)}</p> : null}<Button type="submit" disabled={corpusMutation.isPending || !positiveId(corpusId) || !selectedAggregateGroup?.statistics.median || !selectedAggregateGroup.statistics.p25 || !selectedAggregateGroup.statistics.p75 || !corpusName.trim()}>Build from exact aggregates</Button></form>{corpusMutation.error ? <p role="alert">Corpus profileエラー: {displayError(corpusMutation.error)}</p> : null}</Card>
-      <div className="style-analysis-grid"><Card><h2>Profile list</h2><QueryState loading={profiles.isPending} error={profiles.error}>{profiles.data?.length ? <div className="record-list">{profiles.data.map((profile) => <Link className="record-list-item" key={profile.id} to={`/projects/${encodeURIComponent(projectId)}/style-analysis/profiles/${profile.id}`}><span><strong>{profile.name}</strong><small>{profile.description || "説明なし"}</small></span><StatusBadge value={profile.status} /></Link>)}</div> : <p>Profileがありません。</p>}</QueryState></Card><Card><h2>Profile detail</h2>{profileId === null ? <p>Profileを選択してください。</p> : <QueryState loading={detail.isPending} error={detail.error}>{detail.data ? <ProfileDetailView detail={detail.data} onActivate={(versionNo) => activateMutation.mutate(versionNo)} onArchive={() => { if (window.confirm("このProfileをArchiveしますか？")) archiveMutation.mutate(); }} /> : null}</QueryState>}</Card></div>
+      <div className="style-analysis-grid"><Card><h2>Profile list</h2><QueryState loading={profiles.isPending} error={profiles.error}>{profiles.data?.length ? <div className="record-list">{profiles.data.map((profile) => <Link className="record-list-item" key={profile.id} to={`/projects/${encodeURIComponent(projectId)}/style-analysis/profiles/${profile.id}`}><span><strong>{profile.name}</strong><small>{profile.description || "説明なし"}</small></span><StatusBadge value={profile.status} /></Link>)}</div> : <p>Profileがありません。</p>}</QueryState></Card><Card><h2>Profile detail</h2>{profileId === null ? <p>Profileを選択してください。</p> : <QueryState loading={detail.isPending} error={detail.error}>{detail.data ? <ProfileDetailView detail={detail.data} onActivate={(versionNo) => activateMutation.mutate(versionNo)} onArchive={() => { if (window.confirm("このProfileをArchiveしますか？")) archiveMutation.mutate(); }} onSaveVersion={(parentVersionNo, rules) => versionMutation.mutate({ parentVersionNo, rules })} versionSavePending={versionMutation.isPending} versionSaveError={versionMutation.error} /> : null}</QueryState>}</Card></div>
     </>
   );
 }
 
-function ProfileDetailView({ detail, onActivate, onArchive }: { detail: ProfileDetail; onActivate: (versionNo: number) => void; onArchive: () => void }) {
-  return <><dl className="record-summary"><div><dt>Name</dt><dd>{detail.profile.name}</dd></div><div><dt>Status</dt><dd><StatusBadge value={detail.profile.status} /></dd></div><div><dt>Active version</dt><dd>{detail.profile.active_version_id ?? "未設定"}</dd></div></dl>{detail.versions.map(({ version, rules }) => <div className="record-list-item" key={version.id}><span><strong>Version {version.version_no}</strong><small>{rules.length} rules</small></span><span className="form-actions"><Button variant="secondary" onClick={() => onActivate(version.version_no)} disabled={detail.profile.status === "archived"}>Activate</Button><Button variant="danger" onClick={onArchive} disabled={detail.profile.status === "archived"}>Archive</Button></span></div>)}</>;
+type ProfileRuleDraft = {
+  targetScope: ManualRuleEditorState["targetScope"];
+  scopeSelectorJson: string;
+  metricName: string;
+  metricVersion: string;
+  preferredValue: string;
+  minValue: string;
+  maxValue: string;
+  weight: string;
+  enabled: boolean;
+};
+
+type ProfileVersionEntry = ProfileDetail["versions"][number];
+
+function profileRuleDraft(rule: StyleRule): ProfileRuleDraft {
+  return {
+    targetScope: rule.target_scope,
+    scopeSelectorJson: rule.scope_selector_json,
+    metricName: rule.metric_name,
+    metricVersion: String(rule.metric_version),
+    preferredValue: rule.preferred_value === null ? "" : String(rule.preferred_value),
+    minValue: rule.min_value === null ? "" : String(rule.min_value),
+    maxValue: rule.max_value === null ? "" : String(rule.max_value),
+    weight: String(rule.weight),
+    enabled: rule.enabled,
+  };
+}
+
+function emptyProfileRule(): ProfileRuleDraft {
+  return { targetScope: "document", scopeSelectorJson: "{}", metricName: DEFAULT_AGGREGATE_METRICS[0], metricVersion: "1", preferredValue: "0", minValue: "0", maxValue: "0", weight: "1", enabled: true };
+}
+
+function profileRuleNumber(value: string, label: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`${label}は有限値で入力してください。`);
+  return parsed;
+}
+
+function buildProfileRule(rule: ProfileRuleDraft): Record<string, unknown> {
+  if (rule.enabled && (!rule.minValue.trim() || !rule.maxValue.trim())) throw new Error("Enabled RuleにはMinimumとMaximumが必要です。");
+  const metricVersion = Number(rule.metricVersion);
+  if (!Number.isInteger(metricVersion) || metricVersion < 1) throw new Error("Metric versionは正の整数で入力してください。");
+  return {
+    target_scope: rule.targetScope,
+    scope_selector: rule.targetScope === "document" ? {} : parseObjectJson(rule.scopeSelectorJson, "Scope selector JSON"),
+    metric_name: rule.metricName,
+    metric_version: metricVersion,
+    preferred_value: profileRuleNumber(rule.preferredValue, "Preferred value"),
+    min_value: profileRuleNumber(rule.minValue, "Minimum"),
+    max_value: profileRuleNumber(rule.maxValue, "Maximum"),
+    weight: profileRuleNumber(rule.weight, "Weight") ?? 1,
+    enabled: rule.enabled,
+    severity_policy: "standard",
+  };
+}
+
+function ProfileRuleEditor({
+  entry,
+  onSave,
+  pending,
+  error,
+}: {
+  entry: ProfileVersionEntry;
+  onSave: (parentVersionNo: number, rules: Array<Record<string, unknown>>) => void;
+  pending: boolean;
+  error: unknown;
+}) {
+  const [rules, setRules] = useState<ProfileRuleDraft[]>(() => entry.rules.map(profileRuleDraft));
+  const [validationError, setValidationError] = useState<string | null>(null);
+  useEffect(() => setRules(entry.rules.map(profileRuleDraft)), [entry.rules, entry.version.id]);
+  const updateRule = (index: number, update: Partial<ProfileRuleDraft>) => setRules((current) => current.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...update } : rule));
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      const snapshot = rules.map(buildProfileRule);
+      if (!snapshot.length) throw new Error("Ruleを1件以上指定してください。");
+      setValidationError(null);
+      onSave(entry.version.version_no, snapshot);
+    } catch (saveError) {
+      setValidationError(displayError(saveError));
+    }
+  };
+  return <Card><h3>Edit Version {entry.version.version_no} → save new immutable version</h3><p className="helper-text">Full Snapshotを保存します。保存だけではActive Versionを変更しません。</p><form className="style-analysis-form" onSubmit={save}>{rules.map((rule, index) => { const metricOptions = metricNamesForScope(rule.targetScope); const metrics = metricOptions.includes(rule.metricName) ? metricOptions : [rule.metricName, ...metricOptions]; const prefix = `style-profile-version-${entry.version.id}-rule-${index}`; return <fieldset className="style-analysis-form" key={`${entry.version.id}-${index}`}><legend>Rule {index + 1} · {rule.targetScope}</legend><div className="field-group"><FieldLabel htmlFor={`${prefix}-scope`}>Target scope</FieldLabel><select id={`${prefix}-scope`} className="field-control" value={rule.targetScope} onChange={(event) => { const targetScope = event.target.value as ProfileRuleDraft["targetScope"]; const nextMetrics = metricNamesForScope(targetScope); updateRule(index, { targetScope, scopeSelectorJson: targetScope === "document" ? "{}" : rule.scopeSelectorJson, metricName: nextMetrics.includes(rule.metricName) ? rule.metricName : nextMetrics[0] }); }}><option value="document">document</option><option value="scene">scene</option><option value="character">character</option></select></div>{rule.targetScope === "document" ? <p className="helper-text">Document Ruleはselectorなし（{}）です。</p> : <div className="field-group"><FieldLabel htmlFor={`${prefix}-selector`}>Scope selector JSON</FieldLabel><TextArea id={`${prefix}-selector`} value={rule.scopeSelectorJson} onChange={(event) => updateRule(index, { scopeSelectorJson: event.target.value })} /></div>}<div className="field-group"><FieldLabel htmlFor={`${prefix}-metric`}>Metric</FieldLabel><select id={`${prefix}-metric`} className="field-control" value={rule.metricName} onChange={(event) => updateRule(index, { metricName: event.target.value })}>{metrics.map((metric) => <option key={metric} value={metric}>{metric}</option>)}</select></div><div className="field-group"><FieldLabel htmlFor={`${prefix}-metric-version`}>Metric version</FieldLabel><TextInput id={`${prefix}-metric-version`} inputMode="numeric" value={rule.metricVersion} onChange={(event) => updateRule(index, { metricVersion: event.target.value })} /></div><div className="field-group"><FieldLabel htmlFor={`${prefix}-preferred`}>Preferred value</FieldLabel><TextInput id={`${prefix}-preferred`} inputMode="decimal" value={rule.preferredValue} onChange={(event) => updateRule(index, { preferredValue: event.target.value })} /></div><div className="field-group"><FieldLabel htmlFor={`${prefix}-minimum`}>Minimum</FieldLabel><TextInput id={`${prefix}-minimum`} inputMode="decimal" value={rule.minValue} onChange={(event) => updateRule(index, { minValue: event.target.value })} /></div><div className="field-group"><FieldLabel htmlFor={`${prefix}-maximum`}>Maximum</FieldLabel><TextInput id={`${prefix}-maximum`} inputMode="decimal" value={rule.maxValue} onChange={(event) => updateRule(index, { maxValue: event.target.value })} /></div><div className="field-group"><FieldLabel htmlFor={`${prefix}-weight`}>Weight</FieldLabel><TextInput id={`${prefix}-weight`} inputMode="decimal" value={rule.weight} onChange={(event) => updateRule(index, { weight: event.target.value })} /></div><label><input id={`${prefix}-enabled`} type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(index, { enabled: event.target.checked })} /> Enabled</label>{rules.length > 1 ? <Button type="button" variant="ghost" onClick={() => setRules((current) => current.filter((_, ruleIndex) => ruleIndex !== index))}>Remove rule</Button> : null}</fieldset>; })}<div className="form-actions"><Button type="button" variant="secondary" onClick={() => setRules((current) => [...current, emptyProfileRule()])}>Add rule</Button><Button type="submit" disabled={pending || !rules.length}>Save new version</Button></div>{validationError ? <p role="alert">Profile Ruleエラー: {validationError}</p> : null}{error ? <p role="alert">Profile Versionエラー: {displayError(error)}</p> : null}</form></Card>;
+}
+
+function ProfileDetailView({ detail, onActivate, onArchive, onSaveVersion, versionSavePending, versionSaveError }: { detail: ProfileDetail; onActivate: (versionNo: number) => void; onArchive: () => void; onSaveVersion: (parentVersionNo: number, rules: Array<Record<string, unknown>>) => void; versionSavePending: boolean; versionSaveError: unknown }) {
+  return <><dl className="record-summary"><div><dt>Name</dt><dd>{detail.profile.name}</dd></div><div><dt>Status</dt><dd><StatusBadge value={detail.profile.status} /></dd></div><div><dt>Active version</dt><dd>{detail.profile.active_version_id ?? "未設定"}</dd></div></dl>{detail.versions.map((entry) => <div key={entry.version.id}><div className="record-list-item"><span><strong>Version {entry.version.version_no}</strong><small>{entry.rules.length} rules</small></span><span className="form-actions"><Button variant="secondary" onClick={() => onActivate(entry.version.version_no)} disabled={detail.profile.status === "archived"}>Activate</Button><Button variant="danger" onClick={onArchive} disabled={detail.profile.status === "archived"}>Archive</Button></span></div><ProfileRuleEditor entry={entry} onSave={onSaveVersion} pending={versionSavePending} error={versionSaveError} /></div>)}</>;
 }
 
 function ReviewPage({ projectId }: { projectId: string }) {
@@ -959,8 +1070,8 @@ function LintPage({ projectId }: { projectId: string }) {
   const profileDetail = useQuery({ queryKey: projectQueryKeys.styleProfile(projectId, positiveId(profileId) ?? 0), queryFn: () => fetchProfile(projectId, positiveId(profileId) as number), enabled: positiveId(profileId) !== null, retry: false });
   const runs = useQuery({ queryKey: projectQueryKeys.styleLintRuns(projectId, positiveId(documentId) ?? undefined), queryFn: () => fetchLintRuns(projectId, positiveId(documentId) ?? undefined), enabled: Boolean(documentId), retry: false });
   const selectedDocumentId = positiveId(documentId);
-  const textRevisions = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `lint-document-revisions-${selectedDocumentId ?? 0}`), queryFn: () => fetchStyleTextRevisions(projectId, selectedDocumentId as number), enabled: selectedDocumentId !== null, retry: false });
-  const structures = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `lint-document-structures-${selectedDocumentId ?? 0}`), queryFn: () => fetchStyleStructures(projectId, selectedDocumentId as number), enabled: selectedDocumentId !== null, retry: false });
+  const textRevisions = useQuery({ queryKey: projectQueryKeys.styleDocumentRevisions(projectId, selectedDocumentId ?? 0), queryFn: () => fetchStyleTextRevisions(projectId, selectedDocumentId as number), enabled: selectedDocumentId !== null, retry: false });
+  const structures = useQuery({ queryKey: projectQueryKeys.styleDocumentStructures(projectId, selectedDocumentId ?? 0), queryFn: () => fetchStyleStructures(projectId, selectedDocumentId as number), enabled: selectedDocumentId !== null, retry: false });
   const selectedTextRevisionNumber = positiveId(selectedTextRevisionId);
   const textRevisionIds = useMemo(() => (textRevisions.data ?? []).map((revision) => revision.id), [textRevisions.data]);
   const structureRevisionIds = useMemo(() => (structures.data ?? [])
@@ -1001,8 +1112,8 @@ function LintPage({ projectId }: { projectId: string }) {
       };
       setCapturedDocuments(rememberCapturedStyleDocument(projectId, captured));
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, "documents") });
-      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${result.document_id}`) });
-      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${result.document_id}`) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleDocumentRevisions(projectId, result.document_id) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleDocumentStructures(projectId, result.document_id) });
       setDocumentId(String(result.document_id));
     },
   });

@@ -135,6 +135,13 @@ export interface ProfileDetail {
   versions: Array<{ version: ProfileVersion; rules: StyleRule[] }>;
 }
 
+export interface ProfileVersionBuildResult {
+  profile: Profile;
+  version: ProfileVersion;
+  rules: StyleRule[];
+  warnings: string[];
+}
+
 export interface ReviewItem {
   id: number;
   subject_type: string;
@@ -640,6 +647,20 @@ export function createManualProfile(
     body: input,
     projectId,
   });
+}
+
+export function createProfileVersion(
+  projectId: string,
+  profileId: number,
+  input: {
+    parent_version_no: number;
+    rules: Array<Record<string, unknown>>;
+  },
+): Promise<ProfileVersionBuildResult> {
+  return apiRequest<ProfileVersionBuildResult>(
+    stylePath(projectId, `/profiles/${profileId}/versions`),
+    { method: "POST", body: input, projectId },
+  );
 }
 
 export function createProfileFromCorpus(

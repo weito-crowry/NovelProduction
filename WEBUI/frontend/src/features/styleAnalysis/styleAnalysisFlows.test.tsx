@@ -255,6 +255,30 @@ describe("style analysis WebUI flows", () => {
     await waitFor(() => expect(profileBody).toEqual({ name: "Scene profile", description: "", rules: [{ target_scope: "scene", scope_selector: { function: ["exposition"] }, metric_name: "sentence.len.p50", metric_version: 1, preferred_value: 0, min_value: 4.5, max_value: 8.5, weight: 1, enabled: true, severity_policy: "standard" }] }));
   });
 
+  it("edits an existing profile into a new full-snapshot version without activating it", async () => {
+    let versionBody: unknown = null;
+    const profile = { id: 7, name: "Existing profile", description: "", source_corpus_id: null, status: "active", active_version_id: 11, created_at: "now", updated_at: "now" };
+    const version = { id: 11, profile_id: 7, version_no: 1, parent_version_id: null, created_at: "now" };
+    const rule = { id: 12, profile_version_id: 11, target_scope: "document", scope_selector_json: "{}", metric_name: "sentence.len.p50", metric_version: 1, preferred_value: 0, min_value: 4, max_value: 8, weight: 1, enabled: true, severity_policy: "standard", source_kind: "manual" };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/profiles") && (!init || !init.method)) return new Response(envelope([profile]), { status: 200 });
+      if (url.endsWith("/profiles/7") && (!init || !init.method)) return new Response(envelope({ profile, versions: [{ version, rules: [rule] }] }), { status: 200 });
+      if (url.endsWith("/profiles/7/versions") && init?.method === "POST") {
+        versionBody = JSON.parse(String(init.body));
+        return new Response(envelope({ profile, version: { ...version, id: 13, version_no: 2, parent_version_id: 11 }, rules: [rule], warnings: [] }), { status: 201 });
+      }
+      return new Response(envelope([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/projects/demo/style-analysis/profiles/7");
+    await user.clear(await screen.findByLabelText("Minimum", { selector: "#style-profile-version-11-rule-0-minimum" }));
+    await user.type(screen.getByLabelText("Minimum", { selector: "#style-profile-version-11-rule-0-minimum" }), "5.5");
+    await user.click(screen.getByRole("button", { name: "Save new version" }));
+    await waitFor(() => expect(versionBody).toEqual({ parent_version_no: 1, rules: [{ target_scope: "document", scope_selector: {}, metric_name: "sentence.len.p50", metric_version: 1, preferred_value: 0, min_value: 5.5, max_value: 8, weight: 1, enabled: true, severity_policy: "standard" }] }));
+  });
+
   it("submits semantic entity, term, alias, character-link, and override corrections", async () => {
     const requests: Array<{ url: string; body: unknown }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

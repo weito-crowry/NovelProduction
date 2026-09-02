@@ -235,6 +235,7 @@ Job Type別`partial`可否は09を正本とし、Aggregate/Lintでは`partial`�
 POST   /entities
 POST   /entities/{entity_id}/aliases
 PUT    /documents/{document_id}/character-links/{project_character_id}
+GET    /documents/{document_id}/character-links
 DELETE /documents/{document_id}/character-links/{project_character_id}
 POST   /terms
 POST   /terms/{term_id}/aliases

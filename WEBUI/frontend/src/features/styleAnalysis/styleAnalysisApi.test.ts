@@ -6,6 +6,7 @@ import {
   createStyleEntityAlias,
   createStyleTerm,
   createStyleTermAlias,
+  createProfileVersion,
   fetchReferenceEpisodes,
   fetchStyleDocument,
   fetchStyleDocuments,
@@ -120,6 +121,25 @@ describe("style analysis API adapter", () => {
       "/api/v1/projects/novel/style-analysis/documents/7/structures",
       "/api/v1/projects/novel/style-analysis/documents/7/structure?structure_revision_id=9",
       "/api/v1/projects/novel/style-analysis/documents/7/metrics?structure_revision_id=9",
+    ]);
+  });
+
+  it("creates a new immutable profile version from a full rule snapshot", async () => {
+    await createProfileVersion("novel", 7, {
+      parent_version_no: 2,
+      rules: [{ target_scope: "document", scope_selector: {}, metric_name: "sentence.len.p50" }],
+    });
+
+    expect(requestMock.mock.calls[0]).toEqual([
+      "/api/v1/projects/novel/style-analysis/profiles/7/versions",
+      {
+        method: "POST",
+        body: {
+          parent_version_no: 2,
+          rules: [{ target_scope: "document", scope_selector: {}, metric_name: "sentence.len.p50" }],
+        },
+        projectId: "novel",
+      },
     ]);
   });
 
