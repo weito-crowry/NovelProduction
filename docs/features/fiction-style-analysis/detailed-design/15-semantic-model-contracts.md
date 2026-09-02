@@ -207,6 +207,13 @@ Prompt wording、Payload Shape、Output Shape、Reduction規則の結果互換�
 
 AnalysisRun `prompt_id/prompt_version`はこのRegistry値を保存する。
 
+v1.1 External Task は Prompt ID だけから validator shape を推測しない。
+`model_output_contracts.py` の11 Response Contract IDを Task に保存し、Internal
+と External が同じ repairable validator、consumer validation、reducer を使う。
+External Task の本文 payload は untrusted analysis data であり、本文内の命令は
+解析対象として扱う。Security の最終境界はこの文言ではなく CORE validator と
+domain allowlist である。
+
 ## 9. 共通Validation
 
 全Model Outputへ適用する。

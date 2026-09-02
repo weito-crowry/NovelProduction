@@ -8,14 +8,15 @@ Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選
 
 ## 2. 境界
 
-- v1でMCP Tool追加なし。既存Tool Count 59維持。
+- v1.0ではMCP Tool追加なし、既存Tool Count 59。v1.1 SA-I適用後は16のstyle_analysis
+  groupを追加し、既存59を変更せず65 toolsとする。
 - Style推論から既存Character/World/Canonを自動更新しない。
 - WebSocket/SSE追加なし。JobはPolling。
 - Source Site固有Network Downloader/Refreshなし。
 - Local TXT/HTML/EPUB Importのみ。
 - rights_basis/毎回の確認Dialogなし。
 - 既存API Client/Query Cache/Project Scope Error Contractを再利用する。
-- Profile Import/Exportはv1 scope外。
+- Profile Import/Exportはv1 scope外。SA-Iでも追加しない。
 - API Runtime Dependency追加は01 `beautifulsoup4`、Local File Multipart Importの
   `python-multipart`、15 `httpx`。
 
@@ -721,3 +722,16 @@ WebUI:
 - Stale Aggregateを安全上の理由だけで選択禁止。
 - Enabled片側Rangeを追加。
 - Profile Import/Export追加。
+
+## 25. v1.1 SA-I External Session API
+
+External Agent MCP / ChatGPT Analysis の API 正本は
+[16-external-agent-mcp.md](16-external-agent-mcp.md) Section 8 とする。追加する
+endpoint は `POST/GET /external-sessions`、`GET /external-sessions/{session_id}`、
+Task submit、Session cancel の5つだけである。Start は201、List/Get/Submit/Cancel
+は200。Active Snapshot は current pending Task 一件、terminal Snapshot は Task
+null を返す。GET は実行を進めない。
+
+External Session は WebUI に追加せず、ChatGPT が MCP から pull/submit する。
+Response は既存 AnalysisRun/semantics/metrics の読み取り契約で利用でき、専用
+Result Table や専用 write tool は作らない。

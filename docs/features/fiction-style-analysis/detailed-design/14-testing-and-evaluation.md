@@ -414,3 +414,20 @@ Coverage Gateを下げない。Coverageだけの低価値Testを大量追加し�
 - Profile Import/Export追加。
 - Resolver Cache不可Test省略。
 - Unrelated Test Refactor拡大。
+
+## 23. v1.1 SA-I External Agent verification
+
+SA-I は [16-external-agent-mcp.md](16-external-agent-mcp.md) を正本として、次を
+追加検証する。
+
+- Internal/External parity（10 model-backed Analyzer、Prompt/Contract/Run/Warning/Current Run）。
+- Chunk restart/reduce、boundary merge、Term Explanation fallback、Entity/Term dynamic registry。
+- Migration 001→009、001〜008 byte unchanged、JSON/foreign key/partial pending invariant。
+- Session/Task restart、commit後 response loss の same-response idempotency、repair maximum two attempts。
+- Runtime contract、saved AnalysisPolicy、executor model、human state drift の fail closed。
+- Current Text/Structure CAS、Reference Episode revision drift、Worker recovery、Job retry/purge conflict。
+- Provider disabled 外部 start/submit と server-side model HTTP request 0件。
+- MCP existing59 unchanged、new6 exact、total65、project_id required、forbidden import 0。
+
+Real ChatGPT connector dogfood は Luna の CI/test scope ではなく、commit/push と
+ChatGPT GitHub review の後に実施する。

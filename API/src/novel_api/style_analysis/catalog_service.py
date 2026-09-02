@@ -6,6 +6,9 @@ from typing import Any, cast
 
 from novel_core.style_analysis.aggregate_repository import MeasurementRepository
 from novel_core.style_analysis.aggregate_service import AggregateService
+from novel_core.style_analysis.analysis_execution_conflicts import (
+    AnalysisExecutionConflictChecker,
+)
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.entity_service import EntityService
 from novel_core.style_analysis.metrics import BASIC_METRIC_DEFINITIONS
@@ -101,6 +104,9 @@ class StyleAnalysisCatalogService(
     def purge_reference_work(self, work_id: int) -> bool:
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            AnalysisExecutionConflictChecker(
+                cast(Any, self._connection)
+            ).assert_reference_work_available(work_id)
             deleted = self._repository.purge_reference_work(work_id)
             self._connection.commit()
         except Exception:

@@ -25,6 +25,7 @@ from novel_api.routes.style_analysis_corpus_profile import (
     router as corpus_profile_router,
 )
 from novel_api.routes.style_analysis_documents import router as documents_router
+from novel_api.routes.style_analysis_external import router as external_router
 from novel_api.routes.style_analysis_review import router as review_router
 from novel_api.schemas.common import ProjectEnvelope
 from novel_api.schemas.style_analysis import (
@@ -494,3 +495,4 @@ def _job_response(job: JobRecord) -> StyleJobResponse:
 router.include_router(corpus_profile_router)
 router.include_router(documents_router)
 router.include_router(review_router)
+router.include_router(external_router)

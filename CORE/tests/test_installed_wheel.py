@@ -15,6 +15,7 @@ MIGRATION_NAMES = (
     "006_style_analysis_foundation.sql",
     "007_style_analysis_semantics.sql",
     "008_style_analysis_corpus_profile.sql",
+    "009_style_analysis_external_agent.sql",
 )
 
 
@@ -117,6 +118,7 @@ with sqlite3.connect(db_path) as connection:
         ('006_style_analysis_foundation.sql',),
         ('007_style_analysis_semantics.sql',),
         ('008_style_analysis_corpus_profile.sql',),
+        ('009_style_analysis_external_agent.sql',),
     ]
     assert connection.execute(
         'SELECT slug, working_title FROM works'

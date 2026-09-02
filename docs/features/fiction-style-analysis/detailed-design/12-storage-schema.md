@@ -13,8 +13,12 @@ Style Analysis v1のSQLite Schema、Migration分割、主要Column、FK、CHECK�
 ```text
 006_style_analysis_foundation.sql
 007_style_analysis_semantics.sql
-008_style_analysis_analytics.sql
+008_style_analysis_corpus_profile.sql
+009_style_analysis_external_agent.sql
 ```
+
+001〜008 は既存 migration として byte/content を変更しない。External
+Session/Task/Session Run Link は SA-I の 009 だけで追加する。
 
 既存参照先:
 

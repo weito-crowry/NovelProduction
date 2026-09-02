@@ -48,6 +48,15 @@
 
 Site Adapterは取得方式を別途検討し、将来Phaseで追加する。
 
+## v1.1 SA-I extension
+
+External Agent MCP / ChatGPT Analysis は v1.0 の Internal Model Execution を
+保持したまま追加する。ChatGPT が MCP 経由で Persistent Task を取得し、構造化
+JSON を submit する。NovelProduction から ChatGPT/OpenAI API への request、
+callback、webhook は存在しない。Session/Task、resumable engine、transaction、
+runtime contract、API 5 endpoint、MCP 6 tools の正本は
+`detailed-design/16-external-agent-mcp.md` である。
+
 ## 3. 設計原則
 
 1. 元ResourceはImmutable SourceSnapshotとして保持する。
@@ -390,10 +399,11 @@ Migration:
 ```text
 006_style_analysis_foundation.sql
 007_style_analysis_semantics.sql
-008_style_analysis_analytics.sql
+008_style_analysis_corpus_profile.sql
+009_style_analysis_external_agent.sql
 ```
 
-既存001〜005変更なし。
+既存001〜008変更なし。009はv1.1 SA-I External Session/Task用の追加migrationである。
 
 API Prefix:
 

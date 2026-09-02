@@ -21,6 +21,7 @@
 | 13 | [13-api-and-webui.md](13-api-and-webui.md) | API、WebUI、Request Contract | v1.0 |
 | 14 | [14-testing-and-evaluation.md](14-testing-and-evaluation.md) | Unit/Integration/CI/Dogfood | v1.0 |
 | 15 | [15-semantic-model-contracts.md](15-semantic-model-contracts.md) | Model Client、Prompt、JSON Contract | v1.0 |
+| 16 | [16-external-agent-mcp.md](16-external-agent-mcp.md) | External Agent MCP / ChatGPT Analysis | v1.1 SA-I |
 
 ## Codex向け実装順
 
@@ -34,8 +35,13 @@
 | SA-F | Manual Identity/Alias、Override、Review、Recompute | 04, 05, 06, 07, 09, 10, 12, 13, 14 |
 | SA-G | Project Draft Capture、Style Lint | 02, 04, 07, 08, 10, 11, 12, 13, 14 |
 | SA-H | WebUI、E2E、Dogfood | 01, 03, 08, 10, 11, 13, 14, 15 |
+| SA-I | External Agent MCP / ChatGPT、Resumable Engine、Session/Task | 09, 12, 13, 14, 15, 16 |
 
 SA-A〜Hは既存NovelProduction Phase系列とは別系列。
+
+SA-I は v1.1 extension であり、承認済みの16を実装正本とする。v1.0 の過去
+契約では MCP 59 tools、SA-I 適用後の inventory は既存59 + style_analysis 6 =
+65 tools である。既存59の description、schema、handler group は変更しない。
 
 ## v1 ID / Version Registry
 
@@ -118,7 +124,7 @@ Measurement Rowには従来どおり各`metric_name/metric_version`を保存す�
 ### Storage / Revision
 
 - Project-local `story.db`へ`style_` Table群追加。
-- Migrationは006/007/008。001〜005変更禁止。
+- Migrationは006/007/008（v1.0）と009（v1.1 SA-I）。001〜008変更禁止。
 - Current Text/Structureは`style_documents`明示Pointer。
 - Latest RevisionをCurrentと推測しない。
 - Text/Structure/Run/Aggregate/Profile Versionは履歴保持。

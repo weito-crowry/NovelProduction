@@ -31,7 +31,7 @@ async def _run_stdio_smoke(base_url: str) -> str:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await session.list_tools()
-                assert len(tools.tools) == 59
+                assert len(tools.tools) == 65
                 by_name = {tool.name: tool for tool in tools.tools}
                 assert "project_id" in by_name["work_get"].input_schema["required"]
 

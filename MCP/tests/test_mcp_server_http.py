@@ -14,6 +14,7 @@ from novel_mcp.mcp_server import (
     PHASE2_TOOL_NAMES,
     PHASE3_TOOL_NAMES,
     PROJECT_TOOL_NAMES,
+    STYLE_ANALYSIS_TOOL_NAMES,
     create_server,
     parser,
 )
@@ -23,7 +24,7 @@ def _run(coroutine: Any) -> Any:
     return asyncio.run(coroutine)
 
 
-def test_http_server_owns_no_database_and_registers_59_tools() -> None:
+def test_http_server_owns_no_database_and_registers_65_tools() -> None:
     async def transport(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"project_id": "p", "data": {}})
 
@@ -32,11 +33,12 @@ def test_http_server_owns_no_database_and_registers_59_tools() -> None:
         transport=httpx.MockTransport(transport),
     )
     try:
-        assert len(ALL_TOOL_NAMES) == 59
+        assert len(ALL_TOOL_NAMES) == 65
         assert len(PROJECT_TOOL_NAMES) == 4
         assert len(PHASE1_TOOL_NAMES) == 23
         assert len(PHASE2_TOOL_NAMES) == 27
         assert len(PHASE3_TOOL_NAMES) == 5
+        assert len(STYLE_ANALYSIS_TOOL_NAMES) == 6
         assert "project_select" not in server.tool_names()
         tools = {tool.name: tool for tool in _run(server.list_tools())}
         assert set(tools) == ALL_TOOL_NAMES
@@ -47,6 +49,39 @@ def test_http_server_owns_no_database_and_registers_59_tools() -> None:
         assert "project_id" not in tools["project_create"].input_schema.get(
             "required", []
         )
+    finally:
+        _run(server.aclose())
+
+
+def test_external_start_target_schema_describes_all_target_variants() -> None:
+    async def transport(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"project_id": "p", "data": {}})
+
+    server = create_server(
+        McpSettings("http://api.example"),
+        transport=httpx.MockTransport(transport),
+    )
+    try:
+        tools = {tool.name: tool for tool in _run(server.list_tools())}
+        schema = tools["style_analysis_external_start"].input_schema
+        target = schema["properties"]["target"]
+        variants = target.get("oneOf") or target.get("anyOf")
+        assert variants is not None
+        assert len(variants) == 3
+        required_by_kind: dict[str, set[str]] = {}
+        for variant in variants:
+            if "$ref" in variant:
+                ref_name = variant["$ref"].rsplit("/", 1)[-1]
+                variant = schema["$defs"][ref_name]
+            kind = variant["properties"]["kind"]["const"]
+            required_by_kind[kind] = set(variant["required"])
+            assert variant["additionalProperties"] is False
+        assert required_by_kind == {
+            "document": {"kind", "document_id", "text_revision_id"},
+            "reference_work": {"kind", "reference_work_id"},
+            "project_episode": {"kind", "episode_id", "draft_id"},
+        }
+        assert "target" in schema["properties"]
     finally:
         _run(server.aclose())
 

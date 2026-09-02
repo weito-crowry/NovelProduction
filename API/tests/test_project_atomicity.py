@@ -57,6 +57,7 @@ def test_create_initializes_story_db_and_metadata_atomically(data_root: Path) ->
         "006_style_analysis_foundation.sql",
         "007_style_analysis_semantics.sql",
         "008_style_analysis_corpus_profile.sql",
+        "009_style_analysis_external_agent.sql",
     )
     assert work_count == (1,)
 

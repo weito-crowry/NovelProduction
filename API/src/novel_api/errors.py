@@ -13,6 +13,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from novel_core.errors import (
+    AnalysisExecutionConflictError,
     AnalyzerProviderUnavailableError,
     CanonDecisionNotFoundError,
     CanonEntityNotFoundError,
@@ -22,6 +23,12 @@ from novel_core.errors import (
     DeprecatedCanonForbiddenError,
     DocumentSchemaError,
     DocumentStorageError,
+    ExternalAnalysisSessionNotFoundError,
+    ExternalAnalysisTaskNotFoundError,
+    ExternalExecutorMismatchError,
+    ExternalSessionTerminalError,
+    ExternalTaskAlreadyFinalizedError,
+    ExternalTaskNotCurrentError,
     NarrativeNotFoundError,
     NovelMcpError,
     OrderConflictError,
@@ -100,6 +107,29 @@ _VERSION_CONFLICT = _ErrorSpec(
     409,
     "VERSION_CONFLICT",
     "The resource was modified by another client.",
+)
+_EXTERNAL_ANALYSIS_CONFLICT = _ErrorSpec(
+    409,
+    "ANALYSIS_EXECUTION_CONFLICT",
+    "The analysis target conflicts with an active execution.",
+)
+_EXTERNAL_SESSION_TERMINAL = _ErrorSpec(
+    409, "EXTERNAL_SESSION_TERMINAL", "The external analysis session is terminal."
+)
+_EXTERNAL_TASK_ALREADY_FINALIZED = _ErrorSpec(
+    409,
+    "EXTERNAL_TASK_ALREADY_FINALIZED",
+    "The external analysis task is already finalized.",
+)
+_EXTERNAL_TASK_NOT_CURRENT = _ErrorSpec(
+    409,
+    "EXTERNAL_TASK_NOT_CURRENT",
+    "The external analysis task is not current.",
+)
+_EXTERNAL_EXECUTOR_MISMATCH = _ErrorSpec(
+    409,
+    "EXTERNAL_EXECUTOR_MISMATCH",
+    "The external executor model does not match the session.",
 )
 _REVIEW_ITEM_CLOSED = _ErrorSpec(
     409, "REVIEW_ITEM_CLOSED", "The review item is already closed."
@@ -209,6 +239,24 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
             "ANALYZER_PROVIDER_UNAVAILABLE",
             "The style model provider is unavailable.",
         )
+    if isinstance(exc, AnalysisExecutionConflictError):
+        return _EXTERNAL_ANALYSIS_CONFLICT
+    if isinstance(
+        exc,
+        (
+            ExternalAnalysisSessionNotFoundError,
+            ExternalAnalysisTaskNotFoundError,
+        ),
+    ):
+        return _NOT_FOUND
+    if isinstance(exc, ExternalSessionTerminalError):
+        return _EXTERNAL_SESSION_TERMINAL
+    if isinstance(exc, ExternalTaskAlreadyFinalizedError):
+        return _EXTERNAL_TASK_ALREADY_FINALIZED
+    if isinstance(exc, ExternalTaskNotCurrentError):
+        return _EXTERNAL_TASK_NOT_CURRENT
+    if isinstance(exc, ExternalExecutorMismatchError):
+        return _EXTERNAL_EXECUTOR_MISMATCH
     if isinstance(exc, VersionConflictError):
         return _VERSION_CONFLICT
     if isinstance(exc, ValueError):

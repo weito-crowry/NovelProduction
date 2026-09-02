@@ -7,15 +7,13 @@ from typing import Any, cast
 
 import httpx
 from novel_core.style_analysis.fingerprints import JsonValue, canonical_json_bytes
-from novel_core.style_analysis.model_contracts import JsonObject, ModelRequest
+from novel_core.style_analysis.model_contracts import (
+    REPAIR_SYSTEM_PROMPT,
+    JsonObject,
+    ModelRequest,
+)
 
 from novel_api.config import ApiSettings
-
-REPAIR_SYSTEM_PROMPT = (
-    "直前の出力は指定JSON契約に違反しています。"
-    "入力本文やIDを変更・追加せず、検証エラーだけを修正してください。"
-    "JSONオブジェクト以外を出力しないでください。"
-)
 
 
 class ModelClientError(RuntimeError):

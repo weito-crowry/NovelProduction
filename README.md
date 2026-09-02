@@ -21,12 +21,14 @@ the WEBUI covers the Phase 1–3 administration surface with explicit Save and
 conflict handling, production static serving, browser E2E, and stable
 certification. Phase E is COMPLETE and Final Cutover is PASS. The Final Cutover
 certified product/runtime baseline was
-`9120d7b80c5035498995e0a03fcb716976ee966e`. The stable runtime uses migrations
+`9120d7b80c5035498995e0a03fcb716976ee966e`. The stable v1.0 runtime used migrations
 001–005, and stable project `2126` was freshly recreated through the official
 project-creation path. The canonical structured manuscript architecture is now
 the stable baseline, including `document_json` persistence, the WEBUI Read/Edit
-flow, TipTap explicit-save editing, and Narou export. MCP remains at 59 tools,
-the API remains `/api/v1`, and `API/` is the sole runtime data-access boundary
+flow, TipTap explicit-save editing, and Narou export. The v1.0 baseline remains
+documented at 59 MCP tools; Fiction Style Analysis v1.1 SA-I adds a separate
+six-tool `style_analysis` group for an effective total of 65, with the existing
+59 preserved. The API remains `/api/v1`, and `API/` is the sole runtime data-access boundary
 for the shared services. See the [Phase E Final Cutover report](docs/superpowers/reports/2026-08-31-phase-e-final-cutover.md)
 for detailed evidence.
 
@@ -37,7 +39,9 @@ decision.
 Phase C converts `MCP/` into a stateless HTTP adapter. It preserves the
 existing 55 project-data tool names, requires an explicit `project_id` on each
 of them, and adds `project_list`, `project_get`, `project_create`, and
-`project_update` for 59 tools total. MCP remains at 59 tools. MCP uses one
+`project_update` for the v1.0 59-tool baseline. SA-I's separate six-tool group
+is documented in `docs/features/fiction-style-analysis/detailed-design/16-external-agent-mcp.md`.
+MCP uses one
 shared HTTP client per process and fails closed with `BACKEND_UNAVAILABLE` when
 the API cannot be reached; it has no CORE or SQLite fallback. No repository
 story database or generated artifacts are committed.

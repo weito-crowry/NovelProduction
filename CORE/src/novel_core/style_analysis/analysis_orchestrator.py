@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from typing import cast
 
 from novel_core.errors import AnalysisCancelledError
@@ -40,7 +41,13 @@ from novel_core.style_analysis.model_contracts import (
     ModelClient,
     ModelRequest,
 )
+from novel_core.style_analysis.model_output_contracts import ResponseContractRegistry
 from novel_core.style_analysis.model_prompts import get_prompt
+from novel_core.style_analysis.resumable_engine import ResumableDocumentAnalysisEngine
+from novel_core.style_analysis.resumable_models import (
+    CompletedModelCall,
+    DocumentAnalysisRequest,
+)
 from novel_core.style_analysis.runtime_models import (
     AnalysisPolicy,
     DependencyRunExpectation,
@@ -164,182 +171,82 @@ class DocumentAnalysisOrchestrator(
         preset: str = "full",
         rebuild_structure: bool = False,
     ) -> DocumentAnalysisResult:
-        self._safe_point()
+        return self._analyze_resumable(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_revision_id,
+            preset=preset,
+            rebuild_structure=rebuild_structure,
+        )
+
+    def _analyze_resumable(
+        self,
+        *,
+        document_id: int,
+        text_revision_id: int | None,
+        structure_revision_id: int | None,
+        preset: str,
+        rebuild_structure: bool,
+    ) -> DocumentAnalysisResult:
         if preset not in {"deterministic", "full", "metrics"}:
             raise ValueError("ANALYSIS_PRESET_INVALID")
-        document = self.text.get_document(document_id)
-        if document is None:
-            raise ValueError("STYLE_DOCUMENT_NOT_FOUND")
         if text_revision_id is None:
             raise ValueError("TEXT_REVISION_REQUIRED")
         if preset == "metrics" and structure_revision_id is None:
             raise ValueError("STRUCTURE_REVISION_REQUIRED")
-        if structure_revision_id is not None and rebuild_structure:
-            raise ValueError("STRUCTURE_REBUILD_CONFLICT")
-        revision_id = text_revision_id
-        if revision_id is None:
-            raise ValueError("TEXT_REVISION_REQUIRED")
-        revision = self.text.get_text_revision(document_id, revision_id)
-        explicit_structure = structure_revision_id is not None
-        request_is_current_text = document.current_text_revision_id == revision.id
-        current_structure_id = (
-            document.current_structure_revision_id if request_is_current_text else None
-        )
-        final_structure_id = structure_revision_id
-        pointer_update_allowed = False
-        if final_structure_id is None and not rebuild_structure:
-            final_structure_id = current_structure_id
-        if final_structure_id is None:
-            final_structure_id = self.structure.build_automatic_structure(
-                document_id=document_id,
-                text_revision_id=revision.id,
-                set_current=False,
-            ).id
-            pointer_update_allowed = not explicit_structure and request_is_current_text
-        structure = self.structure.get_structure_revision(
-            document_id, final_structure_id
-        )
-        if structure.text_revision_id != revision.id:
-            raise ValueError("STRUCTURE_TEXT_REVISION_MISMATCH")
-        scenes = self.structure.list_scenes(structure.id)
-        blocks = self.structure.list_blocks(structure.id)
-        sentences = self.structure.list_sentences(structure.id)
-        run_ids: list[int] = []
-        warnings: list[str] = []
-        metrics: list[StoredJsonObject] = []
         if preset == "full" and self.client is None:
             raise ValueError("ANALYZER_PROVIDER_UNAVAILABLE")
-
-        if preset == "metrics":
-            from novel_core.style_analysis.current_run_resolver import (
-                CurrentRunResolver,
-            )
-
-            current = CurrentRunResolver(self.connection, self.policy)
-            dependency_ids = [
-                run.id
-                for analyzer_id in (
-                    "speaker-attribution",
-                    "term-resolver",
-                    "term-explanation-detector",
-                    "block-semantic-classifier",
-                )
-                if (
-                    run := current.resolve(
-                        document_id,
-                        revision.id,
-                        structure.id,
-                        analyzer_id,
-                    )
-                )
-            ]
-            semantic_metric_run, semantic_metrics = self._semantic_metrics(
-                document_id,
-                revision.id,
-                structure.id,
-                revision,
-                scenes,
-                blocks,
-                dependency_ids,
-            )
-            run_ids.append(semantic_metric_run)
-            metrics.extend(semantic_metrics)
-            metric_run = self.runs.get_run(semantic_metric_run)
-            if metric_run is not None and metric_run.status != "succeeded":
-                warnings.append(
-                    f"ANALYZER_{metric_run.status.upper()}:{metric_run.analyzer_id}"
-                )
-            self.runs.commit()
-            return DocumentAnalysisResult(
-                status="partial" if warnings else "succeeded",
-                text_revision_id=revision.id,
-                structure_revision_id=structure.id,
-                run_ids=tuple(run_ids),
-                warnings=tuple(warnings),
-                metrics=tuple(metrics),
-            )
-
-        if (
-            preset == "full"
-            and structure.source_kind == "automatic"
-            and not explicit_structure
-        ):
-            try:
-                run_id = self._boundary(
-                    document_id, revision.id, structure.id, scenes, blocks
-                )
-                run_ids.append(run_id)
-                structure = self.structure.materialize_semantic_structure(
-                    document_id=document_id,
-                    text_revision_id=revision.id,
-                    parent_structure_revision_id=structure.id,
-                    boundary_analysis_run_id=run_id,
-                    auto_apply_threshold=self.policy.scene_boundary_auto_apply,
-                )
-                if structure.id != final_structure_id:
-                    final_structure_id = structure.id
-                    pointer_update_allowed = request_is_current_text
-                    scenes = self.structure.list_scenes(structure.id)
-                    blocks = self.structure.list_blocks(structure.id)
-                    sentences = self.structure.list_sentences(structure.id)
-            except AnalysisCancelledError:
-                raise
-            except Exception as exc:
-                warnings.append(f"BOUNDARY_FAILED:{exc}")
-
-        if preset == "full":
-            try:
-                semantic_run_ids = self._semantic_analyzers(
-                    document_id, revision.id, structure.id, scenes, blocks
-                )
-                run_ids.extend(semantic_run_ids)
-                semantic_metric_run, semantic_metrics = self._semantic_metrics(
-                    document_id,
-                    revision.id,
-                    structure.id,
-                    revision,
-                    scenes,
-                    blocks,
-                    semantic_run_ids,
-                )
-                run_ids.append(semantic_metric_run)
-                metrics.extend(semantic_metrics)
-            except AnalysisCancelledError:
-                raise
-            except Exception as exc:
-                warnings.append(f"SEMANTIC_FAILED:{exc}")
-        self._safe_point()
-        try:
-            basic_run, basic_metrics = self._basic(
-                document_id,
-                revision.id,
-                structure.id,
-                revision.canonical_text,
-                scenes,
-                blocks,
-                sentences,
-            )
-            run_ids.append(basic_run)
-            metrics.extend(basic_metrics)
-        except Exception:
-            raise
-        for run_id in run_ids:
-            run = self.runs.get_run(run_id)
-            if run is not None and run.status != "succeeded":
-                warnings.append(f"ANALYZER_{run.status.upper()}:{run.analyzer_id}")
-        if pointer_update_allowed:
-            self.structure.set_current_structure_if_current_text(
-                document_id, final_structure_id
-            )
-        self.runs.commit()
-        return DocumentAnalysisResult(
-            status="partial" if warnings else "succeeded",
-            text_revision_id=revision.id,
-            structure_revision_id=structure.id,
-            run_ids=tuple(run_ids),
-            warnings=tuple(warnings),
-            metrics=tuple(metrics),
+        engine = ResumableDocumentAnalysisEngine(
+            self.connection,
+            model_provider=self.model_provider or "internal",
+            model_id=self.model_id or "internal",
+            policy=self.policy,
+            checkpoint=self._safe_point,
         )
+        request = DocumentAnalysisRequest(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_revision_id,
+            preset=preset,
+            rebuild_structure=rebuild_structure,
+        )
+        cursor: ModelJsonObject = {"schema_version": 1}
+        completed: CompletedModelCall | None = None
+        while True:
+            advanced = engine.advance(request, cursor, completed)
+            cursor = advanced.cursor
+            if advanced.result is not None:
+                return advanced.result
+            call = advanced.pending_call
+            if call is None or self._analysis_client is None:
+                raise ValueError("ANALYZER_PROVIDER_UNAVAILABLE")
+            model_request = ModelRequest(
+                prompt_id=call.prompt_id,
+                prompt_version=call.prompt_version,
+                system_prompt=call.system_prompt,
+                user_payload=call.user_payload,
+            )
+            try:
+                validator = partial(
+                    ResponseContractRegistry.validate,
+                    call.response_contract_id,
+                    user_payload=call.user_payload,
+                )
+                response = self._analysis_client.complete_json_validated(
+                    model_request,
+                    validator,
+                )
+                completed = CompletedModelCall(
+                    call_key=call.call_key, response=response
+                )
+            except AnalysisCancelledError:
+                raise
+            except Exception as exc:
+                completed = CompletedModelCall(
+                    call_key=call.call_key,
+                    error_code=type(exc).__name__,
+                    error_message=str(exc),
+                )
 
     def _safe_point(self) -> None:
         self.runs.commit()

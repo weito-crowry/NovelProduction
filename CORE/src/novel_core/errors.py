@@ -147,6 +147,39 @@ class AnalysisCancelledError(NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class AnalysisExecutionConflictError(NovelMcpError):
+    code = "ANALYSIS_EXECUTION_CONFLICT"
+
+    def __init__(
+        self, message: str = "analysis execution conflicts with an active execution"
+    ) -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class ExternalAnalysisSessionNotFoundError(NovelMcpError):
+    code = "NOT_FOUND"
+
+
+class ExternalAnalysisTaskNotFoundError(NovelMcpError):
+    code = "NOT_FOUND"
+
+
+class ExternalSessionTerminalError(NovelMcpError):
+    code = "EXTERNAL_SESSION_TERMINAL"
+
+
+class ExternalTaskAlreadyFinalizedError(NovelMcpError):
+    code = "EXTERNAL_TASK_ALREADY_FINALIZED"
+
+
+class ExternalTaskNotCurrentError(NovelMcpError):
+    code = "EXTERNAL_TASK_NOT_CURRENT"
+
+
+class ExternalExecutorMismatchError(NovelMcpError):
+    code = "EXTERNAL_EXECUTOR_MISMATCH"
+
+
 class RelationshipIntegrityError(ValidationError):
     """Raised when relationship temporal ranges are ambiguous."""
 
