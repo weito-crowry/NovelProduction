@@ -7,6 +7,12 @@ from typing import Protocol, TypeAlias, cast
 
 JsonObject: TypeAlias = dict[str, object]  # noqa: UP040
 
+REPAIR_SYSTEM_PROMPT = (
+    "直前の出力は指定JSON契約に違反しています。"
+    "入力本文やIDを変更・追加せず、検証エラーだけを修正してください。"
+    "JSONオブジェクト以外を出力しないでください。"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ModelRequest:
