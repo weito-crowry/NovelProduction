@@ -275,6 +275,8 @@ class StyleAnalysisCatalogService(
             "parent_structure_revision_id": revision.parent_structure_revision_id,
             "fingerprint": revision.fingerprint,
             "created_at": revision.created_at,
+            "scene_count": len(scenes),
+            "block_count": len(blocks),
             "scenes": scene_rows,
             "blocks": block_rows,
             "sentences": sentence_rows,
@@ -288,6 +290,38 @@ class StyleAnalysisCatalogService(
         if document is None:
             raise ValueError("STYLE_DOCUMENT_NOT_FOUND")
         return document
+
+    def split_structure_scene(
+        self,
+        *,
+        document_id: int,
+        scene_id: int,
+        after_block_id: int,
+        expected_structure_revision_id: int,
+    ) -> dict[str, object]:
+        revision = self._structure.split_scene(
+            document_id=document_id,
+            scene_id=scene_id,
+            after_block_id=after_block_id,
+            expected_structure_revision_id=expected_structure_revision_id,
+        )
+        return self.get_structure(document_id, revision.id)
+
+    def merge_structure_scenes(
+        self,
+        *,
+        document_id: int,
+        scene_id: int,
+        next_scene_id: int,
+        expected_structure_revision_id: int,
+    ) -> dict[str, object]:
+        revision = self._structure.merge_scenes(
+            document_id=document_id,
+            scene_id=scene_id,
+            next_scene_id=next_scene_id,
+            expected_structure_revision_id=expected_structure_revision_id,
+        )
+        return self.get_structure(document_id, revision.id)
 
     def list_metrics(
         self,

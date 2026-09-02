@@ -145,6 +145,39 @@ describe("style analysis WebUI flows", () => {
     await waitFor(() => expect(overrideBody).toEqual({ document_id: 10, subject_type: "block", subject_id: 42, field_path: "block.speaker_entity_id", operation: "set", value: 8, base_analysis_run_id: 50, structure_revision_id: 6, note: "SA-H WebUI" }));
   });
 
+  it("submits manual split against the selected current structure", async () => {
+    let structureId = 6;
+    let splitBody: unknown = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/reference-works")) return new Response(envelope([]), { status: 200 });
+      if (url.endsWith("/documents")) return new Response(envelope([{ document_id: 10, kind: "project_episode_draft", current_text_revision_id: 5, current_structure_revision_id: structureId, current_structure_kind: structureId === 6 ? "automatic" : "manual", analysis_status: { basic: { state: "succeeded" }, semantic: { state: "not_analyzed" } } }]), { status: 200 });
+      if (url.endsWith("/documents/10/revisions")) return new Response(envelope([{ id: 5, document_id: 10, revision_no: 1 }]), { status: 200 });
+      if (url.endsWith("/documents/10/structures")) return new Response(envelope([{ id: structureId, document_id: 10, text_revision_id: 5, revision_no: structureId === 6 ? 1 : 2, source_kind: structureId === 6 ? "automatic" : "manual" }]), { status: 200 });
+      if (url.includes("/documents/10/structure?structure_revision_id=")) {
+        const id = structureId;
+        return new Response(envelope({ id, document_id: 10, text_revision_id: 5, revision_no: id === 6 ? 1 : 2, segmenter_id: id === 6 ? "automatic" : "manual", segmenter_version: 1, source_kind: id === 6 ? "automatic" : "manual", parent_structure_revision_id: id === 6 ? null : 6, fingerprint: `fp-${id}`, created_at: "now", scene_count: id === 6 ? 1 : 2, block_count: 2, scenes: id === 6 ? [{ id: 1 }] : [{ id: 11 }, { id: 12 }], blocks: [{ id: 2, scene_id: id === 6 ? 1 : 11 }, { id: 3, scene_id: id === 6 ? 1 : 12 }], sentences: [] }), { status: 200 });
+      }
+      if (url.endsWith("/documents/10/scenes/1/split") && init?.method === "POST") {
+        splitBody = JSON.parse(String(init.body));
+        structureId = 7;
+        return new Response(envelope({ id: 7, document_id: 10, text_revision_id: 5, revision_no: 2, segmenter_id: "manual", segmenter_version: 1, source_kind: "manual", parent_structure_revision_id: 6, fingerprint: "fp-7", created_at: "now", scene_count: 2, block_count: 2, scenes: [{ id: 11 }, { id: 12 }], blocks: [{ id: 2, scene_id: 11 }, { id: 3, scene_id: 12 }], sentences: [] }), { status: 200 });
+      }
+      return new Response(envelope([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/projects/demo/style-analysis/documents/10");
+
+    await user.click(await screen.findByRole("tab", { name: "Structure" }));
+    await user.type(screen.getByLabelText("Split scene ID"), "1");
+    await user.type(screen.getByLabelText("Split after block ID"), "2");
+    await user.click(screen.getByRole("button", { name: "Split scene" }));
+
+    await waitFor(() => expect(splitBody).toEqual({ after_block_id: 2, expected_structure_revision_id: 6 }));
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/documents/10/scenes/1/split"), expect.objectContaining({ method: "POST" }));
+  });
+
   it("submits the selected review priority", async () => {
     let reviewBody: unknown = null;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

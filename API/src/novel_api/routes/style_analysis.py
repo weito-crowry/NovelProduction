@@ -35,6 +35,8 @@ from novel_api.schemas.style_analysis import (
     StyleImportResponse,
     StyleJobResponse,
     StyleLintRequest,
+    StyleStructureMergeRequest,
+    StyleStructureSplitRequest,
     StyleWorkAnalyzeRequest,
 )
 from novel_api.service_container import (
@@ -215,6 +217,47 @@ def select_current_style_structure(
             document_id, structure_revision_id
         )
     return envelope(project_id, document)
+
+
+@router.post("/documents/{document_id}/scenes/{scene_id}/split")
+def split_style_scene(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    scene_id: int,
+    payload: StyleStructureSplitRequest,
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        structure = services.style_analysis.split_structure_scene(
+            document_id=document_id,
+            scene_id=scene_id,
+            after_block_id=payload.after_block_id,
+            expected_structure_revision_id=payload.expected_structure_revision_id,
+        )
+    return envelope(project_id, structure)
+
+
+@router.post("/documents/{document_id}/scenes/merge")
+def merge_style_scenes(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    payload: StyleStructureMergeRequest,
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        structure = services.style_analysis.merge_structure_scenes(
+            document_id=document_id,
+            scene_id=payload.scene_id,
+            next_scene_id=payload.next_scene_id,
+            expected_structure_revision_id=payload.expected_structure_revision_id,
+        )
+    return envelope(project_id, structure)
 
 
 @router.get(

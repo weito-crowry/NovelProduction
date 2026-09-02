@@ -385,6 +385,33 @@ export function selectStyleStructure(
   );
 }
 
+export function splitStyleScene(
+  projectId: string,
+  documentId: number,
+  sceneId: number,
+  input: { after_block_id: number; expected_structure_revision_id: number },
+): Promise<StyleStructureView> {
+  return apiRequest<StyleStructureView>(
+    stylePath(projectId, `/documents/${documentId}/scenes/${sceneId}/split`),
+    { method: "POST", body: input, projectId },
+  );
+}
+
+export function mergeStyleScenes(
+  projectId: string,
+  documentId: number,
+  input: {
+    scene_id: number;
+    next_scene_id: number;
+    expected_structure_revision_id: number;
+  },
+): Promise<StyleStructureView> {
+  return apiRequest<StyleStructureView>(
+    stylePath(projectId, `/documents/${documentId}/scenes/merge`),
+    { method: "POST", body: input, projectId },
+  );
+}
+
 export function fetchStyleMetrics(
   projectId: string,
   documentId: number,

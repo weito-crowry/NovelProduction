@@ -15,7 +15,9 @@ import {
   fetchStyleText,
   fetchStyleTextRevisions,
   linkStyleCharacter,
+  mergeStyleScenes,
   selectStyleStructure,
+  splitStyleScene,
   fetchStyleJob,
   importStyleFile,
   reviewFinding,
@@ -125,6 +127,41 @@ describe("style analysis API adapter", () => {
     expect(requestMock.mock.calls[0]).toEqual([
       "/api/v1/projects/novel/style-analysis/documents/7/structures/9/select-current",
       { method: "POST", projectId: "novel" },
+    ]);
+  });
+
+  it("uses the expected revision for manual scene split and merge", async () => {
+    await splitStyleScene("novel", 7, 8, {
+      after_block_id: 9,
+      expected_structure_revision_id: 10,
+    });
+    await mergeStyleScenes("novel", 7, {
+      scene_id: 11,
+      next_scene_id: 12,
+      expected_structure_revision_id: 13,
+    });
+
+    expect(requestMock.mock.calls).toEqual([
+      [
+        "/api/v1/projects/novel/style-analysis/documents/7/scenes/8/split",
+        {
+          method: "POST",
+          body: { after_block_id: 9, expected_structure_revision_id: 10 },
+          projectId: "novel",
+        },
+      ],
+      [
+        "/api/v1/projects/novel/style-analysis/documents/7/scenes/merge",
+        {
+          method: "POST",
+          body: {
+            scene_id: 11,
+            next_scene_id: 12,
+            expected_structure_revision_id: 13,
+          },
+          projectId: "novel",
+        },
+      ],
     ]);
   });
 

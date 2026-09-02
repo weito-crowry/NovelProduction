@@ -52,11 +52,13 @@ import {
   importStyleFile,
   ignoreReviewItem,
   linkStyleCharacter,
+  mergeStyleScenes,
   recomputeAggregates,
   resolveReviewItem,
   reviewFinding,
   runLint,
   selectStyleStructure,
+  splitStyleScene,
 } from "./styleAnalysisApi";
 import type {
   Aggregate,
@@ -612,6 +614,10 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
   const [selectedStructureRevisionId, setSelectedStructureRevisionId] = useState("");
   const [rebuildStructure, setRebuildStructure] = useState(false);
   const [activeTab, setActiveTab] = useState<"text" | "structure" | "semantics" | "metrics">("text");
+  const [splitSceneId, setSplitSceneId] = useState("");
+  const [splitAfterBlockId, setSplitAfterBlockId] = useState("");
+  const [mergeSceneId, setMergeSceneId] = useState("");
+  const [mergeNextSceneId, setMergeNextSceneId] = useState("");
   const episodes = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`), queryFn: () => loadDocumentEpisodes(projectId), enabled: documentId !== null, retry: false });
   const episode = episodes.data?.find((item) => item.documentId === documentId);
   const textRevisions = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${documentId ?? 0}`), queryFn: () => fetchStyleTextRevisions(projectId, documentId as number), enabled: documentId !== null, retry: false });
@@ -627,6 +633,7 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
   }, [episode?.currentStructureRevisionId, episode?.currentTextRevisionId, selectedStructureRevisionId, selectedTextRevisionId, structureRevisionIds, textRevisionIds]);
   const selectedTextId = positiveId(selectedTextRevisionId);
   const selectedStructureId = positiveId(selectedStructureRevisionId);
+  const currentStructureSelected = selectedStructureId !== null && selectedStructureId === episode?.currentStructureRevisionId;
   const textRevision = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-text-${documentId ?? 0}-${selectedTextId ?? 0}`), queryFn: () => fetchStyleText(projectId, documentId as number, selectedTextId as number), enabled: documentId !== null && selectedTextId !== null, retry: false });
   const structure = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structure-${documentId ?? 0}-${selectedStructureId ?? 0}`), queryFn: () => fetchStyleStructure(projectId, documentId as number, selectedStructureId as number), enabled: documentId !== null && selectedStructureId !== null, retry: false });
   const metrics = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-metrics-${documentId ?? 0}-${selectedStructureId ?? 0}`), queryFn: () => fetchStyleMetrics(projectId, documentId as number, selectedStructureId as number), enabled: documentId !== null && selectedStructureId !== null, retry: false });
@@ -646,6 +653,44 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
     },
+  });
+  const invalidateManualStructureData = (nextStructureId: number) => {
+    setSelectedStructureRevisionId(String(nextStructureId));
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
+  };
+  const splitMutation = useMutation({
+    mutationFn: () => {
+      const sceneId = positiveId(splitSceneId);
+      const afterBlockId = positiveId(splitAfterBlockId);
+      if (sceneId === null || afterBlockId === null || selectedStructureId === null) {
+        throw new Error("Current Structure、Scene ID、After block IDを指定してください。");
+      }
+      if (!currentStructureSelected) throw new Error("Current Structureを選択してください。");
+      return splitStyleScene(projectId, documentId as number, sceneId, {
+        after_block_id: afterBlockId,
+        expected_structure_revision_id: selectedStructureId,
+      });
+    },
+    onSuccess: (nextStructure) => invalidateManualStructureData(nextStructure.id),
+  });
+  const mergeMutation = useMutation({
+    mutationFn: () => {
+      const sceneId = positiveId(mergeSceneId);
+      const nextSceneId = positiveId(mergeNextSceneId);
+      if (sceneId === null || nextSceneId === null || selectedStructureId === null) {
+        throw new Error("Current Structure、Scene ID、Next scene IDを指定してください。");
+      }
+      if (!currentStructureSelected) throw new Error("Current Structureを選択してください。");
+      return mergeStyleScenes(projectId, documentId as number, {
+        scene_id: sceneId,
+        next_scene_id: nextSceneId,
+        expected_structure_revision_id: selectedStructureId,
+      });
+    },
+    onSuccess: (nextStructure) => invalidateManualStructureData(nextStructure.id),
   });
   const invalidateDocumentData = useCallback((job: StyleJob) => {
     if (!isTerminalStyleJob(job.status)) return;
@@ -689,7 +734,34 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
           </Card>
           <div role="tablist" aria-label="Document views" className="style-analysis-nav">{(["text", "structure", "semantics", "metrics"] as const).map((tab) => <Button key={tab} type="button" role="tab" aria-selected={activeTab === tab} variant={activeTab === tab ? "primary" : "ghost"} onClick={() => setActiveTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</Button>)}</div>
           {activeTab === "text" ? <Card><h2>Text</h2><p>Text revision #{selectedTextRevisionId || "未選択"} を表示しています。Current pointerは変更しません。</p><QueryState loading={textRevision.isPending} error={textRevision.error}>{textRevision.data ? <><p className="helper-text">Canonical text</p><pre className="text-preview">{textRevision.data.canonical_text}</pre><details><summary>Raw text</summary><pre className="text-preview">{textRevision.data.raw_text}</pre></details></> : <p>Text revisionを選択してください。</p>}</QueryState></Card> : null}
-          {activeTab === "structure" ? <Card><h2>Structure</h2><p>Structure revision #{selectedStructureRevisionId || "未選択"} ({structure.data?.source_kind ?? episode.currentStructureKind ?? "-"})</p><div className="form-actions"><Button variant="secondary" onClick={() => selectCurrentMutation.mutate()} disabled={selectCurrentMutation.isPending || selectedStructureId === null || selectedStructureId === episode.currentStructureRevisionId}>Select current structure</Button></div>{selectCurrentMutation.error ? <p role="alert">Current Structure更新エラー: {displayError(selectCurrentMutation.error)}</p> : null}<QueryState loading={structure.isPending} error={structure.error}>{structure.data ? <><p>{structure.data.scene_count} scenes · {structure.data.block_count} blocks</p><pre className="json-block">{formatJson({ scenes: structure.data.scenes, blocks: structure.data.blocks, sentences: structure.data.sentences })}</pre></> : <p>Structure revisionを選択してください。</p>}</QueryState><p className="helper-text">Rebuild structureを選ぶと、選択したStructure revisionを送信せずBackendの再構築境界を使います。</p></Card> : null}
+          {activeTab === "structure" ? <Card>
+            <h2>Structure</h2>
+            <p>Structure revision #{selectedStructureRevisionId || "未選択"} ({structure.data?.source_kind ?? episode.currentStructureKind ?? "-"})</p>
+            <div className="form-actions">
+              <Button variant="secondary" onClick={() => selectCurrentMutation.mutate()} disabled={selectCurrentMutation.isPending || selectedStructureId === null || selectedStructureId === episode.currentStructureRevisionId}>Select current structure</Button>
+            </div>
+            {selectCurrentMutation.error ? <p role="alert">Current Structure更新エラー: {displayError(selectCurrentMutation.error)}</p> : null}
+            <QueryState loading={structure.isPending} error={structure.error}>
+              {structure.data ? <>
+                <p>{structure.data.scene_count} scenes · {structure.data.block_count} blocks</p>
+                <pre className="json-block">{formatJson({ scenes: structure.data.scenes, blocks: structure.data.blocks, sentences: structure.data.sentences })}</pre>
+              </> : <p>Structure revisionを選択してください。</p>}
+            </QueryState>
+            <fieldset className="style-analysis-form">
+              <legend>Manual structure edit</legend>
+              <p className="helper-text">Current Structureだけを編集します。成功時は新しいManual revisionがCurrentになります。</p>
+              <div className="field-group"><FieldLabel htmlFor="style-split-scene-id">Split scene ID</FieldLabel><TextInput id="style-split-scene-id" inputMode="numeric" value={splitSceneId} onChange={(event) => setSplitSceneId(event.target.value)} /></div>
+              <div className="field-group"><FieldLabel htmlFor="style-split-after-block-id">Split after block ID</FieldLabel><TextInput id="style-split-after-block-id" inputMode="numeric" value={splitAfterBlockId} onChange={(event) => setSplitAfterBlockId(event.target.value)} /></div>
+              <Button onClick={() => splitMutation.mutate()} disabled={splitMutation.isPending || !currentStructureSelected}>Split scene</Button>
+              <div className="field-group"><FieldLabel htmlFor="style-merge-scene-id">Merge scene ID</FieldLabel><TextInput id="style-merge-scene-id" inputMode="numeric" value={mergeSceneId} onChange={(event) => setMergeSceneId(event.target.value)} /></div>
+              <div className="field-group"><FieldLabel htmlFor="style-merge-next-scene-id">Merge next scene ID</FieldLabel><TextInput id="style-merge-next-scene-id" inputMode="numeric" value={mergeNextSceneId} onChange={(event) => setMergeNextSceneId(event.target.value)} /></div>
+              <Button onClick={() => mergeMutation.mutate()} disabled={mergeMutation.isPending || !currentStructureSelected}>Merge scenes</Button>
+              {!currentStructureSelected ? <p className="helper-text">Manual editにはCurrent Structureを選択してください。</p> : null}
+              {splitMutation.error ? <p role="alert">Splitエラー: {displayError(splitMutation.error)}</p> : null}
+              {mergeMutation.error ? <p role="alert">Mergeエラー: {displayError(mergeMutation.error)}</p> : null}
+            </fieldset>
+            <p className="helper-text">Rebuild structureを選ぶと、選択したStructure revisionを送信せずBackendの再構築境界を使います。</p>
+          </Card> : null}
           {activeTab === "semantics" ? <Card><h2>Semantics</h2><QueryState loading={semantics.isPending} error={semantics.error}>{semantics.data ? <><p>Semantic状態はBasicとは別に表示しています。</p><pre className="json-block">{formatJson({ effective: semantics.data.effective, raw: rawOutputs, analysis_run_ids: semantics.data.analysis_run_ids })}</pre>{targets.length ? <div className="record-list">{targets.map((target) => <div className="record-list-item" key={`${target.analysis_run_id}-${target.subject_type}-${target.subject_id}-${target.fieldPath}`}><span><strong>{target.fieldPath}</strong><small>{target.subject_type} #{target.subject_id} · run #{target.analysis_run_id}</small></span><span className="form-actions"><Button variant="secondary" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "confirmed" })} disabled={inferenceMutation.isPending}>Confirm</Button><Button variant="ghost" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "rejected" })} disabled={inferenceMutation.isPending}>Reject</Button></span></div>)}</div> : <p>Registryに一致するRaw Inferenceはありません。</p>}{inferenceMutation.error ? <p role="alert">Inference Reviewエラー: {displayError(inferenceMutation.error)}</p> : null}<SemanticCorrectionEditor projectId={projectId} documentId={documentId} entry={episode} structureRevisionId={selectedStructureId} /></> : <p>Structure revisionがないためSemantic表示はありません。</p>}</QueryState></Card> : null}
           {activeTab === "metrics" ? <Card><h2>Metrics</h2><QueryState loading={metrics.isPending} error={metrics.error}>{metrics.data ? <><p>Selected metric runs: {metrics.data.analysis_run_ids.join(", ") || "なし"}</p><div className="record-list">{metrics.data.measurements.map((measurement, index) => <div className="record-list-item" key={`${String(measurement.id ?? index)}`}><span><strong>{String(measurement.metric_name)} v{String(measurement.metric_version)}</strong><small>{String(measurement.target_type)} #{String(measurement.target_id)} · sample {String(measurement.sample_count)}</small></span><strong>{String(measurement.value ?? "-")}</strong></div>)}</div><details><summary>Metric Registry</summary><pre className="json-block">{formatJson(metrics.data.available_metrics)}</pre></details></> : <p>Structure revisionを選択してください。</p>}</QueryState></Card> : null}
           <Card><h2>Analysis runs</h2><QueryState loading={runs.isPending} error={runs.error}>{runs.data?.length ? <div className="record-list">{runs.data.map((run) => <div className="record-list-item" key={run.id}><span>#{run.id} {run.analyzer_id} v{run.analyzer_version}</span><StatusBadge value={run.status} /></div>)}</div> : <p>まだAnalysis runがありません。</p>}</QueryState></Card>

@@ -8,7 +8,9 @@ from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrch
 
 
 def _create_reference_document(
-    client: TestClient, data_root: Path
+    client: TestClient,
+    data_root: Path,
+    raw_text: str = "Episode 1\n\n本文。",
 ) -> tuple[int, int, int]:
     created = client.post(
         "/api/v1/projects",
@@ -18,7 +20,7 @@ def _create_reference_document(
     imported = client.post(
         "/api/v1/projects/reference/style-analysis/imports/file",
         data={"source_type": "text"},
-        files={"file": ("reference.txt", "Episode 1\n\n本文。".encode(), "text/plain")},
+        files={"file": ("reference.txt", raw_text.encode(), "text/plain")},
     )
     assert imported.status_code == 201
 
@@ -124,3 +126,51 @@ def test_canonical_document_revision_and_content_routes(
         selected.json()["data"]["current_structure_revision_id"]
         == structure_revision_id
     )
+
+
+def test_manual_structure_split_and_merge_routes_create_current_revisions(
+    client: TestClient, data_root: Path
+) -> None:
+    document_id, _, structure_revision_id = _create_reference_document(
+        client,
+        data_root,
+        raw_text="第一文。\n\n第二文。\n\n第三文。",
+    )
+    base = "/api/v1/projects/reference/style-analysis"
+    structure = client.get(
+        f"{base}/documents/{document_id}/structure",
+        params={"structure_revision_id": structure_revision_id},
+    ).json()["data"]
+    scene_id = structure["scenes"][0]["id"]
+    after_block_id = structure["blocks"][0]["id"]
+
+    split = client.post(
+        f"{base}/documents/{document_id}/scenes/{scene_id}/split",
+        json={
+            "after_block_id": after_block_id,
+            "expected_structure_revision_id": structure_revision_id,
+        },
+    )
+    assert split.status_code == 200
+    split_data = split.json()["data"]
+    assert split_data["source_kind"] == "manual"
+    assert split_data["parent_structure_revision_id"] == structure_revision_id
+    assert split_data["scene_count"] == 2
+
+    split_scenes = split_data["scenes"]
+    merged = client.post(
+        f"{base}/documents/{document_id}/scenes/merge",
+        json={
+            "scene_id": split_scenes[0]["id"],
+            "next_scene_id": split_scenes[1]["id"],
+            "expected_structure_revision_id": split_data["id"],
+        },
+    )
+    assert merged.status_code == 200
+    merged_data = merged.json()["data"]
+    assert merged_data["source_kind"] == "manual"
+    assert merged_data["parent_structure_revision_id"] == split_data["id"]
+    assert merged_data["scene_count"] == 1
+
+    current = client.get(f"{base}/documents/{document_id}").json()["data"]
+    assert current["current_structure_revision_id"] == merged_data["id"]

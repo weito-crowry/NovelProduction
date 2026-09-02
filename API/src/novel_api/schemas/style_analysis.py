@@ -26,6 +26,21 @@ class ProjectDraftCaptureRequest(BaseModel):
     draft_id: int = Field(gt=0)
 
 
+class StyleStructureSplitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    after_block_id: int = Field(gt=0)
+    expected_structure_revision_id: int = Field(gt=0)
+
+
+class StyleStructureMergeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: int = Field(gt=0)
+    next_scene_id: int = Field(gt=0)
+    expected_structure_revision_id: int = Field(gt=0)
+
+
 class StyleLintRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
