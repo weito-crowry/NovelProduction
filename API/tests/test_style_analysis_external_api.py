@@ -93,6 +93,7 @@ def _document(client: TestClient, data_root: Path) -> tuple[int, int]:
     finally:
         connection.close()
 
+
 def test_external_session_start_submit_idempotency_and_cancel(
     client: TestClient, data_root: Path
 ) -> None:
@@ -232,7 +233,9 @@ def test_external_start_persists_and_honors_rebuild_structure(
         build_calls.append(dict(kwargs))
         return original_build(self, **kwargs)
 
-    monkeypatch.setattr(StyleStructureService, "build_automatic_structure", record_build)
+    monkeypatch.setattr(
+        StyleStructureService, "build_automatic_structure", record_build
+    )
 
     started = client.post(
         "/api/v1/projects/external/style-analysis/external-sessions",
