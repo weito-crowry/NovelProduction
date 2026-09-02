@@ -13,6 +13,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from novel_core.errors import (
+    AnalyzerProviderUnavailableError,
     CanonDecisionNotFoundError,
     CanonEntityNotFoundError,
     CanonPolicyError,
@@ -24,6 +25,8 @@ from novel_core.errors import (
     NarrativeNotFoundError,
     NovelMcpError,
     OrderConflictError,
+    ProjectDraftNotFoundError,
+    ProjectDraftTextProjectionError,
     RelationshipIntegrityError,
     RelationshipNotFoundError,
     TimelineEventNotFoundError,
@@ -38,6 +41,10 @@ from starlette.exceptions import HTTPException
 from novel_api.project_registry import ProjectConflictError, ProjectNotFoundError
 from novel_api.schemas.common import ApiError, ErrorEnvelope
 from novel_api.serialization import serialize_value
+from novel_api.style_analysis.adapters.base import (
+    SourceImportError,
+    SourceTooLargeError,
+)
 
 _MISSING = object()
 _CORE_NOT_FOUND_ERRORS = (
@@ -70,6 +77,22 @@ _PROJECT_NOT_FOUND = _ErrorSpec(
     404, "PROJECT_NOT_FOUND", "The requested project was not found."
 )
 _NOT_FOUND = _ErrorSpec(404, "NOT_FOUND", "The requested resource was not found.")
+_PROJECT_DRAFT_NOT_FOUND = _ErrorSpec(
+    404, "PROJECT_DRAFT_NOT_FOUND", "The requested project draft was not found."
+)
+_PROJECT_DRAFT_TEXT_PROJECTION_FAILED = _ErrorSpec(
+    422,
+    "PROJECT_DRAFT_TEXT_PROJECTION_FAILED",
+    "The project draft could not be projected into style-analysis text.",
+)
+_OVERRIDE_NOT_FOUND = _ErrorSpec(
+    404, "OVERRIDE_NOT_FOUND", "The requested active override was not found."
+)
+_INFERENCE_REVIEW_TARGET_INVALID = _ErrorSpec(
+    422,
+    "INFERENCE_REVIEW_TARGET_INVALID",
+    "The inference review target is invalid.",
+)
 _PROJECT_CONFLICT = _ErrorSpec(
     409, "PROJECT_CONFLICT", "The requested project already exists."
 )
@@ -77,6 +100,9 @@ _VERSION_CONFLICT = _ErrorSpec(
     409,
     "VERSION_CONFLICT",
     "The resource was modified by another client.",
+)
+_REVIEW_ITEM_CLOSED = _ErrorSpec(
+    409, "REVIEW_ITEM_CLOSED", "The review item is already closed."
 )
 _ORDER_CONFLICT = _ErrorSpec(
     409,
@@ -89,6 +115,7 @@ _DEPENDENCY_CONFLICT = _ErrorSpec(
     "The request conflicts with related resources.",
 )
 _DATABASE_BUSY = _ErrorSpec(503, "DATABASE_BUSY", "The database is temporarily busy.")
+_SOURCE_TOO_LARGE = _ErrorSpec(413, "SOURCE_TOO_LARGE", "The source is too large.")
 _INTERNAL_ERROR = _ErrorSpec(
     500, "INTERNAL_ERROR", "An internal server error occurred."
 )
@@ -170,10 +197,40 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _PROJECT_NOT_FOUND
     if isinstance(exc, ProjectConflictError):
         return _PROJECT_CONFLICT
+    if isinstance(exc, ProjectDraftNotFoundError):
+        return _PROJECT_DRAFT_NOT_FOUND
+    if isinstance(exc, ProjectDraftTextProjectionError):
+        return _PROJECT_DRAFT_TEXT_PROJECTION_FAILED
     if isinstance(exc, (WorkScopeError, *_CORE_NOT_FOUND_ERRORS)):
         return _NOT_FOUND
+    if isinstance(exc, AnalyzerProviderUnavailableError):
+        return _ErrorSpec(
+            409,
+            "ANALYZER_PROVIDER_UNAVAILABLE",
+            "The style model provider is unavailable.",
+        )
     if isinstance(exc, VersionConflictError):
         return _VERSION_CONFLICT
+    if isinstance(exc, ValueError):
+        code = str(exc)
+        if code == "VERSION_CONFLICT":
+            return _VERSION_CONFLICT
+        if code == "REVIEW_ITEM_CLOSED":
+            return _REVIEW_ITEM_CLOSED
+        if code == "INFERENCE_REVIEW_TARGET_INVALID":
+            return _INFERENCE_REVIEW_TARGET_INVALID
+        if code == "OVERRIDE_NOT_FOUND":
+            return _OVERRIDE_NOT_FOUND
+        if code in {
+            "REVIEW_ITEM_NOT_FOUND",
+            "REVIEW_SUBJECT_NOT_FOUND",
+            "ENTITY_NOT_FOUND",
+            "TERM_NOT_FOUND",
+            "CHARACTER_NOT_FOUND",
+            "STYLE_DOCUMENT_NOT_FOUND",
+            "ANALYSIS_RUN_NOT_FOUND",
+        }:
+            return _NOT_FOUND
     if isinstance(exc, DocumentSchemaError):
         return _DOCUMENT_SCHEMA_ERROR
     if isinstance(exc, DocumentStorageError):
@@ -192,6 +249,11 @@ def _error_spec(exc: Exception) -> _ErrorSpec:
         return _DEPENDENCY_CONFLICT
     if isinstance(exc, sqlite3.OperationalError):
         return _DATABASE_BUSY if _is_locked(exc) else _INTERNAL_ERROR
+    if isinstance(exc, SourceTooLargeError):
+        return _SOURCE_TOO_LARGE
+    if isinstance(exc, SourceImportError):
+        code = exc.code
+        return _ErrorSpec(400, code, "The source could not be imported.")
     if isinstance(exc, ValidationError | ValueError):
         return _VALIDATION
     return _INTERNAL_ERROR

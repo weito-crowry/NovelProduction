@@ -22,6 +22,35 @@ class ContextProjectionResult:
     truncated: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PlainTextProjectionResult:
+    """Plain text capture plus raw offsets for canonical scene-break hints."""
+
+    raw_text: str
+    scene_break_offsets_raw: tuple[int, ...]
+
+
+def render_plain_text_projection(document: NovelDocument) -> PlainTextProjectionResult:
+    """Project a Canonical Document into the bounded style-analysis text input."""
+
+    normalized = normalize_document(document)
+    parts: list[str] = []
+    scene_break_offsets: list[int] = []
+    for block in normalized.blocks:
+        if block.type == "note":
+            continue
+        if block.type == "separator":
+            scene_break_offsets.append(len("".join(parts)))
+            continue
+        if parts:
+            parts.append("\n\n")
+        parts.append(base_visible_text(block.html))
+    return PlainTextProjectionResult(
+        raw_text="".join(parts),
+        scene_break_offsets_raw=tuple(sorted(set(scene_break_offsets))),
+    )
+
+
 def render_web_html(document: NovelDocument, *, include_notes: bool = False) -> str:
     """Render WEB Read HTML with block identity and minimal semantic typing."""
 

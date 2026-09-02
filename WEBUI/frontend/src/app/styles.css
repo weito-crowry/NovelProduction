@@ -154,6 +154,25 @@ label { color: #344054; font-size: .88rem; font-weight: 600; }
 .relationship-editor { border: 1px solid #eaecf0; border-radius: 8px; display: grid; gap: 12px; padding: 12px; }
 .participant-row { align-items: end; border: 1px solid #eaecf0; border-radius: 8px; display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; padding: 10px; }
 .participant-row .button { min-height: 36px; }
+.style-analysis-page { margin: 0 auto; max-width: 1240px; }
+.style-analysis-nav { border-bottom: 1px solid #d0d5dd; display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 24px; }
+.style-analysis-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 16px; }
+.style-analysis-form { align-items: end; display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; }
+.style-analysis-form .field-group { flex: 1 1 220px; min-width: 180px; }
+.style-analysis-form > .button { flex: 0 0 auto; }
+.style-job-progress { background: #f8f9fc; border: 1px solid #d0d5dd; border-radius: 9px; display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; padding: 12px; }
+.style-job-progress p, .style-job-progress details, .style-warning-list { flex-basis: 100%; margin: 0; }
+.style-warning-list { color: #b54708; padding-left: 20px; }
+.style-analysis-summary { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.style-analysis-summary > div { background: #f8f9fc; border: 1px solid #eaecf0; border-radius: 9px; display: grid; gap: 6px; padding: 14px; }
+.style-analysis-summary strong { font-size: 1.25rem; overflow-wrap: anywhere; }
+.style-finding-card { border: 1px solid #eaecf0; border-radius: 9px; display: grid; gap: 10px; margin-top: 14px; padding: 14px; }
+.style-finding-card p { margin: 0; }
+.style-finding-card .form-actions { margin-top: 0; }
+.style-analysis-page .record-list-item > span { min-width: 0; }
+.style-analysis-page .record-list-item small { display: block; margin-top: 5px; }
+.style-analysis-page .record-list-item button { flex: 0 0 auto; }
+.style-analysis-page .empty-state { margin: 20px auto; }
 
 @media (max-width: 720px) {
   .app-shell { display: block; }
@@ -181,4 +200,7 @@ label { color: #344054; font-size: .88rem; font-weight: 600; }
   .reference-form { grid-template-columns: 1fr; }
   .range-form, .move-form, .relationship-create-form, .participant-row { grid-template-columns: 1fr; }
   .relationship-create-form fieldset { display: grid; }
+  .style-analysis-form { align-items: stretch; display: grid; grid-template-columns: 1fr; }
+  .style-analysis-form .field-group { min-width: 0; }
+  .style-analysis-nav { overflow-x: auto; }
 }

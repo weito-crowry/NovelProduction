@@ -16,7 +16,8 @@ Style Analysisを既存FastAPI/React WebUIへ統合するAPI契約、Revision選
 - rights_basis/毎回の確認Dialogなし。
 - 既存API Client/Query Cache/Project Scope Error Contractを再利用する。
 - Profile Import/Exportはv1 scope外。
-- API Runtime Dependency追加は01 `beautifulsoup4`、15 `httpx`だけ。
+- API Runtime Dependency追加は01 `beautifulsoup4`、Local File Multipart Importの
+  `python-multipart`、15 `httpx`。
 
 URL Prefix:
 
@@ -234,6 +235,7 @@ Job Type別`partial`可否は09を正本とし、Aggregate/Lintでは`partial`�
 POST   /entities
 POST   /entities/{entity_id}/aliases
 PUT    /documents/{document_id}/character-links/{project_character_id}
+GET    /documents/{document_id}/character-links
 DELETE /documents/{document_id}/character-links/{project_character_id}
 POST   /terms
 POST   /terms/{term_id}/aliases

@@ -54,6 +54,9 @@ def test_create_initializes_story_db_and_metadata_atomically(data_root: Path) ->
         "003_narrative.sql",
         "004_drafts.sql",
         "005_structured_drafts.sql",
+        "006_style_analysis_foundation.sql",
+        "007_style_analysis_semantics.sql",
+        "008_style_analysis_corpus_profile.sql",
     )
     assert work_count == (1,)
 

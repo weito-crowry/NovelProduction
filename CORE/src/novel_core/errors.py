@@ -25,6 +25,24 @@ class DocumentStorageError(NovelMcpError):
         super().__init__(f"{self.code}: {message}")
 
 
+class ProjectDraftNotFoundError(NovelMcpError):
+    """Raised when a requested project draft does not exist."""
+
+    code = "PROJECT_DRAFT_NOT_FOUND"
+
+    def __init__(self, message: str = "project draft not found") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
+class ProjectDraftTextProjectionError(NovelMcpError):
+    """Raised when a project draft cannot be projected into style text."""
+
+    code = "PROJECT_DRAFT_TEXT_PROJECTION_FAILED"
+
+    def __init__(self, message: str = "project draft text projection failed") -> None:
+        super().__init__(f"{self.code}: {message}")
+
+
 class MigrationError(NovelMcpError):
     """Raised when migrations cannot be applied safely."""
 
@@ -106,6 +124,26 @@ class ValidationError(ValueError, NovelMcpError):
         self.code = "VALIDATION_ERROR"
         self.field = field
         self.message = message
+        super().__init__(f"{self.code}: {message}")
+
+
+class AnalyzerProviderUnavailableError(ValidationError):
+    """Raised before a model-backed analysis job is persisted."""
+
+    code = "ANALYZER_PROVIDER_UNAVAILABLE"
+
+    def __init__(self, message: str = "style model provider is unavailable") -> None:
+        super().__init__(message)
+        self.code = type(self).code
+        self.args = (f"{self.code}: {message}",)
+
+
+class AnalysisCancelledError(NovelMcpError):
+    """Raised at an analysis safe point after a job cancellation request."""
+
+    code = "ANALYSIS_CANCELLED"
+
+    def __init__(self, message: str = "style analysis cancelled") -> None:
         super().__init__(f"{self.code}: {message}")
 
 

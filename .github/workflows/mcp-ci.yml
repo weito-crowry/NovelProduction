@@ -98,7 +98,10 @@ jobs:
             002_search.sql \
             003_narrative.sql \
             004_drafts.sql \
-            005_structured_drafts.sql)"
+            005_structured_drafts.sql \
+            006_style_analysis_foundation.sql \
+            007_style_analysis_semantics.sql \
+            008_style_analysis_corpus_profile.sql)"
           test "${actual_migrations}" = "${expected_migrations}"
           test ! -d MCP/migrations
           test "$(git rev-parse HEAD:CORE/migrations/001_initial.sql)" = \
@@ -109,6 +112,8 @@ jobs:
             "5ac6cd8b1ec370bf228a5e4056f93f20bfd22ecb"
           test "$(git rev-parse HEAD:CORE/migrations/004_drafts.sql)" = \
             "1817edf2d51e5c91eae61205890a83f2347e88d7"
+          test "$(git rev-parse HEAD:CORE/migrations/005_structured_drafts.sql)" = \
+            "b812a57ac437b7fc7fecbde5c5a0a0cbe05fe911"
           test ! -f data/story.db
           test -z "$(git status --porcelain)"
 

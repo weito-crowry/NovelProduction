@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import hashlib
+import io
+import zipfile
+
+import pytest
+
+from novel_api.style_analysis.adapters import get_source_adapter
+from novel_api.style_analysis.adapters.base import (
+    SourceEmptyError,
+    SourceEncodingError,
+    SourceParseError,
+    SourceRequest,
+    SourceTooLargeError,
+)
+
+
+def test_source_adapter_registry_exposes_fixed_v1_adapters() -> None:
+    assert get_source_adapter("text").adapter_id == "style-source-text"
+    assert get_source_adapter("html_file").adapter_id == "style-source-html-file"
+    assert get_source_adapter("epub").adapter_id == "style-source-epub"
+    assert {
+        get_source_adapter(kind).adapter_version
+        for kind in ("text", "html_file", "epub")
+    } == {1}
+
+
+def test_text_adapter_identity_is_upload_bytes_sha256() -> None:
+    payload = "第一行\n\n第二行".encode()
+    request = SourceRequest(source_type="text", filename="sample.txt", payload=payload)
+
+    identity = get_source_adapter("text").identify(request)
+
+    assert identity.external_work_id == hashlib.sha256(payload).hexdigest()
+
+
+def test_text_adapter_accepts_utf8_bom_and_emits_one_episode() -> None:
+    request = SourceRequest(
+        source_type="text",
+        filename="sample.txt",
+        payload="本文\n\n続き".encode("utf-8-sig"),
+    )
+
+    imported = get_source_adapter("text").import_work(request)
+
+    assert imported.title == "sample"
+    assert imported.author_name is None
+    assert len(imported.episodes) == 1
+    assert imported.episodes[0].external_episode_id == "1"
+    assert imported.episodes[0].title == "sample"
+    assert imported.episodes[0].order_index == 1
+    assert imported.episodes[0].raw_text == "本文\n\n続き"
+    assert imported.episodes[0].metadata == {"scene_break_offsets_raw": []}
+
+
+def test_text_adapter_rejects_invalid_utf8() -> None:
+    request = SourceRequest(source_type="text", filename="sample.txt", payload=b"\xff")
+
+    with pytest.raises(SourceEncodingError):
+        get_source_adapter("text").import_work(request)
+
+
+def test_text_adapter_rejects_empty_text() -> None:
+    request = SourceRequest(
+        source_type="text",
+        filename="sample.txt",
+        payload=b"\xef\xbb\xbf",
+    )
+
+    with pytest.raises(SourceEmptyError):
+        get_source_adapter("text").import_work(request)
+
+
+def test_html_adapter_selects_article_and_serializes_supported_dom_nodes() -> None:
+    payload = (
+        "<html><head><title>HTML title</title></head><body>"
+        "<main>wrong root</main>"
+        "<article><header>ignored header</header>"
+        "<p>第一</p><p>第二<br>行</p>"
+        "<p><ruby>漢<rt>かん</rt><rp>(</rp><rp>かん</rp><rp>)</rp></ruby></p>"
+        "<hr><p>第三</p>"
+        "<script>ignored script</script><nav>ignored nav</nav>"
+        "</article></body></html>"
+    ).encode()
+
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file", filename="fallback.html", payload=payload
+        )
+    )
+
+    assert imported.title == "HTML title"
+    assert imported.episodes[0].raw_text == "第一\n\n第二\n行\n\n漢\n\n第三"
+    assert imported.episodes[0].metadata == {"scene_break_offsets_raw": [11]}
+
+
+@pytest.mark.parametrize(
+    ("markup", "expected"),
+    [
+        (
+            ("<html><body><article>article</article><main>main</main></body></html>"),
+            "article",
+        ),
+        (
+            (
+                "<html><body><article>a</article><article>b</article>"
+                "<main>main</main></body></html>"
+            ),
+            "main",
+        ),
+        ("<html><body><div>body</div></body></html>", "body"),
+    ],
+)
+def test_html_adapter_root_precedence(markup: str, expected: str) -> None:
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file", filename="book.html", payload=markup.encode()
+        )
+    )
+
+    assert imported.episodes[0].raw_text == expected
+
+
+@pytest.mark.parametrize("root", ["body", "article", "main"])
+def test_html_adapter_ignores_pretty_printed_block_indentation(root: str) -> None:
+    if root == "body":
+        content = "<p>A</p>\n    <p>B</p>"
+    else:
+        content = f"<{root}>\n      <p>A</p>\n      <p>B</p>\n    </{root}>"
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file",
+            filename="book.html",
+            payload=f"<html>\n  <body>\n    {content}\n  </body>\n</html>".encode(),
+        )
+    )
+
+    assert imported.episodes[0].raw_text == "A\n\nB"
+
+
+def test_html_adapter_preserves_inline_whitespace_and_drops_empty_paragraph() -> None:
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file",
+            filename="book.html",
+            payload=(
+                b"<html><body><p>A <em>B</em> C</p>"
+                b"<p>   </p><p><span>D</span> <span>E</span></p>"
+                b"</body></html>"
+            ),
+        )
+    )
+
+    assert imported.episodes[0].raw_text == "A B C\n\nD E"
+
+
+def test_html_adapter_rejects_missing_body_and_empty_content() -> None:
+    adapter = get_source_adapter("html_file")
+
+    with pytest.raises(SourceParseError):
+        adapter.import_work(
+            SourceRequest(
+                source_type="html_file", filename="book.html", payload=b"<html />"
+            )
+        )
+    with pytest.raises(SourceEmptyError):
+        adapter.import_work(
+            SourceRequest(
+                source_type="html_file",
+                filename="book.html",
+                payload=b"<html><body><main><p></p></main></body></html>",
+            )
+        )
+
+
+def test_html_adapter_preserves_br_line_feeds_at_document_edges() -> None:
+    imported = get_source_adapter("html_file").import_work(
+        SourceRequest(
+            source_type="html_file",
+            filename="book.html",
+            payload=b"<html><body><br>body<br></body></html>",
+        )
+    )
+
+    assert imported.episodes[0].raw_text == "\nbody\n"
+
+
+def _epub_bytes(
+    *,
+    bad_href: str | None = None,
+    nav_href: str = "chapter-1.xhtml",
+    include_nav: bool = True,
+    nav_missing: bool = False,
+    ncx_src: str = "chapter-1.xhtml",
+) -> bytes:
+    href = bad_href or "chapter-1.xhtml"
+    nav_item = (
+        '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" '
+        'properties="nav"/>'
+        if include_nav
+        else ""
+    )
+    nav_spine_itemref = '<itemref idref="nav"/>' if include_nav else ""
+    container = (
+        '<?xml version="1.0"?>'
+        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    opf = f"""<?xml version="1.0"?>
+    <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id">
+      <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <dc:title>EPUB Book</dc:title><dc:creator>Author</dc:creator>
+      </metadata>
+      <manifest>
+        {nav_item}
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+        <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"
+              properties="cover-image"/>
+        <item id="one" href="{href}" media-type="application/xhtml+xml"/>
+        <item id="two" href="chapter-2.xhtml" media-type="application/xhtml+xml"/>
+        <item id="three" href="chapter-3.xhtml" media-type="application/xhtml+xml"/>
+      </manifest>
+      <spine toc="ncx">
+        {nav_spine_itemref}<itemref idref="cover"/>
+        <itemref idref="one"/><itemref idref="two"/><itemref idref="three"/>
+      </spine>
+    </package>"""
+    files = {
+        "META-INF/container.xml": container,
+        "OEBPS/content.opf": opf,
+        "OEBPS/cover.xhtml": "<html><body><h1>Cover</h1></body></html>",
+        "OEBPS/chapter-1.xhtml": "<html><body><p>一</p></body></html>",
+        "OEBPS/chapter-2.xhtml": "<html><body><h1>第二章</h1><p>二</p></body></html>",
+        "OEBPS/chapter-3.xhtml": "<html><body><p>三</p></body></html>",
+        "OEBPS/toc.ncx": f"""<?xml version="1.0"?>
+        <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>
+          <navPoint><navLabel><text>第一章NCX</text></navLabel>
+            <content src="{ncx_src}"/></navPoint>
+        </navMap></ncx>""",
+    }
+    if include_nav and not nav_missing:
+        files["OEBPS/nav.xhtml"] = (
+            '<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav '
+            f'<ol><li><a href="{nav_href}">第一章</a>'
+            "</li></ol></nav></body></html>"
+        )
+    if bad_href is not None:
+        files.pop("OEBPS/chapter-1.xhtml", None)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return output.getvalue()
+
+
+def _corrupt_zip_member(payload: bytes, member_name: str) -> bytes:
+    corrupted = bytearray(payload)
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        info = archive.getinfo(member_name)
+        data_offset = (
+            info.header_offset
+            + 30
+            + len(info.filename.encode("utf-8"))
+            + len(info.extra)
+        )
+    corrupted[data_offset] ^= 0x01
+    return bytes(corrupted)
+
+
+def test_epub3_invalid_navigation_href_falls_back_to_heading_or_episode() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_epub_bytes(nav_href="../../escape.xhtml"),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+def test_epub2_invalid_navigation_src_falls_back_to_heading_or_episode() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_epub_bytes(include_nav=False, ncx_src="../../escape.xhtml"),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+def test_missing_epub_navigation_resource_falls_back_to_heading_or_episode() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_epub_bytes(nav_missing=True),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("include_nav", "member_name"),
+    [(True, "OEBPS/nav.xhtml"), (False, "OEBPS/toc.ncx")],
+)
+def test_corrupt_epub_navigation_resource_falls_back_to_heading_or_episode(
+    include_nav: bool, member_name: str
+) -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(
+            source_type="epub",
+            filename="upload.epub",
+            payload=_corrupt_zip_member(
+                _epub_bytes(include_nav=include_nav), member_name
+            ),
+        )
+    )
+
+    assert [episode.title for episode in imported.episodes] == [
+        "Episode 1",
+        "第二章",
+        "Episode 3",
+    ]
+
+
+def test_epub_adapter_reads_metadata_spine_nav_and_title_fallbacks() -> None:
+    imported = get_source_adapter("epub").import_work(
+        SourceRequest(source_type="epub", filename="upload.epub", payload=_epub_bytes())
+    )
+
+    assert imported.title == "EPUB Book"
+    assert imported.author_name == "Author"
+    assert [episode.external_episode_id for episode in imported.episodes] == [
+        "spine:1",
+        "spine:2",
+        "spine:3",
+    ]
+    assert [episode.title for episode in imported.episodes] == [
+        "第一章",
+        "第二章",
+        "Episode 3",
+    ]
+    assert [episode.raw_text for episode in imported.episodes] == [
+        "一",
+        "第二章\n\n二",
+        "三",
+    ]
+    assert all(
+        episode.metadata == {"scene_break_offsets_raw": []}
+        for episode in imported.episodes
+    )
+
+
+def test_epub_adapter_rejects_archive_path_escape() -> None:
+    for bad_href in ("../../escape.xhtml", r"..\escape.xhtml"):
+        with pytest.raises(SourceParseError):
+            get_source_adapter("epub").import_work(
+                SourceRequest(
+                    source_type="epub",
+                    filename="upload.epub",
+                    payload=_epub_bytes(bad_href=bad_href),
+                )
+            )
+
+
+def test_epub_adapter_reports_selected_spine_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_getinfo = zipfile.ZipFile.getinfo
+
+    def oversized_getinfo(self: zipfile.ZipFile, name: str) -> zipfile.ZipInfo:
+        info = original_getinfo(self, name)
+        if name in {
+            "OEBPS/chapter-1.xhtml",
+            "OEBPS/chapter-2.xhtml",
+            "OEBPS/chapter-3.xhtml",
+        }:
+            info.file_size = 200 * 1024 * 1024
+        return info
+
+    monkeypatch.setattr(zipfile.ZipFile, "getinfo", oversized_getinfo)
+
+    with pytest.raises(SourceTooLargeError):
+        get_source_adapter("epub").import_work(
+            SourceRequest(
+                source_type="epub", filename="upload.epub", payload=_epub_bytes()
+            )
+        )

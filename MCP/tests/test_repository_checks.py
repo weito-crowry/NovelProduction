@@ -186,6 +186,15 @@ def test_boundary_checker_accepts_current_layering_contract(tmp_path: Path) -> N
     )
 
 
+def test_boundary_checker_accepts_style_analysis_api_modules() -> None:
+    failures = _boundary_checker().collect_failures(
+        REPOSITORY_ROOT,
+        tool_names=tuple(str(index) for index in range(59)),
+    )
+
+    assert not [failure for failure in failures if "sqlite3 is restricted" in failure]
+
+
 @pytest.mark.parametrize(
     "module_name", ["novel_core", "sqlite3", "novel_api", "fastapi"]
 )

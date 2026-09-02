@@ -16,7 +16,13 @@ LEGACY_MIGRATIONS = (
     "003_narrative.sql",
     "004_drafts.sql",
 )
-ALL_MIGRATIONS = (*LEGACY_MIGRATIONS, "005_structured_drafts.sql")
+ALL_MIGRATIONS = (
+    *LEGACY_MIGRATIONS,
+    "005_structured_drafts.sql",
+    "006_style_analysis_foundation.sql",
+    "007_style_analysis_semantics.sql",
+    "008_style_analysis_corpus_profile.sql",
+)
 
 
 def _copy_migrations(source: Path, destination: Path, names: tuple[str, ...]) -> Path:

@@ -1,0 +1,181 @@
+import shutil
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from novel_core.config import DatabaseConfig
+from novel_core.database import open_database
+
+MIGRATION_DIR = Path(__file__).resolve().parents[1] / "migrations"
+EXPECTED_LEGACY_MIGRATIONS = tuple(
+    sorted(path.name for path in MIGRATION_DIR.glob("00[1-5]_*.sql"))
+)
+FOUNDATION_MIGRATION = "006_style_analysis_foundation.sql"
+SEMANTICS_MIGRATION = "007_style_analysis_semantics.sql"
+CORPUS_PROFILE_MIGRATION = "008_style_analysis_corpus_profile.sql"
+FOUNDATION_TABLES = (
+    "style_jobs",
+    "style_sources",
+    "style_source_snapshots",
+    "style_reference_works",
+    "style_reference_episodes",
+    "style_documents",
+    "style_text_revisions",
+    "style_text_mappings",
+    "style_structure_revisions",
+    "style_scenes",
+    "style_blocks",
+    "style_sentences",
+    "style_analysis_runs",
+    "style_analysis_run_dependencies",
+    "style_structure_analysis_sources",
+    "style_entities",
+    "style_mentions",
+    "style_entity_aliases",
+    "style_entity_character_links",
+    "style_terms",
+    "style_term_aliases",
+    "style_term_mentions",
+    "style_annotations",
+    "style_review_items",
+    "style_inference_reviews",
+    "style_manual_overrides",
+    "style_measurements",
+    "style_corpora",
+    "style_corpus_work_memberships",
+    "style_corpus_episode_memberships",
+    "style_aggregates",
+    "style_aggregate_measurements",
+    "style_profiles",
+    "style_profile_versions",
+    "style_rules",
+    "style_rule_aggregate_sources",
+    "style_lint_runs",
+    "style_findings",
+    "style_finding_reviews",
+)
+
+
+def open_test_database(db_path: Path) -> sqlite3.Connection:
+    return open_database(DatabaseConfig(db_path=db_path, migration_dir=MIGRATION_DIR))
+
+
+def copy_migrations(source: Path, destination: Path, names: tuple[str, ...]) -> None:
+    destination.mkdir()
+    for name in names:
+        shutil.copyfile(source / name, destination / name)
+
+
+def test_style_analysis_package_is_importable() -> None:
+    import novel_core.style_analysis  # noqa: F401
+
+
+def test_foundation_migration_is_present() -> None:
+    assert (MIGRATION_DIR / FOUNDATION_MIGRATION).is_file()
+
+
+def test_legacy_migration_bytes_remain_unchanged(tmp_path: Path) -> None:
+    before = {
+        name: (MIGRATION_DIR / name).read_bytes() for name in EXPECTED_LEGACY_MIGRATIONS
+    }
+
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        applied = tuple(
+            row[0]
+            for row in connection.execute(
+                "SELECT version FROM schema_migrations ORDER BY version"
+            )
+        )
+        assert applied == tuple(
+            sorted(
+                (
+                    *EXPECTED_LEGACY_MIGRATIONS,
+                    FOUNDATION_MIGRATION,
+                    SEMANTICS_MIGRATION,
+                    CORPUS_PROFILE_MIGRATION,
+                )
+            )
+        )
+    finally:
+        connection.close()
+
+    assert {
+        name: (MIGRATION_DIR / name).read_bytes() for name in EXPECTED_LEGACY_MIGRATIONS
+    } == before
+
+
+def test_foundation_schema_supports_fresh_and_existing_databases(
+    tmp_path: Path,
+) -> None:
+    fresh = open_test_database(tmp_path / "fresh.db")
+
+    legacy_dir = tmp_path / "legacy-migrations"
+    copy_migrations(MIGRATION_DIR, legacy_dir, EXPECTED_LEGACY_MIGRATIONS)
+    legacy_path = tmp_path / "legacy.db"
+    legacy = open_database(
+        DatabaseConfig(db_path=legacy_path, migration_dir=legacy_dir)
+    )
+    legacy.close()
+
+    upgraded_dir = tmp_path / "upgraded-migrations"
+    copy_migrations(
+        MIGRATION_DIR,
+        upgraded_dir,
+        (
+            *EXPECTED_LEGACY_MIGRATIONS,
+            FOUNDATION_MIGRATION,
+            SEMANTICS_MIGRATION,
+            CORPUS_PROFILE_MIGRATION,
+        ),
+    )
+    upgraded = open_database(
+        DatabaseConfig(db_path=legacy_path, migration_dir=upgraded_dir)
+    )
+
+    try:
+        for connection in (fresh, upgraded):
+            assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert (
+                tuple(
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name LIKE 'style_%' "
+                        "ORDER BY rowid"
+                    )
+                )
+                == FOUNDATION_TABLES
+            )
+    finally:
+        fresh.close()
+        upgraded.close()
+
+
+def test_foundation_schema_enforces_source_type_and_job_fifo_index(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO style_sources "
+                "(source_type, external_work_id, original_filename, "
+                "adapter_id, adapter_version) VALUES (?, ?, ?, ?, ?)",
+                ("pdf", "work-1", "work.pdf", "test", 1),
+            )
+
+        index_names = tuple(
+            row[1] for row in connection.execute("PRAGMA index_list('style_jobs')")
+        )
+        assert "idx_style_jobs_status_id" in index_names
+        assert tuple(
+            row[2]
+            for row in connection.execute(
+                "PRAGMA index_info('idx_style_jobs_status_id')"
+            )
+        ) == ("status", "id")
+    finally:
+        connection.close()

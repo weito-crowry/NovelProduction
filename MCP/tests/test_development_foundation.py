@@ -21,6 +21,9 @@ def test_development_foundation_files_and_constraints_exist() -> None:
         "003_narrative.sql",
         "004_drafts.sql",
         "005_structured_drafts.sql",
+        "006_style_analysis_foundation.sql",
+        "007_style_analysis_semantics.sql",
+        "008_style_analysis_corpus_profile.sql",
     ]
     assert not (mcp_root / "migrations").exists()
 

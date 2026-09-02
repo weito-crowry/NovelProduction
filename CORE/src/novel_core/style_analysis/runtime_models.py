@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal, Protocol, TypeAlias
+
+from novel_core.style_analysis.fingerprints import JsonObject
+
+DependencyMode: TypeAlias = Literal[  # noqa: UP040
+    "complete", "subject_partial_allowed"
+]
+JobType: TypeAlias = Literal[  # noqa: UP040
+    "analyze_document",
+    "analyze_reference_work",
+    "recompute_aggregate",
+    "run_lint",
+]
+RunStatus: TypeAlias = Literal[  # noqa: UP040
+    "running", "succeeded", "partial", "failed", "cancelled"
+]
+JobStatus: TypeAlias = Literal[  # noqa: UP040
+    "queued", "running", "succeeded", "partial", "failed", "cancelled"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class DependencySpec:
+    analyzer_id: str
+    mode: DependencyMode
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyRunExpectation:
+    analyzer_id: str
+    run_id: int
+    config_json: str
+    state_fingerprint: str | None = None
+    policy_input_fingerprint: str | None = None
+    prompt_id: str | None = None
+    prompt_version: int | None = None
+
+
+class Analyzer(Protocol):
+    id: str
+    version: int
+    deterministic: bool | None
+    cacheable: bool
+    dependencies: tuple[DependencySpec, ...]
+    state_inputs: tuple[str, ...]
+    policy_inputs: tuple[str, ...]
+    input_scope: str | None
+
+    def run(self, context: object) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyzerDefinition:
+    id: str
+    version: int
+    deterministic: bool | None
+    cacheable: bool
+    dependencies: tuple[DependencySpec, ...]
+    state_inputs: tuple[str, ...]
+    policy_inputs: tuple[str, ...]
+    input_scope: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisRunRecord:
+    id: int
+    document_id: int
+    analyzer_id: str
+    analyzer_version: int
+    text_revision_id: int
+    structure_revision_id: int
+    status: RunStatus
+    fingerprint: str
+    config_json: str
+    analysis_policy_version: int | None
+    policy_input_fingerprint: str | None
+    state_fingerprint: str | None
+    registry_input_fingerprint: str | None
+    model_provider: str | None
+    model_id: str | None
+    prompt_id: str | None
+    prompt_version: int | None
+    started_at: str
+    finished_at: str | None
+    error_code: str | None
+    error_message: str | None
+    warning_json: str
+    created_at: str
+    dependency_runs: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class JobRecord:
+    id: int
+    job_type: JobType
+    payload_json: str
+    status: JobStatus
+    cancel_requested: int
+    progress_current: int | None
+    progress_total: int | None
+    result_json: str
+    warning_json: str
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    error_code: str | None
+    error_message: str | None
+    version: int
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisPolicy:
+    version: int = 1
+    entity_resolution_auto_merge: float = 0.90
+    term_resolution_auto_merge: float = 0.90
+    speaker_effective: float = 0.85
+    term_explanation_effective: float = 0.85
+    scene_label_effective: float = 0.80
+    block_semantic_effective: float = 0.75
+    pov_effective: float = 0.80
+    scene_boundary_auto_apply: float = 0.85
+    scene_boundary_candidate_min: float = 0.60
+
+    def input_values(self, keys: tuple[str, ...]) -> JsonObject:
+        values: JsonObject = {}
+        for key in sorted(keys):
+            value = getattr(self, key, None)
+            if key not in self.__dataclass_fields__ or not isinstance(
+                value, (int, float)
+            ):
+                raise ValueError(f"Unknown analysis policy input: {key}")
+            values[key] = value
+        return values

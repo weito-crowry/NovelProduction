@@ -10,6 +10,7 @@ import { TimelineRoute } from "./TimelineRoute";
 import { InformationPage } from "../features/information/InformationPage";
 import { CanonPage } from "../features/canon/CanonPage";
 import { ManuscriptPage } from "../features/manuscript/ManuscriptPage";
+import { StyleAnalysisPage } from "../features/styleAnalysis/StyleAnalysisPage";
 
 export const appRoutes: RouteObject[] = [
   { path: "/", element: createElement(ProjectPickerPage) },
@@ -45,5 +46,45 @@ export const appRoutes: RouteObject[] = [
   { path: "/projects/:projectId/canon/:decisionId", element: createElement(CanonPage) },
   { path: "/projects/:projectId/manuscript", element: createElement(ManuscriptPage) },
   { path: "/projects/:projectId/manuscript/:episodeId", element: createElement(ManuscriptPage) },
+  {
+    path: "/projects/:projectId/style-analysis",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/sources",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/reference-works/:workId",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/documents/:documentId",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/corpora",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/corpora/compare",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/profiles",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/profiles/:profileId",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/review",
+    element: createElement(StyleAnalysisPage),
+  },
+  {
+    path: "/projects/:projectId/style-analysis/lint",
+    element: createElement(StyleAnalysisPage),
+  },
   { path: "*", element: createElement(NotFound) },
 ];
