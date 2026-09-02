@@ -28,6 +28,17 @@ export interface ReferenceEpisode {
   analysis_status: AnalysisStatus;
 }
 
+export interface ProjectDraftCaptureResult {
+  document_id: number;
+  kind: "project_episode_draft";
+  current_text_revision_id: number | null;
+  current_structure_revision_id: number | null;
+  current_structure_kind: string | null;
+  captured_text_revision_id: number | null;
+  draft_id: number | null;
+  analysis_status: AnalysisStatus;
+}
+
 export interface AnalysisStatus {
   basic?: { state: string; reasons?: string[] };
   semantic?: { state: string; reasons?: string[] };
@@ -295,8 +306,8 @@ export function captureProjectEpisode(
   projectId: string,
   episodeId: number,
   draftId: number,
-): Promise<Record<string, unknown>> {
-  return apiRequest<Record<string, unknown>>(
+): Promise<ProjectDraftCaptureResult> {
+  return apiRequest<ProjectDraftCaptureResult>(
     stylePath(projectId, `/project-episodes/${episodeId}/capture`),
     { method: "POST", body: { draft_id: draftId }, projectId },
   );

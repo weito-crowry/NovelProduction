@@ -76,7 +76,7 @@ export function Sidebar({
         <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/information`} onClick={() => onClose(false)}>Information</NavLink>
         <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/manuscript`} onClick={() => onClose(false)}>Manuscript</NavLink>
         <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/canon`} onClick={() => onClose(false)}>Canon / History</NavLink>
-        <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/style-analysis`} onClick={() => onClose(false)}>Style analysis</NavLink>
+        <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to={`/projects/${encodeURIComponent(projectId)}/style-analysis`} onClick={() => onClose(false)}>文体分析</NavLink>
       </nav>
     </aside>
   );
