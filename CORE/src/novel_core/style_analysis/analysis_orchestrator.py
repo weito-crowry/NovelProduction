@@ -239,6 +239,8 @@ class DocumentAnalysisOrchestrator(
                 completed = CompletedModelCall(
                     call_key=call.call_key, response=response
                 )
+            except AnalysisCancelledError:
+                raise
             except Exception as exc:
                 completed = CompletedModelCall(
                     call_key=call.call_key,

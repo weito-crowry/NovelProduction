@@ -53,6 +53,39 @@ def test_http_server_owns_no_database_and_registers_65_tools() -> None:
         _run(server.aclose())
 
 
+def test_external_start_target_schema_describes_all_target_variants() -> None:
+    async def transport(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"project_id": "p", "data": {}})
+
+    server = create_server(
+        McpSettings("http://api.example"),
+        transport=httpx.MockTransport(transport),
+    )
+    try:
+        tools = {tool.name: tool for tool in _run(server.list_tools())}
+        schema = tools["style_analysis_external_start"].input_schema
+        target = schema["properties"]["target"]
+        variants = target.get("oneOf") or target.get("anyOf")
+        assert variants is not None
+        assert len(variants) == 3
+        required_by_kind: dict[str, set[str]] = {}
+        for variant in variants:
+            if "$ref" in variant:
+                ref_name = variant["$ref"].rsplit("/", 1)[-1]
+                variant = schema["$defs"][ref_name]
+            kind = variant["properties"]["kind"]["const"]
+            required_by_kind[kind] = set(variant["required"])
+            assert variant["additionalProperties"] is False
+        assert required_by_kind == {
+            "document": {"kind", "document_id", "text_revision_id"},
+            "reference_work": {"kind", "reference_work_id"},
+            "project_episode": {"kind", "episode_id", "draft_id"},
+        }
+        assert "target" in schema["properties"]
+    finally:
+        _run(server.aclose())
+
+
 def test_server_cli_accepts_api_url_and_rejects_database_arguments() -> None:
     args = parser().parse_args(["--api-url", "http://cli:8765"])
     assert args.api_url == "http://cli:8765"

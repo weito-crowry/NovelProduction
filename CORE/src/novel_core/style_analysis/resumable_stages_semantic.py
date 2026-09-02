@@ -209,8 +209,6 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
                         ),
                         "term_type_candidate": term_item.term_type_candidate,
                         "novelty_candidate": term_item.novelty_candidate,
-                        "start_in_block": term_item.start_in_block,
-                        "end_in_block": term_item.end_in_block,
                     },
                     confidence=term_item.confidence,
                     analysis_run_id=run_id,

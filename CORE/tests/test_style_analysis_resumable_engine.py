@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from test_style_analysis_migration import open_test_database
 
+from novel_core.errors import AnalysisCancelledError
 from novel_core.style_analysis.analysis_orchestrator import (
     DocumentAnalysisOrchestrator,
 )
@@ -261,6 +264,44 @@ def test_resumable_engine_preserves_scene_and_pov_multi_chunk_contract_after_res
         connection.close()
 
 
+def test_internal_resumable_driver_propagates_model_safe_point_cancellation(
+    tmp_path: Path,
+) -> None:
+    connection = open_test_database(tmp_path / "story.db")
+    cancel_requested = False
+
+    class _CancellingModel:
+        def complete_json(self, _request: ModelRequest) -> dict[str, object]:
+            nonlocal cancel_requested
+            cancel_requested = True
+            return {"mentions": []}
+
+    def cancellation_probe() -> bool:
+        nonlocal cancel_requested
+        if cancel_requested:
+            cancel_requested = False
+            return True
+        return False
+
+    try:
+        document_id, text_id = _document(connection)
+        orchestrator = DocumentAnalysisOrchestrator(
+            connection,
+            model_client=_CancellingModel(),
+            model_provider="test",
+            model_id="fake",
+            cancellation_probe=cancellation_probe,
+        )
+        with pytest.raises(AnalysisCancelledError):
+            orchestrator.analyze_document(
+                document_id=document_id,
+                text_revision_id=text_id,
+                preset="full",
+            )
+    finally:
+        connection.close()
+
+
 class _ParityModel:
     def __init__(self) -> None:
         self.calls: list[ModelRequest] = []
@@ -504,3 +545,27 @@ def test_internal_and_external_drivers_have_ten_analyzer_parity(
         "style.block_semantic",
     ]
     assert internal_rows == external_rows
+
+    term_candidate_values = [
+        json.loads(row[3])
+        for row in external_rows["annotations"]
+        if row[0] == "term_candidate"
+    ]
+    assert term_candidate_values
+    assert set(term_candidate_values[0]) == {
+        "surface",
+        "canonical_label_candidate",
+        "term_type_candidate",
+        "novelty_candidate",
+    }
+    term_resolution_payloads = [
+        payload
+        for prompt_id, _version, payload in external_calls
+        if prompt_id == "style.term_resolution"
+    ]
+    assert term_resolution_payloads
+    assert set(term_resolution_payloads[0]["candidate"]) == {
+        "surface",
+        "canonical_label_candidate",
+        "term_type_candidate",
+    }

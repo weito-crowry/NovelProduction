@@ -457,16 +457,9 @@ class ResumableStructureStagesMixin(ResumableStageHost):
                 None,
             )
         if stage == "term_resolver":
-            annotations = [
-                item
-                for item in self.semantic.repository.list_for_run(
-                    self._dependency_run_id(state, "term-candidate-extractor")
-                )
-                if item.annotation_type == "term_candidate"
-            ]
-            if subject_index >= len(annotations):
+            annotation = self._current_term_candidate_annotation(state)
+            if annotation is None:
                 return None
-            annotation = annotations[subject_index]
             value = self._annotation_value(annotation.value_json)
             term_exact = self.terms.exact_matches(
                 document_id=request.document_id, surface=str(value["surface"])
@@ -515,10 +508,15 @@ class ResumableStructureStagesMixin(ResumableStageHost):
                 type_key="term_type",
                 name_key="canonical_label",
             )
+            candidate = {
+                "surface": value["surface"],
+                "canonical_label_candidate": value["canonical_label_candidate"],
+                "term_type_candidate": value["term_type_candidate"],
+            }
             return (
                 f"term-resolver:candidate:{annotation.id}",
                 {
-                    "candidate": cast(JsonValue, value),
+                    "candidate": cast(JsonValue, candidate),
                     "previous_blocks": cast(JsonValue, previous),
                     "subject_block": cast(JsonValue, subject),
                     "next_blocks": cast(JsonValue, following),

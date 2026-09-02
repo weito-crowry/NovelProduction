@@ -25,6 +25,18 @@ def _int_value(value: object) -> int:
 
 
 class ResumableTermStagesMixin(ResumableStageHost):
+    def _current_term_candidate_annotation(self, state: dict[str, Any]) -> Any:
+        run_id = self._dependency_run_id(state, "term-candidate-extractor")
+        annotations = [
+            item
+            for item in self.semantic.repository.list_for_run(run_id)
+            if item.annotation_type == "term_candidate"
+        ]
+        subject_index = int(state.get("subject_index", 0))
+        if subject_index >= len(annotations):
+            return None
+        return annotations[subject_index]
+
     def _complete_deterministic_term(
         self, state: dict[str, Any], marker: dict[str, Any], run_id: int
     ) -> bool:
@@ -90,9 +102,13 @@ class ResumableTermStagesMixin(ResumableStageHost):
         self, state: dict[str, Any], response: JsonObject
     ) -> None:
         payload = cast(JsonObject, state.get("current_payload", {}))
-        value = cast(JsonObject, payload["candidate"])
+        candidate = cast(JsonObject, payload["candidate"])
+        annotation = self._current_term_candidate_annotation(state)
+        if annotation is None:
+            raise ValueError("TERM_CANDIDATE_NOT_FOUND")
+        value = self._annotation_value(annotation.value_json)
         decision = resolve_term_candidate(
-            candidate=value,
+            candidate=candidate,
             previous_blocks=cast(list[JsonObject], payload.get("previous_blocks", [])),
             subject_block=cast(JsonObject, payload.get("subject_block", {})),
             next_blocks=cast(list[JsonObject], payload.get("next_blocks", [])),
@@ -111,7 +127,7 @@ class ResumableTermStagesMixin(ResumableStageHost):
             term_id = term.id
             self.terms.insert_inferred_alias_if_missing(
                 term_id=term_id,
-                alias=str(value["surface"]),
+                alias=str(candidate["surface"]),
                 analysis_run_id=run_id,
             )
         else:
@@ -124,18 +140,15 @@ class ResumableTermStagesMixin(ResumableStageHost):
             )
             term_id = term.id
         block = cast(JsonObject, payload["subject_block"])
-        block_id = _int_value(block["block_id"])
-        start_cp = self._block_start(
-            self.structure.list_blocks(int(state["structure_revision_id"])), block_id
-        )
+        block_id = annotation.subject_id
         self.terms.repository.insert_mention(
             term_id=term_id,
             structure_revision_id=int(state["structure_revision_id"]),
             scene_id=_int_value(block["scene_id"]),
             block_id=block_id,
-            start_cp=start_cp + _int_value(value["start_in_block"]),
-            end_cp=start_cp + _int_value(value["end_in_block"]),
-            surface=str(value["surface"]),
+            start_cp=annotation.start_cp or 0,
+            end_cp=annotation.end_cp or 0,
+            surface=str(candidate["surface"]),
             analysis_run_id=run_id,
         )
         scene_id = _int_value(block["scene_id"])

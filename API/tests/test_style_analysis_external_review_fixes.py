@@ -298,27 +298,33 @@ def test_external_multichunk_scene_and_pov_resume_from_persisted_task_history(
     assert started.status_code == 201
     snapshot = started.json()["data"]
     calls: list[dict[str, object]] = []
+    repaired_scene_semantic_call_key: str | None = None
+    reduce_chunks: list[object] | None = None
     while snapshot["status"] == "active":
         task = snapshot["task"]
         assert task is not None
         calls.append(task)
         response = _response_for_contract(task["response_contract_id"])
         if task["analyzer_id"] == "scene-semantic-classifier":
-            response = (
-                {
+            if task["user_payload"].get("mode") == "reduce":
+                reduce_chunks = task["user_payload"]["chunks"]
+                response = {
                     "pace": {"label": "medium", "confidence": 0.8},
                     "information_load": {"label": "low", "confidence": 0.8},
                     "interaction": {"label": "solo", "confidence": 0.8},
                 }
-                if task["user_payload"].get("mode") == "reduce"
-                else {
+            elif task["attempt_no"] == 1 and repaired_scene_semantic_call_key is None:
+                response = {}
+            else:
+                if task["attempt_no"] == 2:
+                    repaired_scene_semantic_call_key = str(task["call_key"])
+                response = {
                     "function": [{"label": "daily", "confidence": 0.8}],
                     "tone": [{"label": "calm", "confidence": 0.8}],
                     "pace": {"label": "medium", "confidence": 0.8},
                     "information_load": {"label": "low", "confidence": 0.8},
                     "interaction": {"label": "solo", "confidence": 0.8},
                 }
-            )
         if task["analyzer_id"] == "pov-classifier":
             response = {
                 "pov_mode": "unclear",
@@ -348,15 +354,42 @@ def test_external_multichunk_scene_and_pov_resume_from_persisted_task_history(
     ]
     assert len(pov_calls[-1]["user_payload"]["chunks"]) == 2
     assert "scene_id" not in pov_calls[-1]["user_payload"]
-    semantic_calls = [
-        item for item in calls if item["analyzer_id"] == "scene-semantic-classifier"
-    ]
-    assert [item["user_payload"].get("mode") for item in semantic_calls] == [
-        "classify",
-        "classify",
-        "reduce",
-    ]
+    semantic_calls = []
+    for item in calls:
+        if item["analyzer_id"] != "scene-semantic-classifier":
+            continue
+        payload = item["user_payload"]
+        original_request = payload.get("original_request")
+        if isinstance(original_request, dict):
+            payload = original_request
+        if item["attempt_no"] != 2 and payload.get("mode") in {
+            "classify",
+            "reduce",
+        }:
+            semantic_calls.append(item)
+    semantic_modes = []
+    for item in semantic_calls:
+        payload = item["user_payload"]
+        original_request = payload.get("original_request")
+        if isinstance(original_request, dict):
+            payload = original_request
+        semantic_modes.append(payload.get("mode"))
+    assert semantic_modes == ["classify", "classify", "reduce"]
+    assert repaired_scene_semantic_call_key is not None
+    assert reduce_chunks is not None
+    assert len(reduce_chunks) == 2
+    assert all(isinstance(chunk, dict) for chunk in reduce_chunks)
     assert snapshot["status"] == "succeeded"
+
+    result_entry = snapshot["result"]["episodes"][0]
+    assert result_entry["document_id"] == document_id
+    assert result_entry["text_revision_id"] == text_revision_id
+    assert result_entry["structure_revision_id"] == structure_id
+    metrics = client.get(
+        f"{base}/documents/{document_id}/metrics",
+        params={"structure_revision_id": structure_id},
+    )
+    assert metrics.status_code == 200
 
     connection = sqlite3.connect(data_root / "external" / "story.db")
     try:

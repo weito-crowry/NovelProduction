@@ -236,6 +236,9 @@ class ResumableStageHost:
     def _finish_term_resolution(self, state: dict[str, Any], run_id: int) -> None:
         raise NotImplementedError
 
+    def _current_term_candidate_annotation(self, state: dict[str, Any]) -> Any:
+        raise NotImplementedError
+
     def _previous_context(
         self, blocks: list[JsonObject], scene_id: int
     ) -> list[JsonObject]:

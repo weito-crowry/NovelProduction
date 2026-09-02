@@ -328,9 +328,7 @@ class ExternalAnalysisOperationsMixin(ExternalAnalysisServiceHost):
                 ):
                     continue
                 request = _object(task.request_json)
-                payload = request.get("user_payload")
-                if not isinstance(payload, dict):
-                    continue
+                payload = _effective_task_payload(request)
                 if stage in {
                     "scene_boundary",
                     "entity_mentions",
@@ -471,6 +469,8 @@ class ExternalAnalysisOperationsMixin(ExternalAnalysisServiceHost):
                 {
                     "document_index": index - 1,
                     "document_id": document_id,
+                    "text_revision_id": result.text_revision_id,
+                    "structure_revision_id": result.structure_revision_id,
                     "status": result.status,
                     "warnings": list(result.warnings),
                     "analysis_run_ids": list(result.run_ids),
@@ -553,6 +553,11 @@ def _prepared(task: ExternalAnalysisTaskRecord) -> PreparedModelCall:
         user_payload=cast(JsonObject, request.get("user_payload", {})),
         response_schema=cast(JsonObject, request.get("response_schema", {})),
     )
+
+
+def _effective_task_payload(request: JsonObject) -> JsonObject:
+    payload = cast(JsonObject, request.get("user_payload", {}))
+    return cast(JsonObject, payload.get("original_request", payload))
 
 
 def _policy(value: object) -> AnalysisPolicy:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from novel_mcp.api_client import ApiClient
 from novel_mcp.tool_errors import validation_failure
@@ -25,6 +25,38 @@ CatalogView = Literal[
     "external_sessions",
 ]
 ResultView = Literal["semantics", "metrics", "scene_metrics"]
+
+
+class StyleAnalysisDocumentTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["document"]
+    document_id: Annotated[int, Field(ge=1)]
+    text_revision_id: Annotated[int, Field(ge=1)]
+    structure_revision_id: Annotated[int | None, Field(ge=1)] = None
+
+
+class StyleAnalysisReferenceWorkTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["reference_work"]
+    reference_work_id: Annotated[int, Field(ge=1)]
+
+
+class StyleAnalysisProjectEpisodeTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["project_episode"]
+    episode_id: Annotated[int, Field(ge=1)]
+    draft_id: Annotated[int, Field(ge=1)]
+
+
+StyleAnalysisTarget = Annotated[
+    StyleAnalysisDocumentTarget
+    | StyleAnalysisReferenceWorkTarget
+    | StyleAnalysisProjectEpisodeTarget,
+    Field(discriminator="kind"),
+]
 
 
 def register_style_analysis_tools(client: ApiClient, register: Registrar) -> None:
@@ -85,7 +117,7 @@ def register_style_analysis_tools(client: ApiClient, register: Registrar) -> Non
 
     async def style_analysis_external_start(
         project_id: ProjectId,
-        target: dict[str, Any],
+        target: StyleAnalysisTarget,
         executor_model_id: Annotated[str, Field(min_length=1)],
         rebuild_structure: bool = False,
     ) -> dict[str, Any]:
@@ -95,7 +127,9 @@ def register_style_analysis_tools(client: ApiClient, register: Registrar) -> Non
             _path(project_id, "external-sessions"),
             project_id=project_id,
             body={
-                "target": target,
+                "target": target.model_dump()
+                if isinstance(target, BaseModel)
+                else target,
                 "executor_model_id": executor_model_id,
                 "rebuild_structure": rebuild_structure,
             },
