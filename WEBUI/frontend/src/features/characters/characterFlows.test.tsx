@@ -183,6 +183,7 @@ describe("D3 character flows", () => {
     const original = character(1);
     const created = character(9);
     const updated = { ...original, display_name: "Changed", version: 2 };
+    let serverCharacter = original;
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -197,10 +198,11 @@ describe("D3 character flows", () => {
             expected_version: 1,
             display_name: "Changed",
           });
-          return response({ project_id: "A", data: updated });
+          serverCharacter = updated;
+          return response({ project_id: "A", data: serverCharacter });
         }
         if (url.endsWith("/characters/1"))
-          return response({ project_id: "A", data: original });
+          return response({ project_id: "A", data: serverCharacter });
         return response(
           { error: { code: "NOT_FOUND", message: "Not found" } },
           404,
@@ -228,13 +230,22 @@ describe("D3 character flows", () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe("/projects/A/characters/9"),
     );
+    expect(
+      await screen.findByRole("heading", { name: "A character 9" }),
+    ).toBeInTheDocument();
 
     await router.navigate("/projects/A/characters/1");
-    const name = await screen.findByLabelText("Display name");
+    await screen.findByDisplayValue("A character 1");
+    const name = screen.getByDisplayValue("A character 1");
     await user.clear(name);
     await user.type(name, "Changed");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(await screen.findByText("Saved", {}, { timeout: 5000 })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Changed" })).toBeInTheDocument();
+      expect(screen.getByText("Version 2")).toBeInTheDocument();
+      expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+      expect(screen.getByText("Saved")).toBeInTheDocument();
+    });
   }, 15000);
 
   it("reads states and knowledge from the selected episode without a knowledge write", async () => {
