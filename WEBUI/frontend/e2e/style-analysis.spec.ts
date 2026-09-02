@@ -6,7 +6,7 @@ test("runs the style analysis flow against the real API and worker", async ({ pa
   const chapter = await createChapter(request, projectId, "capture chapter");
   const episode = await createEpisode(request, projectId, chapter.id, "capture episode");
   await saveStructuredDraft(request, projectId, episode.id, {
-    html: '<p data-np-type="narration">Captured style-analysis fixture.</p>',
+    html: '<p data-np-type="narration">短い文体分析用の本文です。</p>',
     source_agent: "style-analysis-e2e",
     change_summary: "Project draft capture fixture",
   });
@@ -17,7 +17,7 @@ test("runs the style analysis flow against the real API and worker", async ({ pa
   await page.getByLabel("Local file").setInputFiles({
     name: "fixture.txt",
     mimeType: "text/plain",
-    buffer: Buffer.from("The first sentence. The second sentence."),
+    buffer: Buffer.from("短い一文です。もう一文です。"),
   });
   await page.getByRole("button", { name: "Import" }).click();
   await expect(page.getByText(/新しいSourceを登録しました/)).toBeVisible();

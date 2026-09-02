@@ -55,6 +55,18 @@ export interface StyleJob {
   error_message: string | null;
 }
 
+export interface StyleCorrectionResponse {
+  id: number;
+  correction_class: string;
+  job_id: number | null;
+}
+
+export interface StyleCharacterLink {
+  document_id: number;
+  style_entity_id: number;
+  project_character_id: number;
+}
+
 export interface Corpus {
   id: number;
   name: string;
@@ -206,6 +218,7 @@ export interface SemanticsView {
   effective: Record<string, unknown>;
   outputs: StyleSemanticOutput[];
   raw?: StyleSemanticOutput[];
+  inference_targets?: StyleSemanticOutput[];
 }
 
 export interface StyleDocumentSummary {
@@ -707,8 +720,8 @@ export function ignoreReviewItem(
 export function createOverride(
   projectId: string,
   input: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  return apiRequest<Record<string, unknown>>(stylePath(projectId, "/overrides"), {
+): Promise<StyleCorrectionResponse> {
+  return apiRequest<StyleCorrectionResponse>(stylePath(projectId, "/overrides"), {
     method: "POST",
     body: input,
     projectId,
@@ -781,11 +794,32 @@ export function linkStyleCharacter(
   );
 }
 
+export function fetchStyleCharacterLinks(
+  projectId: string,
+  documentId: number,
+): Promise<StyleCharacterLink[]> {
+  return apiRequest<StyleCharacterLink[]>(
+    stylePath(projectId, `/documents/${documentId}/character-links`),
+    { projectId },
+  );
+}
+
+export function unlinkStyleCharacter(
+  projectId: string,
+  documentId: number,
+  projectCharacterId: number,
+): Promise<void> {
+  return apiRequest<void>(
+    stylePath(projectId, `/documents/${documentId}/character-links/${projectCharacterId}`),
+    { method: "DELETE", projectId },
+  );
+}
+
 export function createInferenceReview(
   projectId: string,
   input: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  return apiRequest<Record<string, unknown>>(
+): Promise<StyleCorrectionResponse> {
+  return apiRequest<StyleCorrectionResponse>(
     stylePath(projectId, "/inference-reviews"),
     { method: "POST", body: input, projectId },
   );

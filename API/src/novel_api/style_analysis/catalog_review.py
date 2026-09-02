@@ -47,6 +47,22 @@ class StyleAnalysisReviewMixin:
     _terms: TermService
     _reviews: ReviewService
 
+    def list_character_links(self, document_id: int) -> tuple[dict[str, int], ...]:
+        rows = self._connection.execute(
+            "SELECT document_id, style_entity_id, project_character_id "
+            "FROM style_entity_character_links WHERE document_id = ? "
+            "ORDER BY project_character_id",
+            (document_id,),
+        ).fetchall()
+        return tuple(
+            {
+                "document_id": int(row[0]),
+                "style_entity_id": int(row[1]),
+                "project_character_id": int(row[2]),
+            }
+            for row in rows
+        )
+
     def create_entity(
         self,
         *,

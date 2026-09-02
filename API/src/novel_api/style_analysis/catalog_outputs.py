@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from novel_core.style_analysis.semantic_models import AnnotationRecord
@@ -9,6 +10,61 @@ from novel_core.style_analysis.semantic_models import AnnotationRecord
 class StyleAnalysisOutputsMixin:
     _annotations: Any
     _connection: Any
+
+    def inference_targets_for_runs(
+        self, run_ids: Sequence[int]
+    ) -> list[dict[str, object]]:
+        if not run_ids:
+            return []
+        placeholders = ",".join("?" for _ in run_ids)
+        targets: list[dict[str, object]] = []
+        entity_rows = self._connection.execute(
+            "SELECT id, alias, analysis_run_id, created_at "
+            "FROM style_entity_aliases "
+            "WHERE origin = 'inferred' AND analysis_run_id IN ("
+            f"{placeholders}) ORDER BY id",
+            tuple(run_ids),
+        ).fetchall()
+        for alias_id, alias, analysis_run_id, created_at in entity_rows:
+            targets.append(
+                {
+                    "id": alias_id,
+                    "annotation_type": "entity_alias",
+                    "subject_type": "entity_alias",
+                    "subject_id": alias_id,
+                    "field_path": "entity_alias.acceptance",
+                    "value": {"alias": alias},
+                    "confidence": None,
+                    "analysis_run_id": analysis_run_id,
+                    "start_cp": None,
+                    "end_cp": None,
+                    "created_at": created_at,
+                }
+            )
+        term_rows = self._connection.execute(
+            "SELECT id, alias, analysis_run_id, created_at "
+            "FROM style_term_aliases "
+            "WHERE origin = 'inferred' AND analysis_run_id IN ("
+            f"{placeholders}) ORDER BY id",
+            tuple(run_ids),
+        ).fetchall()
+        for alias_id, alias, analysis_run_id, created_at in term_rows:
+            targets.append(
+                {
+                    "id": alias_id,
+                    "annotation_type": "term_alias",
+                    "subject_type": "term_alias",
+                    "subject_id": alias_id,
+                    "field_path": "term_alias.acceptance",
+                    "value": {"alias": alias},
+                    "confidence": None,
+                    "analysis_run_id": analysis_run_id,
+                    "start_cp": None,
+                    "end_cp": None,
+                    "created_at": created_at,
+                }
+            )
+        return targets
 
     def list_annotations(self, document_id: int) -> tuple[dict[str, object], ...]:
         rows = self._connection.execute(

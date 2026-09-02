@@ -69,6 +69,8 @@ def test_manual_split_merge_creates_append_only_revisions_and_reuses_fingerprint
             expected_structure_revision_id=automatic.id,
         )
         assert split.source_kind == "manual"
+        assert split.segmenter_id == "canonical-fiction-structure"
+        assert split.segmenter_version == 1
         assert split.parent_structure_revision_id == automatic.id
         assert len(service.list_scenes(split.id)) == 2
         assert connection.execute(
@@ -93,6 +95,8 @@ def test_manual_split_merge_creates_append_only_revisions_and_reuses_fingerprint
             expected_structure_revision_id=split.id,
         )
         assert merged.source_kind == "manual"
+        assert merged.segmenter_id == "canonical-fiction-structure"
+        assert merged.segmenter_version == 1
         assert merged.parent_structure_revision_id == split.id
         assert len(service.list_scenes(merged.id)) == 1
     finally:

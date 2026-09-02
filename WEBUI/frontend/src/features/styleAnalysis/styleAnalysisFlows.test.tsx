@@ -85,6 +85,8 @@ describe("style analysis WebUI flows", () => {
         return new Response(envelope({ document_id: 21, kind: "project_episode_draft", current_text_revision_id: 8, current_structure_revision_id: 9, current_structure_kind: "manual", captured_text_revision_id: 8, draft_id: 15, analysis_status: { basic: { state: "not_analyzed" }, semantic: { state: "not_analyzed" } } }), { status: 200 });
       }
       if (url.endsWith("/profiles")) return new Response(envelope([]), { status: 200 });
+      if (url.endsWith("/documents/21/revisions")) return new Response(envelope([{ id: 7, document_id: 21, revision_no: 1 }, { id: 8, document_id: 21, revision_no: 2 }]), { status: 200 });
+      if (url.endsWith("/documents/21/structures")) return new Response(envelope([{ id: 6, document_id: 21, text_revision_id: 7, revision_no: 1, source_kind: "automatic" }, { id: 9, document_id: 21, text_revision_id: 8, revision_no: 2, source_kind: "manual" }]), { status: 200 });
       if (url.includes("/lint-runs?document_id=21")) return new Response(envelope([{ id: 99, document_id: 21, text_revision_id: 7, structure_revision_id: 6, profile_id: 3, profile_version_id: 4, scene_id: null, status: "succeeded", warnings: [], enabled_rule_count: 1, applicable_rule_count: 1, missing_rule_count: 0, coverage_ratio: 1, stale: false, created_at: "now", finished_at: "now" }]), { status: 200 });
       if (url.endsWith("/lint-runs")) return new Response(envelope([]), { status: 200 });
       return new Response(envelope([]), { status: 200 });
@@ -101,6 +103,8 @@ describe("style analysis WebUI flows", () => {
     expect(screen.getByRole("link", { name: /Document #21/ })).toHaveAttribute("href", "/projects/demo/style-analysis/documents/21");
     expect(await screen.findByLabelText("Text revision")).toHaveValue("8");
     expect(screen.getByLabelText("Text revision")).toHaveTextContent("7");
+    expect(screen.getByLabelText("Structure revision")).toHaveTextContent("9");
+    await user.selectOptions(screen.getByLabelText("Text revision"), "7");
     expect(screen.getByLabelText("Structure revision")).toHaveTextContent("6");
   });
 
@@ -259,8 +263,8 @@ describe("style analysis WebUI flows", () => {
       if (url.endsWith("/documents")) return new Response(envelope([{ document_id: 10, kind: "project_episode_draft", current_text_revision_id: 5, current_structure_revision_id: 6, current_structure_kind: "automatic", analysis_status: { basic: { state: "succeeded" }, semantic: { state: "succeeded" } } }]), { status: 200 });
       if (url.endsWith("/documents/10/revisions")) return new Response(envelope([{ id: 5, document_id: 10, revision_no: 1 }]), { status: 200 });
       if (url.endsWith("/documents/10/structures")) return new Response(envelope([{ id: 6, document_id: 10, text_revision_id: 5, revision_no: 1, source_kind: "automatic" }]), { status: 200 });
-      if (url.includes("/documents/10/semantics?structure_revision_id=6")) return new Response(envelope({ structure_revision_id: 6, analysis_status: {}, effective: {}, outputs: [] }), { status: 200 });
-      if (["/entities", "/terms", "/overrides"].some((suffix) => url.endsWith(suffix)) || url.includes("/aliases") || url.includes("/character-links/")) {
+      if (url.includes("/documents/10/semantics?structure_revision_id=6")) return new Response(envelope({ structure_revision_id: 6, analysis_status: {}, effective: {}, outputs: [], inference_targets: [{ id: 77, annotation_type: "entity_alias", subject_type: "entity_alias", subject_id: 77, value: { alias: "A" }, confidence: null, analysis_run_id: 50, start_cp: null, end_cp: null, created_at: "now" }] }), { status: 200 });
+      if (["/entities", "/terms", "/overrides", "/inference-reviews"].some((suffix) => url.endsWith(suffix)) || url.includes("/aliases") || url.includes("/character-links/")) {
         requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
         return new Response(envelope({ id: 101 }), { status: 201 });
       }
@@ -285,10 +289,14 @@ describe("style analysis WebUI flows", () => {
     await user.type(screen.getByLabelText("Project character ID"), "303");
     await user.type(screen.getByLabelText("Linked Entity ID"), "101");
     await user.click(screen.getByRole("button", { name: "Link Character" }));
+    await user.click(await screen.findByRole("button", { name: "Unlink Character" }));
     await user.type(screen.getByLabelText("Override subject ID"), "404");
     await user.clear(screen.getByLabelText("Override value JSON"));
     await user.type(screen.getByLabelText("Override value JSON"), "5");
     await user.click(screen.getByRole("button", { name: "Save Semantic Override" }));
+    await user.selectOptions(screen.getByLabelText("Operation"), "clear");
+    await user.click(screen.getByRole("button", { name: "Save Semantic Override" }));
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() => expect(requests).toEqual([
       { url: expect.stringContaining("/entities"), body: { document_id: 10, entity_type: "person", canonical_name: "Alice" } },
@@ -296,7 +304,10 @@ describe("style analysis WebUI flows", () => {
       { url: expect.stringContaining("/terms"), body: { document_id: 10, canonical_label: "Skyline", term_type: "world_term" } },
       { url: expect.stringContaining("/terms/202/aliases"), body: { alias: "SL" } },
       { url: expect.stringContaining("/character-links/303"), body: { style_entity_id: 101 } },
+      { url: expect.stringContaining("/character-links/303"), body: null },
       { url: expect.stringContaining("/overrides"), body: { subject_type: "block", subject_id: 404, field_path: "block.speaker_entity_id", operation: "set", value: 5, document_id: 10, structure_revision_id: 6, note: "SA-H WebUI" } },
+      { url: expect.stringContaining("/overrides"), body: { subject_type: "block", subject_id: 404, field_path: "block.speaker_entity_id", operation: "clear", value: null, document_id: 10, structure_revision_id: 6, note: "SA-H WebUI" } },
+      { url: expect.stringContaining("/inference-reviews"), body: { analysis_run_id: 50, subject_type: "entity_alias", subject_id: 77, field_path: "entity_alias.acceptance", review_status: "confirmed", note: "SA-H WebUI" } },
     ]));
   });
 });

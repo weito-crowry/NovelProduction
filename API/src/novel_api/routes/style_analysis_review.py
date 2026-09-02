@@ -129,6 +129,16 @@ def link_style_character(
     return envelope(project_id, link)
 
 
+@router.get("/documents/{document_id}/character-links")
+def list_style_character_links(
+    request: Request, project_id: str, document_id: int
+) -> ProjectEnvelope[list[dict[str, int]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        links = services.style_analysis.list_character_links(document_id)
+    return envelope(project_id, list(links))
+
+
 @router.delete(
     "/documents/{document_id}/character-links/{project_character_id}", status_code=204
 )

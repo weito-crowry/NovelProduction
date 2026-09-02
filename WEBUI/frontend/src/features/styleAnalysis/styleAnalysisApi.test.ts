@@ -9,12 +9,14 @@ import {
   fetchReferenceEpisodes,
   fetchStyleDocument,
   fetchStyleDocuments,
+  fetchStyleCharacterLinks,
   fetchStyleMetrics,
   fetchStyleStructure,
   fetchStyleStructures,
   fetchStyleText,
   fetchStyleTextRevisions,
   linkStyleCharacter,
+  unlinkStyleCharacter,
   mergeStyleScenes,
   selectStyleStructure,
   splitStyleScene,
@@ -179,6 +181,8 @@ describe("style analysis API adapter", () => {
     });
     await createStyleTermAlias("novel", 10, "略称");
     await linkStyleCharacter("novel", 9, 11, 8);
+    await fetchStyleCharacterLinks("novel", 9);
+    await unlinkStyleCharacter("novel", 9, 11);
 
     expect(requestMock.mock.calls.map(([path]) => path)).toEqual([
       "/api/v1/projects/novel/style-analysis/entities",
@@ -186,6 +190,9 @@ describe("style analysis API adapter", () => {
       "/api/v1/projects/novel/style-analysis/terms",
       "/api/v1/projects/novel/style-analysis/terms/10/aliases",
       "/api/v1/projects/novel/style-analysis/documents/9/character-links/11",
+      "/api/v1/projects/novel/style-analysis/documents/9/character-links",
+      "/api/v1/projects/novel/style-analysis/documents/9/character-links/11",
     ]);
+    expect(requestMock.mock.calls[6][1]).toMatchObject({ method: "DELETE", projectId: "novel" });
   });
 });

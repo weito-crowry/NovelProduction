@@ -43,6 +43,7 @@ import {
   fetchReferenceWorks,
   fetchReviewItems,
   fetchSemantics,
+  fetchStyleCharacterLinks,
   fetchStyleDocuments,
   fetchStyleMetrics,
   fetchStyleStructure,
@@ -59,6 +60,7 @@ import {
   runLint,
   selectStyleStructure,
   splitStyleScene,
+  unlinkStyleCharacter,
 } from "./styleAnalysisApi";
 import type {
   Aggregate,
@@ -139,6 +141,8 @@ const INFERENCE_FIELDS: Record<string, { subjectType: string; fieldPath: string 
   "scene.information_load": { subjectType: "scene", fieldPath: "scene.information_load" },
   "scene.interaction": { subjectType: "scene", fieldPath: "scene.interaction" },
   "scene.pov": { subjectType: "scene", fieldPath: "scene.pov" },
+  entity_alias: { subjectType: "entity_alias", fieldPath: "entity_alias.acceptance" },
+  term_alias: { subjectType: "term_alias", fieldPath: "term_alias.acceptance" },
 };
 
 const DEFAULT_AGGREGATE_METRICS = [
@@ -449,11 +453,13 @@ function SemanticCorrectionEditor({
   documentId,
   entry,
   structureRevisionId,
+  onCorrectionJob,
 }: {
   projectId: string;
   documentId: number;
   entry: StyleDocumentEntry;
   structureRevisionId: number | null;
+  onCorrectionJob: (jobId: number) => void;
 }) {
   const client = useQueryClient();
   const [entityType, setEntityType] = useState<(typeof STYLE_ENTITY_TYPES)[number]>("person");
@@ -467,13 +473,22 @@ function SemanticCorrectionEditor({
   const [termAlias, setTermAlias] = useState("");
   const [projectCharacterId, setProjectCharacterId] = useState("");
   const [linkedEntityId, setLinkedEntityId] = useState("");
+  const [linkedCharacterId, setLinkedCharacterId] = useState<number | null>(null);
   const [overrideFieldPath, setOverrideFieldPath] = useState("block.speaker_entity_id");
+  const [overrideOperation, setOverrideOperation] = useState<"set" | "clear" | "revert">("set");
   const [overrideSubjectId, setOverrideSubjectId] = useState("");
   const [overrideValue, setOverrideValue] = useState("5");
   const [overrideNote, setOverrideNote] = useState("");
   const scope = entry.referenceWorkId !== null
     ? { reference_work_id: entry.referenceWorkId }
     : { document_id: documentId };
+  const characterLinks = useQuery({
+    queryKey: projectQueryKeys.styleAnalysis(projectId, `character-links-${documentId}`),
+    queryFn: () => fetchStyleCharacterLinks(projectId, documentId),
+    enabled: entry.kind === "project_draft",
+    retry: false,
+  });
+  const activeLinkedCharacterId = linkedCharacterId ?? characterLinks.data?.[0]?.project_character_id ?? null;
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `semantics-${documentId}-${structureRevisionId ?? 0}`) });
@@ -516,7 +531,20 @@ function SemanticCorrectionEditor({
       if (characterId === null || styleEntityId === null) throw new Error("Project character IDとLinked Entity IDを入力してください。");
       return linkStyleCharacter(projectId, documentId, characterId, styleEntityId);
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setLinkedCharacterId(positiveId(projectCharacterId));
+      invalidate();
+    },
+  });
+  const characterUnlinkMutation = useMutation({
+    mutationFn: () => {
+      if (activeLinkedCharacterId === null) throw new Error("Linked characterがありません。");
+      return unlinkStyleCharacter(projectId, documentId, activeLinkedCharacterId);
+    },
+    onSuccess: () => {
+      setLinkedCharacterId(null);
+      invalidate();
+    },
   });
   const overrideMutation = useMutation({
     mutationFn: () => {
@@ -532,13 +560,16 @@ function SemanticCorrectionEditor({
         subject_type: field.subjectType,
         subject_id: subjectId,
         field_path: field.fieldPath,
-        operation: "set",
-        value: parseJsonValue(overrideValue),
+         operation: overrideOperation,
+         value: overrideOperation === "set" ? parseJsonValue(overrideValue) : null,
         ...(field.structureBound ? { structure_revision_id: structureRevisionId } : {}),
         ...(overrideNote.trim() ? { note: overrideNote.trim() } : { note: "SA-H WebUI" }),
       });
     },
-    onSuccess: invalidate,
+    onSuccess: (result) => {
+      invalidate();
+      if (typeof result.job_id === "number" && result.job_id > 0) onCorrectionJob(result.job_id);
+    },
   });
   const selectedOverrideField = STYLE_OVERRIDE_FIELDS.find((field) => field.fieldPath === overrideFieldPath) ?? STYLE_OVERRIDE_FIELDS[0];
   return <div className="style-analysis-grid">
@@ -586,20 +617,23 @@ function SemanticCorrectionEditor({
       <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); characterLinkMutation.mutate(); }}>
         <div className="field-group"><FieldLabel htmlFor="style-project-character-id">Project character ID</FieldLabel><TextInput id="style-project-character-id" inputMode="numeric" value={projectCharacterId} onChange={(event) => setProjectCharacterId(event.target.value)} required /></div>
         <div className="field-group"><FieldLabel htmlFor="style-linked-entity-id">Linked Entity ID</FieldLabel><TextInput id="style-linked-entity-id" inputMode="numeric" value={linkedEntityId} onChange={(event) => setLinkedEntityId(event.target.value)} required /></div>
-        <Button type="submit" disabled={characterLinkMutation.isPending || !positiveId(projectCharacterId) || !positiveId(linkedEntityId)}>Link Character</Button>
-      </form>
-      {characterLinkMutation.error ? <p role="alert">Character Linkエラー: {displayError(characterLinkMutation.error)}</p> : null}
+         <Button type="submit" disabled={characterLinkMutation.isPending || !positiveId(projectCharacterId) || !positiveId(linkedEntityId)}>Link Character</Button>
+       </form>
+       {activeLinkedCharacterId !== null ? <p className="helper-text">Linked project character #{activeLinkedCharacterId} <Button variant="ghost" onClick={() => characterUnlinkMutation.mutate()} disabled={characterUnlinkMutation.isPending}>Unlink Character</Button></p> : <p className="helper-text">Character Linkはありません。</p>}
+       {characterLinkMutation.error ? <p role="alert">Character Linkエラー: {displayError(characterLinkMutation.error)}</p> : null}
+       {characterUnlinkMutation.error ? <p role="alert">Character Unlinkエラー: {displayError(characterUnlinkMutation.error)}</p> : null}
     </Card> : null}
     <Card>
       <h3>Semantic Override</h3>
       <p className="helper-text">設計10のOverride Registryだけを対象にします。Structure subjectは選択中のStructure revisionへ固定します。</p>
       <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); overrideMutation.mutate(); }}>
         <div className="field-group"><FieldLabel htmlFor="style-override-field">Override field</FieldLabel><select id="style-override-field" className="field-control" value={overrideFieldPath} onChange={(event) => setOverrideFieldPath(event.target.value)}>{STYLE_OVERRIDE_FIELDS.map((field) => <option key={field.fieldPath} value={field.fieldPath}>{field.label} · {field.fieldPath}</option>)}</select></div>
-        <p className="helper-text">Subject type: {selectedOverrideField.subjectType}{selectedOverrideField.structureBound ? ` · structure #${structureRevisionId ?? "未選択"}` : ""}</p>
-        <div className="field-group"><FieldLabel htmlFor="style-override-subject-id">Override subject ID</FieldLabel><TextInput id="style-override-subject-id" inputMode="numeric" value={overrideSubjectId} onChange={(event) => setOverrideSubjectId(event.target.value)} required /></div>
-        <div className="field-group"><FieldLabel htmlFor="style-override-value">Override value JSON</FieldLabel><TextArea id="style-override-value" value={overrideValue} onChange={(event) => setOverrideValue(event.target.value)} required /></div>
-        <div className="field-group"><FieldLabel htmlFor="style-override-note">Override note</FieldLabel><TextInput id="style-override-note" value={overrideNote} onChange={(event) => setOverrideNote(event.target.value)} /></div>
-        <Button type="submit" disabled={overrideMutation.isPending || !positiveId(overrideSubjectId) || !overrideValue.trim()}>Save Semantic Override</Button>
+       <p className="helper-text">Subject type: {selectedOverrideField.subjectType}{selectedOverrideField.structureBound ? ` · structure #${structureRevisionId ?? "未選択"}` : ""}</p>
+       <div className="field-group"><FieldLabel htmlFor="style-override-subject-id">Override subject ID</FieldLabel><TextInput id="style-override-subject-id" inputMode="numeric" value={overrideSubjectId} onChange={(event) => setOverrideSubjectId(event.target.value)} required /></div>
+       <div className="field-group"><FieldLabel htmlFor="style-override-operation">Operation</FieldLabel><select id="style-override-operation" className="field-control" value={overrideOperation} onChange={(event) => setOverrideOperation(event.target.value as typeof overrideOperation)}><option value="set">set</option><option value="clear">clear</option><option value="revert">revert</option></select></div>
+       <div className="field-group"><FieldLabel htmlFor="style-override-value">Override value JSON</FieldLabel><TextArea id="style-override-value" value={overrideValue} onChange={(event) => setOverrideValue(event.target.value)} required={overrideOperation === "set"} disabled={overrideOperation !== "set"} /></div>
+       <div className="field-group"><FieldLabel htmlFor="style-override-note">Override note</FieldLabel><TextInput id="style-override-note" value={overrideNote} onChange={(event) => setOverrideNote(event.target.value)} /></div>
+       <Button type="submit" disabled={overrideMutation.isPending || !positiveId(overrideSubjectId) || (overrideOperation === "set" && !overrideValue.trim())}>Save Semantic Override</Button>
       </form>
       {overrideMutation.error ? <p role="alert">Semantic Overrideエラー: {displayError(overrideMutation.error)}</p> : null}
     </Card>
@@ -609,6 +643,7 @@ function SemanticCorrectionEditor({
 function DocumentPage({ projectId, documentId }: { projectId: string; documentId: number | null }) {
   const client = useQueryClient();
   const [jobId, setJobId] = useState<number | null>(null);
+  const [correctionJobId, setCorrectionJobId] = useState<number | null>(null);
   const [preset, setPreset] = useState<"deterministic" | "full">("deterministic");
   const [selectedTextRevisionId, setSelectedTextRevisionId] = useState("");
   const [selectedStructureRevisionId, setSelectedStructureRevisionId] = useState("");
@@ -623,15 +658,20 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
   const textRevisions = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${documentId ?? 0}`), queryFn: () => fetchStyleTextRevisions(projectId, documentId as number), enabled: documentId !== null, retry: false });
   const structures = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`), queryFn: () => fetchStyleStructures(projectId, documentId as number), enabled: documentId !== null, retry: false });
   const runs = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`), queryFn: () => fetchAnalysisRuns(projectId, documentId as number), enabled: documentId !== null, retry: false });
+  const selectedTextId = positiveId(selectedTextRevisionId);
   const textRevisionIds = useMemo(() => (textRevisions.data ?? []).map((revision) => revision.id), [textRevisions.data]);
-  const structureRevisionIds = useMemo(() => (structures.data ?? []).map((revision) => revision.id), [structures.data]);
+  const structureRevisionIds = useMemo(() => (structures.data ?? [])
+    .filter((revision) => selectedTextId === null || revision.text_revision_id === selectedTextId)
+    .map((revision) => revision.id), [selectedTextId, structures.data]);
+  const currentStructureForText = useMemo(() => structures.data?.find(
+    (revision) => revision.id === episode?.currentStructureRevisionId && revision.text_revision_id === selectedTextId,
+  )?.id, [episode?.currentStructureRevisionId, selectedTextId, structures.data]);
   useEffect(() => {
     if (!textRevisionIds.length) setSelectedTextRevisionId("");
     else if (!textRevisionIds.includes(Number(selectedTextRevisionId))) setSelectedTextRevisionId(String(episode?.currentTextRevisionId ?? textRevisionIds[textRevisionIds.length - 1]));
     if (!structureRevisionIds.length) setSelectedStructureRevisionId("");
-    else if (!structureRevisionIds.includes(Number(selectedStructureRevisionId))) setSelectedStructureRevisionId(String(episode?.currentStructureRevisionId ?? structureRevisionIds[structureRevisionIds.length - 1]));
-  }, [episode?.currentStructureRevisionId, episode?.currentTextRevisionId, selectedStructureRevisionId, selectedTextRevisionId, structureRevisionIds, textRevisionIds]);
-  const selectedTextId = positiveId(selectedTextRevisionId);
+    else if (!structureRevisionIds.includes(Number(selectedStructureRevisionId))) setSelectedStructureRevisionId(String(currentStructureForText ?? structureRevisionIds[structureRevisionIds.length - 1]));
+  }, [currentStructureForText, episode?.currentStructureRevisionId, episode?.currentTextRevisionId, selectedStructureRevisionId, selectedTextRevisionId, structureRevisionIds, textRevisionIds]);
   const selectedStructureId = positiveId(selectedStructureRevisionId);
   const currentStructureSelected = selectedStructureId !== null && selectedStructureId === episode?.currentStructureRevisionId;
   const textRevision = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-text-${documentId ?? 0}-${selectedTextId ?? 0}`), queryFn: () => fetchStyleText(projectId, documentId as number, selectedTextId as number), enabled: documentId !== null && selectedTextId !== null, retry: false });
@@ -641,6 +681,10 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
   const analyzeMutation = useMutation({ mutationFn: () => {
     const textRevisionId = positiveId(selectedTextRevisionId);
     if (textRevisionId === null) throw new Error("Text revisionを選択してください。");
+    if (!rebuildStructure && selectedStructureId !== null) {
+      const selectedStructure = structures.data?.find((revision) => revision.id === selectedStructureId);
+      if (selectedStructure?.text_revision_id !== textRevisionId) throw new Error("Text revisionとStructure revisionの組み合わせが不正です。");
+    }
     return analyzeDocument(projectId, documentId as number, { text_revision_id: textRevisionId, ...(rebuildStructure ? {} : selectedStructureId === null ? {} : { structure_revision_id: selectedStructureId }), preset, ...(rebuildStructure ? { rebuild_structure: true } : {}) });
   }, onSuccess: (job) => setJobId(job.job_id), });
   const selectCurrentMutation = useMutation({
@@ -708,18 +752,26 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
   }, [client, documentId, episode, projectId, selectedStructureId, selectedTextId]);
-  const rawOutputs = semantics.data?.raw ?? semantics.data?.outputs ?? [];
+  const rawOutputs = [...(semantics.data?.raw ?? semantics.data?.outputs ?? []), ...(semantics.data?.inference_targets ?? [])];
   const targets = inferenceTargets(rawOutputs);
   const speakerTarget = targets.find((target) => target.fieldPath === "block.speaker");
   const speakerEntityId = isRecord(speakerTarget?.value) && typeof speakerTarget.value.speaker_entity_id === "number" && Number.isInteger(speakerTarget.value.speaker_entity_id)
     ? speakerTarget.value.speaker_entity_id
     : null;
+  const invalidateCorrectionData = useCallback((job?: StyleJob) => {
+    if (job && !isTerminalStyleJob(job.status)) return;
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `semantics-${documentId ?? 0}-${selectedStructureId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-metrics-${documentId ?? 0}-${selectedStructureId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleLintRuns(projectId, documentId ?? undefined) });
+  }, [client, documentId, projectId, selectedStructureId]);
   const overrideMutation = useMutation({ mutationFn: () => {
     if (!speakerTarget || speakerEntityId === null) throw new Error("有効なspeaker推論がありません。");
     if (selectedStructureId === null) throw new Error("Structure revisionを選択してください。");
     return createOverride(projectId, { document_id: documentId, subject_type: "block", subject_id: speakerTarget.subject_id, field_path: "block.speaker_entity_id", operation: "set", value: speakerEntityId, base_analysis_run_id: speakerTarget.analysis_run_id, structure_revision_id: selectedStructureId, note: "SA-H WebUI" });
-  }, onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) }); } });
-  const inferenceMutation = useMutation({ mutationFn: (input: { target: InferenceTarget; reviewStatus: "confirmed" | "rejected" }) => createInferenceReview(projectId, { analysis_run_id: input.target.analysis_run_id, subject_type: input.target.subject_type, subject_id: input.target.subject_id, field_path: input.target.fieldPath, review_status: input.reviewStatus, note: "SA-H WebUI" }), onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) }); } });
+  }, onSuccess: (result) => { if (typeof result.job_id === "number" && result.job_id > 0) setCorrectionJobId(result.job_id); else invalidateCorrectionData(); } });
+  const inferenceMutation = useMutation({ mutationFn: (input: { target: InferenceTarget; reviewStatus: "confirmed" | "rejected" }) => createInferenceReview(projectId, { analysis_run_id: input.target.analysis_run_id, subject_type: input.target.subject_type, subject_id: input.target.subject_id, field_path: input.target.fieldPath, review_status: input.reviewStatus, note: "SA-H WebUI" }), onSuccess: (result) => { if (typeof result.job_id === "number" && result.job_id > 0) setCorrectionJobId(result.job_id); else invalidateCorrectionData(); } });
   if (documentId === null) return <p role="alert">Document IDが不正です。</p>;
   return (
     <>
@@ -762,10 +814,10 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
             </fieldset>
             <p className="helper-text">Rebuild structureを選ぶと、選択したStructure revisionを送信せずBackendの再構築境界を使います。</p>
           </Card> : null}
-          {activeTab === "semantics" ? <Card><h2>Semantics</h2><QueryState loading={semantics.isPending} error={semantics.error}>{semantics.data ? <><p>Semantic状態はBasicとは別に表示しています。</p><pre className="json-block">{formatJson({ effective: semantics.data.effective, raw: rawOutputs, analysis_run_ids: semantics.data.analysis_run_ids })}</pre>{targets.length ? <div className="record-list">{targets.map((target) => <div className="record-list-item" key={`${target.analysis_run_id}-${target.subject_type}-${target.subject_id}-${target.fieldPath}`}><span><strong>{target.fieldPath}</strong><small>{target.subject_type} #{target.subject_id} · run #{target.analysis_run_id}</small></span><span className="form-actions"><Button variant="secondary" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "confirmed" })} disabled={inferenceMutation.isPending}>Confirm</Button><Button variant="ghost" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "rejected" })} disabled={inferenceMutation.isPending}>Reject</Button></span></div>)}</div> : <p>Registryに一致するRaw Inferenceはありません。</p>}{inferenceMutation.error ? <p role="alert">Inference Reviewエラー: {displayError(inferenceMutation.error)}</p> : null}<SemanticCorrectionEditor projectId={projectId} documentId={documentId} entry={episode} structureRevisionId={selectedStructureId} /></> : <p>Structure revisionがないためSemantic表示はありません。</p>}</QueryState></Card> : null}
+          {activeTab === "semantics" ? <Card><h2>Semantics</h2><QueryState loading={semantics.isPending} error={semantics.error}>{semantics.data ? <><p>Semantic状態はBasicとは別に表示しています。</p><pre className="json-block">{formatJson({ effective: semantics.data.effective, raw: rawOutputs, analysis_run_ids: semantics.data.analysis_run_ids })}</pre>{targets.length ? <div className="record-list">{targets.map((target) => <div className="record-list-item" key={`${target.analysis_run_id}-${target.subject_type}-${target.subject_id}-${target.fieldPath}`}><span><strong>{target.fieldPath}</strong><small>{target.subject_type} #{target.subject_id} · run #{target.analysis_run_id}</small></span><span className="form-actions"><Button variant="secondary" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "confirmed" })} disabled={inferenceMutation.isPending}>Confirm</Button><Button variant="ghost" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "rejected" })} disabled={inferenceMutation.isPending}>Reject</Button></span></div>)}</div> : <p>Registryに一致するRaw Inferenceはありません。</p>}{inferenceMutation.error ? <p role="alert">Inference Reviewエラー: {displayError(inferenceMutation.error)}</p> : null}<SemanticCorrectionEditor projectId={projectId} documentId={documentId} entry={episode} structureRevisionId={selectedStructureId} onCorrectionJob={setCorrectionJobId} /></> : <p>Structure revisionがないためSemantic表示はありません。</p>}</QueryState></Card> : null}
           {activeTab === "metrics" ? <Card><h2>Metrics</h2><QueryState loading={metrics.isPending} error={metrics.error}>{metrics.data ? <><p>Selected metric runs: {metrics.data.analysis_run_ids.join(", ") || "なし"}</p><div className="record-list">{metrics.data.measurements.map((measurement, index) => <div className="record-list-item" key={`${String(measurement.id ?? index)}`}><span><strong>{String(measurement.metric_name)} v{String(measurement.metric_version)}</strong><small>{String(measurement.target_type)} #{String(measurement.target_id)} · sample {String(measurement.sample_count)}</small></span><strong>{String(measurement.value ?? "-")}</strong></div>)}</div><details><summary>Metric Registry</summary><pre className="json-block">{formatJson(metrics.data.available_metrics)}</pre></details></> : <p>Structure revisionを選択してください。</p>}</QueryState></Card> : null}
           <Card><h2>Analysis runs</h2><QueryState loading={runs.isPending} error={runs.error}>{runs.data?.length ? <div className="record-list">{runs.data.map((run) => <div className="record-list-item" key={run.id}><span>#{run.id} {run.analyzer_id} v{run.analyzer_version}</span><StatusBadge value={run.status} /></div>)}</div> : <p>まだAnalysis runがありません。</p>}</QueryState></Card>
-          <Card><h2>Corrections</h2><p className="helper-text">OverrideとInference Reviewは別操作です。Authoring Character / World / Canonへの自動書き込みは行いません。</p>{speakerTarget && speakerEntityId !== null ? <div className="form-actions"><Button variant="secondary" onClick={() => overrideMutation.mutate()} disabled={overrideMutation.isPending}>Override speaker</Button></div> : <p>実行済みRaw speaker推論がないため、対象を推測してOverrideは作成しません。</p>}{overrideMutation.error ? <p role="alert">Overrideエラー: {displayError(overrideMutation.error)}</p> : null}</Card>
+          <Card><h2>Corrections</h2><p className="helper-text">OverrideとInference Reviewは別操作です。Authoring Character / World / Canonへの自動書き込みは行いません。</p>{speakerTarget && speakerEntityId !== null ? <div className="form-actions"><Button variant="secondary" onClick={() => overrideMutation.mutate()} disabled={overrideMutation.isPending}>Override speaker</Button></div> : <p>実行済みRaw speaker推論がないため、対象を推測してOverrideは作成しません。</p>}{overrideMutation.error ? <p role="alert">Overrideエラー: {displayError(overrideMutation.error)}</p> : null}<JobProgress projectId={projectId} jobId={correctionJobId} onTerminal={invalidateCorrectionData} /></Card>
         </> : <p>Document #{documentId}に対応するReference Episodeがありません。</p>}
       </QueryState>
     </>
@@ -906,14 +958,27 @@ function LintPage({ projectId }: { projectId: string }) {
   const selectedProfile = profiles.data?.find((item) => String(item.id) === profileId);
   const profileDetail = useQuery({ queryKey: projectQueryKeys.styleProfile(projectId, positiveId(profileId) ?? 0), queryFn: () => fetchProfile(projectId, positiveId(profileId) as number), enabled: positiveId(profileId) !== null, retry: false });
   const runs = useQuery({ queryKey: projectQueryKeys.styleLintRuns(projectId, positiveId(documentId) ?? undefined), queryFn: () => fetchLintRuns(projectId, positiveId(documentId) ?? undefined), enabled: Boolean(documentId), retry: false });
-  const textRevisionIds = useMemo(() => [...new Set([selectedEpisode?.currentTextRevisionId, ...(runs.data ?? []).map((run) => run.text_revision_id)].filter((value): value is number => typeof value === "number" && value > 0))].sort((left, right) => left - right), [runs.data, selectedEpisode?.currentTextRevisionId]);
-  const structureRevisionIds = useMemo(() => [...new Set([selectedEpisode?.currentStructureRevisionId, ...(runs.data ?? []).map((run) => run.structure_revision_id)].filter((value): value is number => typeof value === "number" && value > 0))].sort((left, right) => left - right), [runs.data, selectedEpisode?.currentStructureRevisionId]);
+  const selectedDocumentId = positiveId(documentId);
+  const textRevisions = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `lint-document-revisions-${selectedDocumentId ?? 0}`), queryFn: () => fetchStyleTextRevisions(projectId, selectedDocumentId as number), enabled: selectedDocumentId !== null, retry: false });
+  const structures = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `lint-document-structures-${selectedDocumentId ?? 0}`), queryFn: () => fetchStyleStructures(projectId, selectedDocumentId as number), enabled: selectedDocumentId !== null, retry: false });
+  const selectedTextRevisionNumber = positiveId(selectedTextRevisionId);
+  const textRevisionIds = useMemo(() => (textRevisions.data ?? []).map((revision) => revision.id), [textRevisions.data]);
+  const structureRevisionIds = useMemo(() => (structures.data ?? [])
+    .filter((revision) => selectedTextRevisionNumber === null || revision.text_revision_id === selectedTextRevisionNumber)
+    .map((revision) => revision.id), [selectedTextRevisionNumber, structures.data]);
+  const selectedStructure = structures.data?.find((revision) => revision.id === positiveId(selectedStructureRevisionId));
+  const defaultStructureRevisionId = structureRevisionIds.includes(selectedEpisode?.currentStructureRevisionId ?? 0)
+    ? selectedEpisode?.currentStructureRevisionId
+    : structureRevisionIds[structureRevisionIds.length - 1];
+  const defaultTextRevisionId = textRevisionIds.includes(selectedEpisode?.currentTextRevisionId ?? 0)
+    ? selectedEpisode?.currentTextRevisionId
+    : textRevisionIds[textRevisionIds.length - 1];
   useEffect(() => {
     if (!textRevisionIds.length) setSelectedTextRevisionId("");
-    else if (!textRevisionIds.includes(Number(selectedTextRevisionId))) setSelectedTextRevisionId(String(selectedEpisode?.currentTextRevisionId ?? textRevisionIds[textRevisionIds.length - 1]));
+    else if (!textRevisionIds.includes(Number(selectedTextRevisionId))) setSelectedTextRevisionId(String(defaultTextRevisionId));
     if (!structureRevisionIds.length) setSelectedStructureRevisionId("");
-    else if (!structureRevisionIds.includes(Number(selectedStructureRevisionId))) setSelectedStructureRevisionId(String(selectedEpisode?.currentStructureRevisionId ?? structureRevisionIds[structureRevisionIds.length - 1]));
-  }, [selectedEpisode?.currentStructureRevisionId, selectedEpisode?.currentTextRevisionId, selectedStructureRevisionId, selectedTextRevisionId, structureRevisionIds, textRevisionIds]);
+    else if (!structureRevisionIds.includes(Number(selectedStructureRevisionId))) setSelectedStructureRevisionId(String(defaultStructureRevisionId));
+  }, [defaultStructureRevisionId, defaultTextRevisionId, selectedEpisode?.currentStructureRevisionId, selectedEpisode?.currentTextRevisionId, selectedStructureRevisionId, selectedTextRevisionId, structureRevisionIds, textRevisionIds]);
   const jobQuery = useStyleJobPolling(projectId, jobId);
   const resultLintId = jobQuery.data?.result.lint_run_id;
   const activeLintId = lintRunId ?? (typeof resultLintId === "number" ? resultLintId : null);
@@ -936,10 +1001,12 @@ function LintPage({ projectId }: { projectId: string }) {
       };
       setCapturedDocuments(rememberCapturedStyleDocument(projectId, captured));
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, "documents") });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${result.document_id}`) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${result.document_id}`) });
       setDocumentId(String(result.document_id));
     },
   });
-  const lintMutation = useMutation({ mutationFn: () => { const textRevisionId = positiveId(selectedTextRevisionId); const structureRevisionId = positiveId(selectedStructureRevisionId); if (textRevisionId === null || structureRevisionId === null) throw new Error("Text revisionとStructure revisionを選択してください。"); return runLint(projectId, Number(documentId), { text_revision_id: textRevisionId, structure_revision_id: structureRevisionId, profile_id: Number(profileId), profile_version_no: Number(profileVersionNo), ...(scope === "scene" && positiveId(sceneId) ? { scene_id: Number(sceneId) } : {}) }); }, onSuccess: (job: StyleJob) => { setJobId(job.job_id); setLintRunId(null); } });
+  const lintMutation = useMutation({ mutationFn: () => { const textRevisionId = positiveId(selectedTextRevisionId); const structureRevisionId = positiveId(selectedStructureRevisionId); if (textRevisionId === null || structureRevisionId === null) throw new Error("Text revisionとStructure revisionを選択してください。"); if (selectedStructure?.text_revision_id !== textRevisionId) throw new Error("Text revisionとStructure revisionの組み合わせが不正です。"); return runLint(projectId, Number(documentId), { text_revision_id: textRevisionId, structure_revision_id: structureRevisionId, profile_id: Number(profileId), profile_version_no: Number(profileVersionNo), ...(scope === "scene" && positiveId(sceneId) ? { scene_id: Number(sceneId) } : {}) }); }, onSuccess: (job: StyleJob) => { setJobId(job.job_id); setLintRunId(null); } });
   const reviewMutation = useMutation({ mutationFn: ({ finding, status }: { finding: LintFinding; status: "acknowledged" | "ignored" }) => reviewFinding(projectId, finding.id, status, status === "acknowledged" ? "確認済み" : "対象外"), onSuccess: () => void client.invalidateQueries({ queryKey: projectQueryKeys.styleLintFindings(projectId, activeLintId ?? 0) }) });
   const selectedRun = runs.data?.find((run) => run.id === activeLintId) ?? (activeLintId === null ? null : null);
   useEffect(() => {

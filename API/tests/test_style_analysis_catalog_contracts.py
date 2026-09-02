@@ -224,6 +224,68 @@ def test_semantics_returns_entity_mentions_even_without_resolution(
         connection.close()
 
 
+def test_semantics_exposes_inferred_alias_review_targets(data_root: Path) -> None:
+    connection, document_id, _, structure = _create_reference_analysis(data_root)
+    try:
+        work_id = connection.execute(
+            "SELECT reference_work_id FROM style_reference_episodes "
+            "WHERE id = (SELECT reference_episode_id FROM "
+            "style_documents WHERE id = ?)",
+            (document_id,),
+        ).fetchone()[0]
+        entity_run_id = connection.execute(
+            "SELECT id FROM style_analysis_runs WHERE document_id = ? "
+            "AND analyzer_id = 'entity-mention-extractor' ORDER BY id DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()[0]
+        term_run_id = connection.execute(
+            "SELECT id FROM style_analysis_runs WHERE document_id = ? "
+            "AND analyzer_id = 'term-resolver' ORDER BY id DESC LIMIT 1",
+            (document_id,),
+        ).fetchone()[0]
+        entity_cursor = connection.execute(
+            "INSERT INTO style_entities "
+            "(reference_work_id, entity_type, canonical_name, origin) "
+            "VALUES (?, 'person', '人物', 'inferred')",
+            (work_id,),
+        )
+        term_cursor = connection.execute(
+            "INSERT INTO style_terms "
+            "(reference_work_id, canonical_label, term_type, origin) "
+            "VALUES (?, '用語', 'other', 'inferred')",
+            (work_id,),
+        )
+        assert entity_cursor.lastrowid is not None
+        assert term_cursor.lastrowid is not None
+        connection.execute(
+            "INSERT INTO style_entity_aliases "
+            "(entity_id, alias, alias_kind, origin, analysis_run_id) "
+            "VALUES (?, '人物A', 'name', 'inferred', ?)",
+            (entity_cursor.lastrowid, entity_run_id),
+        )
+        connection.execute(
+            "INSERT INTO style_term_aliases "
+            "(term_id, alias, origin, analysis_run_id) "
+            "VALUES (?, '用語A', 'inferred', ?)",
+            (term_cursor.lastrowid, term_run_id),
+        )
+        connection.commit()
+
+        semantics = StyleAnalysisCatalogService(connection).get_semantics(
+            document_id, structure.structure_revision_id
+        )
+
+        targets = semantics["inference_targets"]
+        assert {
+            (target["subject_type"], target["field_path"]) for target in targets
+        } == {
+            ("entity_alias", "entity_alias.acceptance"),
+            ("term_alias", "term_alias.acceptance"),
+        }
+    finally:
+        connection.close()
+
+
 def test_effective_semantics_does_not_adopt_turn_taking_only_speaker() -> None:
     connection = sqlite3.connect(":memory:")
     try:
