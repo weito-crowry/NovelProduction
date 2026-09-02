@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAggregateGroups,
   buildManualRule,
+  metricNamesForScope,
   mergeStyleDocumentEntries,
   type ManualRuleEditorState,
 } from "./styleAnalysisUi";
@@ -90,5 +91,34 @@ describe("style analysis UI helpers", () => {
 
     expect(entries.map((entry) => entry.documentId)).toEqual([10, 21]);
     expect(entries[1]).toMatchObject({ kind: "project_draft", episodeId: 2 });
+  });
+
+  it("merges server-listed project documents without session storage", () => {
+    const entries = mergeStyleDocumentEntries(
+      [],
+      [],
+      [{
+        document_id: 21,
+        kind: "project_episode_draft",
+        current_text_revision_id: 8,
+        current_structure_revision_id: 9,
+        current_structure_kind: "automatic",
+        analysis_status: { basic: { state: "current" } },
+      }],
+    );
+
+    expect(entries).toEqual([expect.objectContaining({
+      documentId: 21,
+      episodeId: null,
+      kind: "project_draft",
+      currentTextRevisionId: 8,
+    })]);
+  });
+
+  it("exposes the registry metrics only for compatible rule scopes", () => {
+    const characterMetrics = metricNamesForScope("character");
+    expect(characterMetrics).toContain("speaker.utterance_count");
+    expect(characterMetrics).not.toContain("sentence.len.p50");
+    expect(metricNamesForScope("scene")).toContain("semantic.exposition.char_ratio");
   });
 });

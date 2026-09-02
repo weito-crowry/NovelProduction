@@ -2,7 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiRequest } from "../../api/client";
 import {
   analyzeReferenceWork,
+  createStyleEntity,
+  createStyleEntityAlias,
+  createStyleTerm,
+  createStyleTermAlias,
   fetchReferenceEpisodes,
+  fetchStyleDocument,
+  fetchStyleDocuments,
+  fetchStyleMetrics,
+  fetchStyleStructure,
+  fetchStyleStructures,
+  fetchStyleText,
+  fetchStyleTextRevisions,
+  linkStyleCharacter,
+  selectStyleStructure,
   fetchStyleJob,
   importStyleFile,
   reviewFinding,
@@ -83,6 +96,59 @@ describe("style analysis API adapter", () => {
         body: { status: "acknowledged", note: "確認済み" },
         projectId: "novel",
       },
+    ]);
+  });
+
+  it("uses canonical document, revision, structure, and metric endpoints", async () => {
+    await fetchStyleDocuments("novel");
+    await fetchStyleDocument("novel", 7);
+    await fetchStyleTextRevisions("novel", 7);
+    await fetchStyleText("novel", 7, 8);
+    await fetchStyleStructures("novel", 7);
+    await fetchStyleStructure("novel", 7, 9);
+    await fetchStyleMetrics("novel", 7, 9);
+
+    expect(requestMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/projects/novel/style-analysis/documents",
+      "/api/v1/projects/novel/style-analysis/documents/7",
+      "/api/v1/projects/novel/style-analysis/documents/7/revisions",
+      "/api/v1/projects/novel/style-analysis/documents/7/text?text_revision_id=8",
+      "/api/v1/projects/novel/style-analysis/documents/7/structures",
+      "/api/v1/projects/novel/style-analysis/documents/7/structure?structure_revision_id=9",
+      "/api/v1/projects/novel/style-analysis/documents/7/metrics?structure_revision_id=9",
+    ]);
+  });
+
+  it("selects a current structure through the explicit pointer endpoint", async () => {
+    await selectStyleStructure("novel", 7, 9);
+
+    expect(requestMock.mock.calls[0]).toEqual([
+      "/api/v1/projects/novel/style-analysis/documents/7/structures/9/select-current",
+      { method: "POST", projectId: "novel" },
+    ]);
+  });
+
+  it("keeps semantic identity and character-link writes on their scoped endpoints", async () => {
+    await createStyleEntity("novel", {
+      reference_work_id: 7,
+      entity_type: "person",
+      canonical_name: "人物",
+    });
+    await createStyleEntityAlias("novel", 8, { alias: "別名", alias_kind: "name" });
+    await createStyleTerm("novel", {
+      document_id: 9,
+      canonical_label: "用語",
+      term_type: "other",
+    });
+    await createStyleTermAlias("novel", 10, "略称");
+    await linkStyleCharacter("novel", 9, 11, 8);
+
+    expect(requestMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/v1/projects/novel/style-analysis/entities",
+      "/api/v1/projects/novel/style-analysis/entities/8/aliases",
+      "/api/v1/projects/novel/style-analysis/terms",
+      "/api/v1/projects/novel/style-analysis/terms/10/aliases",
+      "/api/v1/projects/novel/style-analysis/documents/9/character-links/11",
     ]);
   });
 });

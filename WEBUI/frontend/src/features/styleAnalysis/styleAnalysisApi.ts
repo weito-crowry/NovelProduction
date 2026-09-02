@@ -208,6 +208,74 @@ export interface SemanticsView {
   raw?: StyleSemanticOutput[];
 }
 
+export interface StyleDocumentSummary {
+  document_id: number;
+  kind: "reference_episode" | "project_episode_draft";
+  current_text_revision_id: number | null;
+  current_structure_revision_id: number | null;
+  current_structure_kind: string | null;
+  analysis_status: AnalysisStatus;
+}
+
+export interface TextRevisionSummary {
+  id: number;
+  document_id: number;
+  revision_no: number;
+  source_snapshot_id: number | null;
+  project_draft_id: number | null;
+  raw_sha256: string;
+  canonical_sha256: string;
+  normalization_input_fingerprint: string;
+  normalizer_id: string;
+  normalizer_version: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface StyleTextRevision extends TextRevisionSummary {
+  raw_text: string;
+  canonical_text: string;
+}
+
+export interface StructureRevisionSummary {
+  id: number;
+  document_id: number;
+  text_revision_id: number;
+  revision_no: number;
+  segmenter_id: string;
+  segmenter_version: number;
+  source_kind: string;
+  parent_structure_revision_id: number | null;
+  fingerprint: string;
+  scene_count: number;
+  block_count: number;
+  created_at: string;
+}
+
+export interface StyleStructureView extends StructureRevisionSummary {
+  scenes: Array<Record<string, unknown>>;
+  blocks: Array<Record<string, unknown>>;
+  sentences: Array<Record<string, unknown>>;
+}
+
+export interface MetricDefinition {
+  name: string;
+  version: number;
+  unit: string;
+  value_type: "int" | "float";
+  scope_types: string[];
+  group: "basic" | "semantic";
+  description: string;
+}
+
+export interface MetricsView {
+  document_id: number;
+  structure_revision_id: number;
+  analysis_run_ids: number[];
+  available_metrics: MetricDefinition[];
+  measurements: Array<Record<string, unknown>>;
+}
+
 function stylePath(projectId: string, suffix = ""): string {
   return `${apiBase}/projects/${encodeURIComponent(projectId)}/style-analysis${suffix}`;
 }
@@ -244,6 +312,86 @@ export function fetchReferenceEpisode(
 ): Promise<ReferenceEpisode> {
   return apiRequest<ReferenceEpisode>(
     stylePath(projectId, `/reference-episodes/${episodeId}`),
+    { projectId },
+  );
+}
+
+export function fetchStyleDocuments(projectId: string): Promise<StyleDocumentSummary[]> {
+  return apiRequest<StyleDocumentSummary[]>(stylePath(projectId, "/documents"), {
+    projectId,
+  });
+}
+
+export function fetchStyleDocument(
+  projectId: string,
+  documentId: number,
+): Promise<StyleDocumentSummary> {
+  return apiRequest<StyleDocumentSummary>(
+    stylePath(projectId, `/documents/${documentId}`),
+    { projectId },
+  );
+}
+
+export function fetchStyleTextRevisions(
+  projectId: string,
+  documentId: number,
+): Promise<TextRevisionSummary[]> {
+  return apiRequest<TextRevisionSummary[]>(
+    stylePath(projectId, `/documents/${documentId}/revisions`),
+    { projectId },
+  );
+}
+
+export function fetchStyleText(
+  projectId: string,
+  documentId: number,
+  textRevisionId: number,
+): Promise<StyleTextRevision> {
+  return apiRequest<StyleTextRevision>(
+    stylePath(projectId, `/documents/${documentId}/text?text_revision_id=${textRevisionId}`),
+    { projectId },
+  );
+}
+
+export function fetchStyleStructures(
+  projectId: string,
+  documentId: number,
+): Promise<StructureRevisionSummary[]> {
+  return apiRequest<StructureRevisionSummary[]>(
+    stylePath(projectId, `/documents/${documentId}/structures`),
+    { projectId },
+  );
+}
+
+export function fetchStyleStructure(
+  projectId: string,
+  documentId: number,
+  structureRevisionId: number,
+): Promise<StyleStructureView> {
+  return apiRequest<StyleStructureView>(
+    stylePath(projectId, `/documents/${documentId}/structure?structure_revision_id=${structureRevisionId}`),
+    { projectId },
+  );
+}
+
+export function selectStyleStructure(
+  projectId: string,
+  documentId: number,
+  structureRevisionId: number,
+): Promise<StyleDocumentSummary> {
+  return apiRequest<StyleDocumentSummary>(
+    stylePath(projectId, `/documents/${documentId}/structures/${structureRevisionId}/select-current`),
+    { method: "POST", projectId },
+  );
+}
+
+export function fetchStyleMetrics(
+  projectId: string,
+  documentId: number,
+  structureRevisionId: number,
+): Promise<MetricsView> {
+  return apiRequest<MetricsView>(
+    stylePath(projectId, `/documents/${documentId}/metrics?structure_revision_id=${structureRevisionId}`),
     { projectId },
   );
 }
@@ -538,6 +686,72 @@ export function createOverride(
     body: input,
     projectId,
   });
+}
+
+export function createStyleEntity(
+  projectId: string,
+  input: {
+    reference_work_id?: number;
+    document_id?: number;
+    entity_type: string;
+    canonical_name: string;
+  },
+): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>(stylePath(projectId, "/entities"), {
+    method: "POST",
+    body: input,
+    projectId,
+  });
+}
+
+export function createStyleEntityAlias(
+  projectId: string,
+  entityId: number,
+  input: { alias: string; alias_kind: string },
+): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>(
+    stylePath(projectId, `/entities/${entityId}/aliases`),
+    { method: "POST", body: input, projectId },
+  );
+}
+
+export function createStyleTerm(
+  projectId: string,
+  input: {
+    reference_work_id?: number;
+    document_id?: number;
+    canonical_label: string;
+    term_type: string;
+  },
+): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>(stylePath(projectId, "/terms"), {
+    method: "POST",
+    body: input,
+    projectId,
+  });
+}
+
+export function createStyleTermAlias(
+  projectId: string,
+  termId: number,
+  alias: string,
+): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>(
+    stylePath(projectId, `/terms/${termId}/aliases`),
+    { method: "POST", body: { alias }, projectId },
+  );
+}
+
+export function linkStyleCharacter(
+  projectId: string,
+  documentId: number,
+  projectCharacterId: number,
+  styleEntityId: number,
+): Promise<Record<string, unknown>> {
+  return apiRequest<Record<string, unknown>>(
+    stylePath(projectId, `/documents/${documentId}/character-links/${projectCharacterId}`),
+    { method: "PUT", body: { style_entity_id: styleEntityId }, projectId },
+  );
 }
 
 export function createInferenceReview(

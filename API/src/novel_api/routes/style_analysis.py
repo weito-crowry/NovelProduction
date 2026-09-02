@@ -120,6 +120,103 @@ def list_reference_works(
     return envelope(project_id, [_work_response(record) for record in records])
 
 
+@router.get("/documents")
+def list_style_documents(
+    request: Request, project_id: str
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        documents = services.style_analysis.list_documents()
+    return envelope(project_id, list(documents))
+
+
+@router.get("/documents/{document_id}")
+def get_style_document(
+    request: Request, project_id: str, document_id: int
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        document = services.style_analysis.get_document(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    return envelope(project_id, document)
+
+
+@router.get("/documents/{document_id}/revisions")
+def list_style_text_revisions(
+    request: Request, project_id: str, document_id: int
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        revisions = services.style_analysis.list_text_revisions(document_id)
+    return envelope(project_id, list(revisions))
+
+
+@router.get("/documents/{document_id}/text")
+def get_style_text(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    text_revision_id: int = Query(..., gt=0),
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        text = services.style_analysis.get_text(document_id, text_revision_id)
+    return envelope(project_id, text)
+
+
+@router.get("/documents/{document_id}/structures")
+def list_style_structures(
+    request: Request, project_id: str, document_id: int
+) -> ProjectEnvelope[list[dict[str, object]]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        structures = services.style_analysis.list_structure_revisions(document_id)
+    return envelope(project_id, list(structures))
+
+
+@router.get("/documents/{document_id}/structure")
+def get_style_structure(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    structure_revision_id: int = Query(..., gt=0),
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        structure = services.style_analysis.get_structure(
+            document_id, structure_revision_id
+        )
+    return envelope(project_id, structure)
+
+
+@router.post(
+    "/documents/{document_id}/structures/{structure_revision_id}/select-current"
+)
+def select_current_style_structure(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    structure_revision_id: int,
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_services(target) as services:
+        if services.style_analysis.get_document(document_id) is None:
+            raise HTTPException(status_code=404, detail="NOT_FOUND")
+        document = services.style_analysis.select_current_structure(
+            document_id, structure_revision_id
+        )
+    return envelope(project_id, document)
+
+
 @router.get(
     "/reference-works/{work_id}",
     response_model=ProjectEnvelope[ReferenceWorkResponse],
@@ -466,6 +563,37 @@ def get_document_semantics(
             document_id, structure_revision_id
         )
     return envelope(project_id, semantics)
+
+
+@router.get("/documents/{document_id}/metrics")
+def get_document_metrics(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    structure_revision_id: int = Query(..., gt=0),
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        metrics = services.style_analysis.list_metrics(
+            document_id, structure_revision_id
+        )
+    return envelope(project_id, metrics)
+
+
+@router.get("/documents/{document_id}/scenes/{scene_id}/metrics")
+def get_scene_metrics(
+    request: Request,
+    project_id: str,
+    document_id: int,
+    scene_id: int,
+    structure_revision_id: int = Query(..., gt=0),
+) -> ProjectEnvelope[dict[str, object]]:
+    target = resolve_project_target(request, project_id)
+    with open_project_read_services(target) as services:
+        metrics = services.style_analysis.list_metrics(
+            document_id, structure_revision_id, scene_id
+        )
+    return envelope(project_id, metrics)
 
 
 @router.get("/documents/{document_id}/annotations")

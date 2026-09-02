@@ -25,6 +25,10 @@ import {
   createOverride,
   createProfileFromCorpus,
   createReviewItem,
+  createStyleEntity,
+  createStyleEntityAlias,
+  createStyleTerm,
+  createStyleTermAlias,
   deleteReferenceWork,
   fetchAggregates,
   fetchAnalysisRuns,
@@ -39,12 +43,20 @@ import {
   fetchReferenceWorks,
   fetchReviewItems,
   fetchSemantics,
+  fetchStyleDocuments,
+  fetchStyleMetrics,
+  fetchStyleStructure,
+  fetchStyleStructures,
+  fetchStyleText,
+  fetchStyleTextRevisions,
   importStyleFile,
   ignoreReviewItem,
+  linkStyleCharacter,
   recomputeAggregates,
   resolveReviewItem,
   reviewFinding,
   runLint,
+  selectStyleStructure,
 } from "./styleAnalysisApi";
 import type {
   Aggregate,
@@ -60,6 +72,7 @@ import type {
 import {
   buildAggregateGroups,
   buildManualRule,
+  metricNamesForScope,
   mergeStyleDocumentEntries,
   readCapturedStyleDocuments,
   rememberCapturedStyleDocument,
@@ -126,12 +139,64 @@ const INFERENCE_FIELDS: Record<string, { subjectType: string; fieldPath: string 
   "scene.pov": { subjectType: "scene", fieldPath: "scene.pov" },
 };
 
-const BASIC_STYLE_METRICS = [
+const DEFAULT_AGGREGATE_METRICS = [
   "sentence.len.p50",
   "sentence.len.p90",
   "paragraph.len.p50",
   "paragraph.len.p90",
 ] as const;
+
+const STYLE_ENTITY_TYPES = [
+  "person",
+  "organization",
+  "location",
+  "technology",
+  "concept",
+  "product",
+  "event",
+  "other",
+] as const;
+const STYLE_ENTITY_ALIAS_KINDS = ["name", "surname", "given_name", "nickname", "title", "role"] as const;
+const STYLE_TERM_TYPES = [
+  "world_term",
+  "technology",
+  "institution",
+  "organization_name",
+  "location_name",
+  "product_name",
+  "ability",
+  "historical_event",
+  "specialized_term",
+  "other",
+] as const;
+
+type StyleOverrideField = {
+  fieldPath: string;
+  subjectType: string;
+  label: string;
+  structureBound: boolean;
+};
+
+const STYLE_OVERRIDE_FIELDS: StyleOverrideField[] = [
+  { fieldPath: "mention.entity_id", subjectType: "mention", label: "Mention resolution (entity ID)", structureBound: true },
+  { fieldPath: "entity.enabled", subjectType: "entity", label: "Entity enabled", structureBound: false },
+  { fieldPath: "entity.canonical_name", subjectType: "entity", label: "Entity canonical name", structureBound: false },
+  { fieldPath: "entity.entity_type", subjectType: "entity", label: "Entity type", structureBound: false },
+  { fieldPath: "term.enabled", subjectType: "term", label: "Term enabled", structureBound: false },
+  { fieldPath: "term.canonical_label", subjectType: "term", label: "Term canonical label", structureBound: false },
+  { fieldPath: "term.term_type", subjectType: "term", label: "Term type", structureBound: false },
+  { fieldPath: "term.novelty", subjectType: "term", label: "Term novelty", structureBound: false },
+  { fieldPath: "block.speaker_entity_id", subjectType: "block", label: "Speaker entity ID", structureBound: true },
+  { fieldPath: "block.semantic_primary", subjectType: "block", label: "Block primary semantic", structureBound: true },
+  { fieldPath: "term_mention.sufficient_explanation_annotation_id", subjectType: "term_mention", label: "Term explanation annotation ID", structureBound: true },
+  { fieldPath: "scene.function", subjectType: "scene", label: "Scene function JSON array", structureBound: true },
+  { fieldPath: "scene.tone", subjectType: "scene", label: "Scene tone JSON array", structureBound: true },
+  { fieldPath: "scene.pace", subjectType: "scene", label: "Scene pace", structureBound: true },
+  { fieldPath: "scene.information_load", subjectType: "scene", label: "Scene information load", structureBound: true },
+  { fieldPath: "scene.interaction", subjectType: "scene", label: "Scene interaction", structureBound: true },
+  { fieldPath: "scene.pov_mode", subjectType: "scene", label: "Scene POV mode", structureBound: true },
+  { fieldPath: "scene.pov_entity_id", subjectType: "scene", label: "Scene POV entity ID", structureBound: true },
+];
 
 type InferenceTarget = StyleSemanticOutput & { fieldPath: string };
 
@@ -311,6 +376,12 @@ function ReferenceWorkPage({ projectId, workId }: { projectId: string; workId: n
   const work = useQuery({ queryKey: projectQueryKeys.styleReferenceWork(projectId, workId ?? 0), queryFn: () => fetchReferenceWork(projectId, workId as number), enabled: workId !== null, retry: false });
   const episodes = useQuery({ queryKey: projectQueryKeys.styleReferenceEpisodes(projectId, workId ?? 0), queryFn: () => fetchReferenceEpisodes(projectId, workId as number), enabled: workId !== null, retry: false });
   const analyzeMutation = useMutation({ mutationFn: (preset: "deterministic" | "full") => analyzeReferenceWork(projectId, workId as number, preset), onSuccess: (job) => setJobId(job.job_id) });
+  const invalidateReferenceWorkData = useCallback((job: StyleJob) => {
+    if (!isTerminalStyleJob(job.status)) return;
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleReferenceWork(projectId, workId ?? 0) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleReferenceEpisodes(projectId, workId ?? 0) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
+  }, [client, projectId, workId]);
   const purgeMutation = useMutation({ mutationFn: () => deleteReferenceWork(projectId, workId as number), onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleReferenceWorks(projectId) }); void navigate(`/projects/${encodeURIComponent(projectId)}/style-analysis/sources`); } });
   if (workId === null) return <p role="alert">Reference Work IDが不正です。</p>;
   return (
@@ -323,7 +394,7 @@ function ReferenceWorkPage({ projectId, workId }: { projectId: string; workId: n
             <div className="form-actions"><Button onClick={() => analyzeMutation.mutate("deterministic")} disabled={analyzeMutation.isPending}>Deterministic analyze</Button><Button variant="secondary" onClick={() => analyzeMutation.mutate("full")} disabled={analyzeMutation.isPending}>Full analyze</Button><Button variant="danger" onClick={() => { if (window.confirm("このReference Workと配下の分析データをPurgeしますか？")) purgeMutation.mutate(); }} disabled={purgeMutation.isPending}>Purge</Button></div>
             {analyzeMutation.error ? <p role="alert">Analyzeエラー: {displayError(analyzeMutation.error)}</p> : null}
             {purgeMutation.error ? <p role="alert">Purgeエラー: {displayError(purgeMutation.error)}</p> : null}
-            <JobProgress projectId={projectId} jobId={jobId} />
+            <JobProgress projectId={projectId} jobId={jobId} onTerminal={invalidateReferenceWorkData} />
           </Card>
           <Card>
             <div className="section-heading"><h2>Episodes</h2><StatusBadge value={`${work.data.episode_count} episodes`} /></div>
@@ -338,7 +409,11 @@ function ReferenceWorkPage({ projectId, workId }: { projectId: string; workId: n
 }
 
 async function loadDocumentEpisodes(projectId: string): Promise<StyleDocumentEntry[]> {
-  return mergeStyleDocumentEntries(await loadReferenceEpisodes(projectId), readCapturedStyleDocuments(projectId));
+  const [episodes, documents] = await Promise.all([
+    loadReferenceEpisodes(projectId),
+    fetchStyleDocuments(projectId),
+  ]);
+  return mergeStyleDocumentEntries(episodes, readCapturedStyleDocuments(projectId), documents);
 }
 
 async function loadReferenceEpisodes(projectId: string): Promise<ReferenceEpisode[]> {
@@ -358,6 +433,177 @@ async function loadProjectDraftCandidates(projectId: string): Promise<ProjectDra
   return candidates.filter((candidate): candidate is ProjectDraftCandidate => candidate !== null);
 }
 
+function parseJsonValue(value: string): unknown {
+  if (!value.trim()) throw new Error("Override value JSONを入力してください。");
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error("Override value JSONは有効なJSONで入力してください。");
+  }
+}
+
+function SemanticCorrectionEditor({
+  projectId,
+  documentId,
+  entry,
+  structureRevisionId,
+}: {
+  projectId: string;
+  documentId: number;
+  entry: StyleDocumentEntry;
+  structureRevisionId: number | null;
+}) {
+  const client = useQueryClient();
+  const [entityType, setEntityType] = useState<(typeof STYLE_ENTITY_TYPES)[number]>("person");
+  const [canonicalName, setCanonicalName] = useState("");
+  const [entityId, setEntityId] = useState("");
+  const [entityAlias, setEntityAlias] = useState("");
+  const [entityAliasKind, setEntityAliasKind] = useState<(typeof STYLE_ENTITY_ALIAS_KINDS)[number]>("name");
+  const [termType, setTermType] = useState<(typeof STYLE_TERM_TYPES)[number]>("world_term");
+  const [canonicalLabel, setCanonicalLabel] = useState("");
+  const [termId, setTermId] = useState("");
+  const [termAlias, setTermAlias] = useState("");
+  const [projectCharacterId, setProjectCharacterId] = useState("");
+  const [linkedEntityId, setLinkedEntityId] = useState("");
+  const [overrideFieldPath, setOverrideFieldPath] = useState("block.speaker_entity_id");
+  const [overrideSubjectId, setOverrideSubjectId] = useState("");
+  const [overrideValue, setOverrideValue] = useState("5");
+  const [overrideNote, setOverrideNote] = useState("");
+  const scope = entry.referenceWorkId !== null
+    ? { reference_work_id: entry.referenceWorkId }
+    : { document_id: documentId };
+  const invalidate = () => {
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `semantics-${documentId}-${structureRevisionId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-metrics-${documentId}-${structureRevisionId ?? 0}`) });
+  };
+  const entityMutation = useMutation({
+    mutationFn: () => {
+      if (!canonicalName.trim()) throw new Error("Canonical nameを入力してください。");
+      return createStyleEntity(projectId, { ...scope, entity_type: entityType, canonical_name: canonicalName.trim() });
+    },
+    onSuccess: invalidate,
+  });
+  const entityAliasMutation = useMutation({
+    mutationFn: () => {
+      const id = positiveId(entityId);
+      if (id === null || !entityAlias.trim()) throw new Error("Entity IDとEntity aliasを入力してください。");
+      return createStyleEntityAlias(projectId, id, { alias: entityAlias.trim(), alias_kind: entityAliasKind });
+    },
+    onSuccess: invalidate,
+  });
+  const termMutation = useMutation({
+    mutationFn: () => {
+      if (!canonicalLabel.trim()) throw new Error("Canonical labelを入力してください。");
+      return createStyleTerm(projectId, { ...scope, canonical_label: canonicalLabel.trim(), term_type: termType });
+    },
+    onSuccess: invalidate,
+  });
+  const termAliasMutation = useMutation({
+    mutationFn: () => {
+      const id = positiveId(termId);
+      if (id === null || !termAlias.trim()) throw new Error("Term IDとTerm aliasを入力してください。");
+      return createStyleTermAlias(projectId, id, termAlias.trim());
+    },
+    onSuccess: invalidate,
+  });
+  const characterLinkMutation = useMutation({
+    mutationFn: () => {
+      const characterId = positiveId(projectCharacterId);
+      const styleEntityId = positiveId(linkedEntityId);
+      if (characterId === null || styleEntityId === null) throw new Error("Project character IDとLinked Entity IDを入力してください。");
+      return linkStyleCharacter(projectId, documentId, characterId, styleEntityId);
+    },
+    onSuccess: invalidate,
+  });
+  const overrideMutation = useMutation({
+    mutationFn: () => {
+      const field = STYLE_OVERRIDE_FIELDS.find((candidate) => candidate.fieldPath === overrideFieldPath);
+      const subjectId = positiveId(overrideSubjectId);
+      if (!field || subjectId === null) throw new Error("Override fieldとSubject IDを入力してください。");
+      if (field.structureBound && structureRevisionId === null) throw new Error("Structure revisionを選択してください。");
+      const targetScope = field.subjectType === "entity" || field.subjectType === "term"
+        ? scope
+        : { document_id: documentId };
+      return createOverride(projectId, {
+        ...targetScope,
+        subject_type: field.subjectType,
+        subject_id: subjectId,
+        field_path: field.fieldPath,
+        operation: "set",
+        value: parseJsonValue(overrideValue),
+        ...(field.structureBound ? { structure_revision_id: structureRevisionId } : {}),
+        ...(overrideNote.trim() ? { note: overrideNote.trim() } : { note: "SA-H WebUI" }),
+      });
+    },
+    onSuccess: invalidate,
+  });
+  const selectedOverrideField = STYLE_OVERRIDE_FIELDS.find((field) => field.fieldPath === overrideFieldPath) ?? STYLE_OVERRIDE_FIELDS[0];
+  return <div className="style-analysis-grid">
+    <Card>
+      <h3>Manual Entity</h3>
+      <p className="helper-text">Scope: {entry.referenceWorkId !== null ? `Reference Work #${entry.referenceWorkId}` : `Document #${documentId}`}</p>
+      <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); entityMutation.mutate(); }}>
+        <div className="field-group"><FieldLabel htmlFor="style-entity-type">Entity type</FieldLabel><select id="style-entity-type" className="field-control" value={entityType} onChange={(event) => setEntityType(event.target.value as typeof entityType)}>{STYLE_ENTITY_TYPES.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
+        <div className="field-group"><FieldLabel htmlFor="style-entity-name">Canonical name</FieldLabel><TextInput id="style-entity-name" value={canonicalName} onChange={(event) => setCanonicalName(event.target.value)} required /></div>
+        <Button type="submit" disabled={entityMutation.isPending || !canonicalName.trim()}>Create Entity</Button>
+      </form>
+      {entityMutation.error ? <p role="alert">Entityエラー: {displayError(entityMutation.error)}</p> : null}
+    </Card>
+    <Card>
+      <h3>Entity Alias</h3>
+      <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); entityAliasMutation.mutate(); }}>
+        <div className="field-group"><FieldLabel htmlFor="style-entity-id">Entity ID</FieldLabel><TextInput id="style-entity-id" inputMode="numeric" value={entityId} onChange={(event) => setEntityId(event.target.value)} required /></div>
+        <div className="field-group"><FieldLabel htmlFor="style-entity-alias">Entity alias</FieldLabel><TextInput id="style-entity-alias" value={entityAlias} onChange={(event) => setEntityAlias(event.target.value)} required /></div>
+        <div className="field-group"><FieldLabel htmlFor="style-entity-alias-kind">Alias kind</FieldLabel><select id="style-entity-alias-kind" className="field-control" value={entityAliasKind} onChange={(event) => setEntityAliasKind(event.target.value as typeof entityAliasKind)}>{STYLE_ENTITY_ALIAS_KINDS.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
+        <Button type="submit" disabled={entityAliasMutation.isPending || !positiveId(entityId) || !entityAlias.trim()}>Create Entity Alias</Button>
+      </form>
+      {entityAliasMutation.error ? <p role="alert">Entity Aliasエラー: {displayError(entityAliasMutation.error)}</p> : null}
+    </Card>
+    <Card>
+      <h3>Manual Term</h3>
+      <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); termMutation.mutate(); }}>
+        <div className="field-group"><FieldLabel htmlFor="style-term-type">Term type</FieldLabel><select id="style-term-type" className="field-control" value={termType} onChange={(event) => setTermType(event.target.value as typeof termType)}>{STYLE_TERM_TYPES.map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
+        <div className="field-group"><FieldLabel htmlFor="style-term-label">Canonical label</FieldLabel><TextInput id="style-term-label" value={canonicalLabel} onChange={(event) => setCanonicalLabel(event.target.value)} required /></div>
+        <Button type="submit" disabled={termMutation.isPending || !canonicalLabel.trim()}>Create Term</Button>
+      </form>
+      {termMutation.error ? <p role="alert">Termエラー: {displayError(termMutation.error)}</p> : null}
+    </Card>
+    <Card>
+      <h3>Term Alias</h3>
+      <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); termAliasMutation.mutate(); }}>
+        <div className="field-group"><FieldLabel htmlFor="style-term-id">Term ID</FieldLabel><TextInput id="style-term-id" inputMode="numeric" value={termId} onChange={(event) => setTermId(event.target.value)} required /></div>
+        <div className="field-group"><FieldLabel htmlFor="style-term-alias">Term alias</FieldLabel><TextInput id="style-term-alias" value={termAlias} onChange={(event) => setTermAlias(event.target.value)} required /></div>
+        <Button type="submit" disabled={termAliasMutation.isPending || !positiveId(termId) || !termAlias.trim()}>Create Term Alias</Button>
+      </form>
+      {termAliasMutation.error ? <p role="alert">Term Aliasエラー: {displayError(termAliasMutation.error)}</p> : null}
+    </Card>
+    {entry.kind === "project_draft" ? <Card>
+      <h3>Character Link</h3>
+      <p className="helper-text">Project DocumentのEnabled Person Characterだけを既存Style Entityへlinkします。</p>
+      <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); characterLinkMutation.mutate(); }}>
+        <div className="field-group"><FieldLabel htmlFor="style-project-character-id">Project character ID</FieldLabel><TextInput id="style-project-character-id" inputMode="numeric" value={projectCharacterId} onChange={(event) => setProjectCharacterId(event.target.value)} required /></div>
+        <div className="field-group"><FieldLabel htmlFor="style-linked-entity-id">Linked Entity ID</FieldLabel><TextInput id="style-linked-entity-id" inputMode="numeric" value={linkedEntityId} onChange={(event) => setLinkedEntityId(event.target.value)} required /></div>
+        <Button type="submit" disabled={characterLinkMutation.isPending || !positiveId(projectCharacterId) || !positiveId(linkedEntityId)}>Link Character</Button>
+      </form>
+      {characterLinkMutation.error ? <p role="alert">Character Linkエラー: {displayError(characterLinkMutation.error)}</p> : null}
+    </Card> : null}
+    <Card>
+      <h3>Semantic Override</h3>
+      <p className="helper-text">設計10のOverride Registryだけを対象にします。Structure subjectは選択中のStructure revisionへ固定します。</p>
+      <form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); overrideMutation.mutate(); }}>
+        <div className="field-group"><FieldLabel htmlFor="style-override-field">Override field</FieldLabel><select id="style-override-field" className="field-control" value={overrideFieldPath} onChange={(event) => setOverrideFieldPath(event.target.value)}>{STYLE_OVERRIDE_FIELDS.map((field) => <option key={field.fieldPath} value={field.fieldPath}>{field.label} · {field.fieldPath}</option>)}</select></div>
+        <p className="helper-text">Subject type: {selectedOverrideField.subjectType}{selectedOverrideField.structureBound ? ` · structure #${structureRevisionId ?? "未選択"}` : ""}</p>
+        <div className="field-group"><FieldLabel htmlFor="style-override-subject-id">Override subject ID</FieldLabel><TextInput id="style-override-subject-id" inputMode="numeric" value={overrideSubjectId} onChange={(event) => setOverrideSubjectId(event.target.value)} required /></div>
+        <div className="field-group"><FieldLabel htmlFor="style-override-value">Override value JSON</FieldLabel><TextArea id="style-override-value" value={overrideValue} onChange={(event) => setOverrideValue(event.target.value)} required /></div>
+        <div className="field-group"><FieldLabel htmlFor="style-override-note">Override note</FieldLabel><TextInput id="style-override-note" value={overrideNote} onChange={(event) => setOverrideNote(event.target.value)} /></div>
+        <Button type="submit" disabled={overrideMutation.isPending || !positiveId(overrideSubjectId) || !overrideValue.trim()}>Save Semantic Override</Button>
+      </form>
+      {overrideMutation.error ? <p role="alert">Semantic Overrideエラー: {displayError(overrideMutation.error)}</p> : null}
+    </Card>
+  </div>;
+}
+
 function DocumentPage({ projectId, documentId }: { projectId: string; documentId: number | null }) {
   const client = useQueryClient();
   const [jobId, setJobId] = useState<number | null>(null);
@@ -368,22 +614,39 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
   const [activeTab, setActiveTab] = useState<"text" | "structure" | "semantics" | "metrics">("text");
   const episodes = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`), queryFn: () => loadDocumentEpisodes(projectId), enabled: documentId !== null, retry: false });
   const episode = episodes.data?.find((item) => item.documentId === documentId);
+  const textRevisions = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${documentId ?? 0}`), queryFn: () => fetchStyleTextRevisions(projectId, documentId as number), enabled: documentId !== null, retry: false });
+  const structures = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`), queryFn: () => fetchStyleStructures(projectId, documentId as number), enabled: documentId !== null, retry: false });
   const runs = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`), queryFn: () => fetchAnalysisRuns(projectId, documentId as number), enabled: documentId !== null, retry: false });
-  const textRevisionIds = useMemo(() => [...new Set([episode?.currentTextRevisionId, ...(runs.data ?? []).map((run) => run.text_revision_id)].filter((value): value is number => typeof value === "number" && value > 0))].sort((left, right) => left - right), [episode?.currentTextRevisionId, runs.data]);
-  const structureRevisionIds = useMemo(() => [...new Set([episode?.currentStructureRevisionId, ...(runs.data ?? []).map((run) => run.structure_revision_id)].filter((value): value is number => typeof value === "number" && value > 0))].sort((left, right) => left - right), [episode?.currentStructureRevisionId, runs.data]);
+  const textRevisionIds = useMemo(() => (textRevisions.data ?? []).map((revision) => revision.id), [textRevisions.data]);
+  const structureRevisionIds = useMemo(() => (structures.data ?? []).map((revision) => revision.id), [structures.data]);
   useEffect(() => {
     if (!textRevisionIds.length) setSelectedTextRevisionId("");
     else if (!textRevisionIds.includes(Number(selectedTextRevisionId))) setSelectedTextRevisionId(String(episode?.currentTextRevisionId ?? textRevisionIds[textRevisionIds.length - 1]));
     if (!structureRevisionIds.length) setSelectedStructureRevisionId("");
     else if (!structureRevisionIds.includes(Number(selectedStructureRevisionId))) setSelectedStructureRevisionId(String(episode?.currentStructureRevisionId ?? structureRevisionIds[structureRevisionIds.length - 1]));
   }, [episode?.currentStructureRevisionId, episode?.currentTextRevisionId, selectedStructureRevisionId, selectedTextRevisionId, structureRevisionIds, textRevisionIds]);
+  const selectedTextId = positiveId(selectedTextRevisionId);
   const selectedStructureId = positiveId(selectedStructureRevisionId);
+  const textRevision = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-text-${documentId ?? 0}-${selectedTextId ?? 0}`), queryFn: () => fetchStyleText(projectId, documentId as number, selectedTextId as number), enabled: documentId !== null && selectedTextId !== null, retry: false });
+  const structure = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structure-${documentId ?? 0}-${selectedStructureId ?? 0}`), queryFn: () => fetchStyleStructure(projectId, documentId as number, selectedStructureId as number), enabled: documentId !== null && selectedStructureId !== null, retry: false });
+  const metrics = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-metrics-${documentId ?? 0}-${selectedStructureId ?? 0}`), queryFn: () => fetchStyleMetrics(projectId, documentId as number, selectedStructureId as number), enabled: documentId !== null && selectedStructureId !== null, retry: false });
   const semantics = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, `semantics-${documentId ?? 0}-${selectedStructureId ?? 0}`), queryFn: () => fetchSemantics(projectId, documentId as number, selectedStructureId as number), enabled: documentId !== null && selectedStructureId !== null, retry: false });
   const analyzeMutation = useMutation({ mutationFn: () => {
     const textRevisionId = positiveId(selectedTextRevisionId);
     if (textRevisionId === null) throw new Error("Text revisionを選択してください。");
     return analyzeDocument(projectId, documentId as number, { text_revision_id: textRevisionId, ...(rebuildStructure ? {} : selectedStructureId === null ? {} : { structure_revision_id: selectedStructureId }), preset, ...(rebuildStructure ? { rebuild_structure: true } : {}) });
   }, onSuccess: (job) => setJobId(job.job_id), });
+  const selectCurrentMutation = useMutation({
+    mutationFn: () => {
+      if (selectedStructureId === null) throw new Error("Structure revisionを選択してください。");
+      return selectStyleStructure(projectId, documentId as number, selectedStructureId);
+    },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-episodes-${documentId ?? 0}`) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
+    },
+  });
   const invalidateDocumentData = useCallback((job: StyleJob) => {
     if (!isTerminalStyleJob(job.status)) return;
     const structureRevisionId = typeof job.result.structure_revision_id === "number" && job.result.structure_revision_id > 0
@@ -392,9 +655,14 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
     if (episode?.kind === "project_draft" && structureRevisionId !== null) {
       updateRememberedStyleDocument(projectId, episode.documentId, { currentStructureRevisionId: structureRevisionId, currentStructureKind: "automatic" });
     }
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-revisions-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structures-${documentId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-text-${documentId ?? 0}-${selectedTextId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-structure-${documentId ?? 0}-${selectedStructureId ?? 0}`) });
+    void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-metrics-${documentId ?? 0}-${selectedStructureId ?? 0}`) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `document-runs-${documentId ?? 0}`) });
     void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) });
-  }, [client, documentId, episode, projectId]);
+  }, [client, documentId, episode, projectId, selectedStructureId, selectedTextId]);
   const rawOutputs = semantics.data?.raw ?? semantics.data?.outputs ?? [];
   const targets = inferenceTargets(rawOutputs);
   const speakerTarget = targets.find((target) => target.fieldPath === "block.speaker");
@@ -403,7 +671,8 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
     : null;
   const overrideMutation = useMutation({ mutationFn: () => {
     if (!speakerTarget || speakerEntityId === null) throw new Error("有効なspeaker推論がありません。");
-    return createOverride(projectId, { document_id: documentId, subject_type: "block", subject_id: speakerTarget.subject_id, field_path: "block.speaker_entity_id", operation: "set", value: speakerEntityId, base_analysis_run_id: speakerTarget.analysis_run_id, structure_revision_id: episode?.currentStructureRevisionId, note: "SA-H WebUI" });
+    if (selectedStructureId === null) throw new Error("Structure revisionを選択してください。");
+    return createOverride(projectId, { document_id: documentId, subject_type: "block", subject_id: speakerTarget.subject_id, field_path: "block.speaker_entity_id", operation: "set", value: speakerEntityId, base_analysis_run_id: speakerTarget.analysis_run_id, structure_revision_id: selectedStructureId, note: "SA-H WebUI" });
   }, onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) }); } });
   const inferenceMutation = useMutation({ mutationFn: (input: { target: InferenceTarget; reviewStatus: "confirmed" | "rejected" }) => createInferenceReview(projectId, { analysis_run_id: input.target.analysis_run_id, subject_type: input.target.subject_type, subject_id: input.target.subject_id, field_path: input.target.fieldPath, review_status: input.reviewStatus, note: "SA-H WebUI" }), onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysisFamily(projectId) }); } });
   if (documentId === null) return <p role="alert">Document IDが不正です。</p>;
@@ -419,10 +688,10 @@ function DocumentPage({ projectId, documentId }: { projectId: string; documentId
              {analyzeMutation.error ? <p role="alert">Analyzeエラー: {displayError(analyzeMutation.error)}</p> : null}<JobProgress projectId={projectId} jobId={jobId} onTerminal={invalidateDocumentData} />
           </Card>
           <div role="tablist" aria-label="Document views" className="style-analysis-nav">{(["text", "structure", "semantics", "metrics"] as const).map((tab) => <Button key={tab} type="button" role="tab" aria-selected={activeTab === tab} variant={activeTab === tab ? "primary" : "ghost"} onClick={() => setActiveTab(tab)}>{tab[0].toUpperCase() + tab.slice(1)}</Button>)}</div>
-          {activeTab === "text" ? <Card><h2>Text</h2><p>Text revision #{selectedTextRevisionId || "未選択"} をAnalysis対象にしています。Current pointerは変更しません。</p><QueryState loading={runs.isPending} error={runs.error}><p>{runs.data?.length ?? 0} persisted analysis runs</p></QueryState></Card> : null}
-          {activeTab === "structure" ? <Card><h2>Structure</h2><p>Structure revision #{selectedStructureRevisionId || "未選択"} ({episode.currentStructureKind ?? "-"})</p><p className="helper-text">Rebuild structureを選ぶと、選択したStructure revisionを送信せずBackendの再構築境界を使います。</p></Card> : null}
-          {activeTab === "semantics" ? <Card><h2>Semantics</h2><QueryState loading={semantics.isPending} error={semantics.error}>{semantics.data ? <><p>Semantic状態はBasicとは別に表示しています。</p><pre className="json-block">{formatJson({ effective: semantics.data.effective, raw: rawOutputs, analysis_run_ids: semantics.data.analysis_run_ids })}</pre>{targets.length ? <div className="record-list">{targets.map((target) => <div className="record-list-item" key={`${target.analysis_run_id}-${target.subject_type}-${target.subject_id}-${target.fieldPath}`}><span><strong>{target.fieldPath}</strong><small>{target.subject_type} #{target.subject_id} · run #{target.analysis_run_id}</small></span><span className="form-actions"><Button variant="secondary" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "confirmed" })} disabled={inferenceMutation.isPending}>Confirm</Button><Button variant="ghost" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "rejected" })} disabled={inferenceMutation.isPending}>Reject</Button></span></div>)}</div> : <p>Registryに一致するRaw Inferenceはありません。</p>}{inferenceMutation.error ? <p role="alert">Inference Reviewエラー: {displayError(inferenceMutation.error)}</p> : null}</> : <p>Structure revisionがないためSemantic表示はありません。</p>}</QueryState></Card> : null}
-          {activeTab === "metrics" ? <Card><h2>Metrics</h2><QueryState loading={runs.isPending} error={runs.error}><div className="record-list">{(runs.data ?? []).map((run) => <div className="record-list-item" key={run.id}><span>#{run.id} {run.analyzer_id} v{run.analyzer_version}<small>text r{run.text_revision_id} · structure r{run.structure_revision_id}</small></span><StatusBadge value={run.status} /></div>)}</div></QueryState></Card> : null}
+          {activeTab === "text" ? <Card><h2>Text</h2><p>Text revision #{selectedTextRevisionId || "未選択"} を表示しています。Current pointerは変更しません。</p><QueryState loading={textRevision.isPending} error={textRevision.error}>{textRevision.data ? <><p className="helper-text">Canonical text</p><pre className="text-preview">{textRevision.data.canonical_text}</pre><details><summary>Raw text</summary><pre className="text-preview">{textRevision.data.raw_text}</pre></details></> : <p>Text revisionを選択してください。</p>}</QueryState></Card> : null}
+          {activeTab === "structure" ? <Card><h2>Structure</h2><p>Structure revision #{selectedStructureRevisionId || "未選択"} ({structure.data?.source_kind ?? episode.currentStructureKind ?? "-"})</p><div className="form-actions"><Button variant="secondary" onClick={() => selectCurrentMutation.mutate()} disabled={selectCurrentMutation.isPending || selectedStructureId === null || selectedStructureId === episode.currentStructureRevisionId}>Select current structure</Button></div>{selectCurrentMutation.error ? <p role="alert">Current Structure更新エラー: {displayError(selectCurrentMutation.error)}</p> : null}<QueryState loading={structure.isPending} error={structure.error}>{structure.data ? <><p>{structure.data.scene_count} scenes · {structure.data.block_count} blocks</p><pre className="json-block">{formatJson({ scenes: structure.data.scenes, blocks: structure.data.blocks, sentences: structure.data.sentences })}</pre></> : <p>Structure revisionを選択してください。</p>}</QueryState><p className="helper-text">Rebuild structureを選ぶと、選択したStructure revisionを送信せずBackendの再構築境界を使います。</p></Card> : null}
+          {activeTab === "semantics" ? <Card><h2>Semantics</h2><QueryState loading={semantics.isPending} error={semantics.error}>{semantics.data ? <><p>Semantic状態はBasicとは別に表示しています。</p><pre className="json-block">{formatJson({ effective: semantics.data.effective, raw: rawOutputs, analysis_run_ids: semantics.data.analysis_run_ids })}</pre>{targets.length ? <div className="record-list">{targets.map((target) => <div className="record-list-item" key={`${target.analysis_run_id}-${target.subject_type}-${target.subject_id}-${target.fieldPath}`}><span><strong>{target.fieldPath}</strong><small>{target.subject_type} #{target.subject_id} · run #{target.analysis_run_id}</small></span><span className="form-actions"><Button variant="secondary" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "confirmed" })} disabled={inferenceMutation.isPending}>Confirm</Button><Button variant="ghost" onClick={() => inferenceMutation.mutate({ target, reviewStatus: "rejected" })} disabled={inferenceMutation.isPending}>Reject</Button></span></div>)}</div> : <p>Registryに一致するRaw Inferenceはありません。</p>}{inferenceMutation.error ? <p role="alert">Inference Reviewエラー: {displayError(inferenceMutation.error)}</p> : null}<SemanticCorrectionEditor projectId={projectId} documentId={documentId} entry={episode} structureRevisionId={selectedStructureId} /></> : <p>Structure revisionがないためSemantic表示はありません。</p>}</QueryState></Card> : null}
+          {activeTab === "metrics" ? <Card><h2>Metrics</h2><QueryState loading={metrics.isPending} error={metrics.error}>{metrics.data ? <><p>Selected metric runs: {metrics.data.analysis_run_ids.join(", ") || "なし"}</p><div className="record-list">{metrics.data.measurements.map((measurement, index) => <div className="record-list-item" key={`${String(measurement.id ?? index)}`}><span><strong>{String(measurement.metric_name)} v{String(measurement.metric_version)}</strong><small>{String(measurement.target_type)} #{String(measurement.target_id)} · sample {String(measurement.sample_count)}</small></span><strong>{String(measurement.value ?? "-")}</strong></div>)}</div><details><summary>Metric Registry</summary><pre className="json-block">{formatJson(metrics.data.available_metrics)}</pre></details></> : <p>Structure revisionを選択してください。</p>}</QueryState></Card> : null}
           <Card><h2>Analysis runs</h2><QueryState loading={runs.isPending} error={runs.error}>{runs.data?.length ? <div className="record-list">{runs.data.map((run) => <div className="record-list-item" key={run.id}><span>#{run.id} {run.analyzer_id} v{run.analyzer_version}</span><StatusBadge value={run.status} /></div>)}</div> : <p>まだAnalysis runがありません。</p>}</QueryState></Card>
           <Card><h2>Corrections</h2><p className="helper-text">OverrideとInference Reviewは別操作です。Authoring Character / World / Canonへの自動書き込みは行いません。</p>{speakerTarget && speakerEntityId !== null ? <div className="form-actions"><Button variant="secondary" onClick={() => overrideMutation.mutate()} disabled={overrideMutation.isPending}>Override speaker</Button></div> : <p>実行済みRaw speaker推論がないため、対象を推測してOverrideは作成しません。</p>}{overrideMutation.error ? <p role="alert">Overrideエラー: {displayError(overrideMutation.error)}</p> : null}</Card>
         </> : <p>Document #{documentId}に対応するReference Episodeがありません。</p>}
@@ -441,7 +710,7 @@ function CorporaPage({ projectId, compare }: { projectId: string; compare: boole
   const [compareIds, setCompareIds] = useState("");
   const [aggregateTarget, setAggregateTarget] = useState<"document" | "scene">("document");
   const [aggregateFilter, setAggregateFilter] = useState("{}");
-  const [aggregateMetricNames, setAggregateMetricNames] = useState<string[]>([...BASIC_STYLE_METRICS]);
+  const [aggregateMetricNames, setAggregateMetricNames] = useState<string[]>([...DEFAULT_AGGREGATE_METRICS]);
   const [comparison, setComparison] = useState<unknown>(null);
   const corpora = useQuery({ queryKey: projectQueryKeys.styleCorpora(projectId), queryFn: () => fetchCorpora(projectId), retry: false });
   const works = useQuery({ queryKey: projectQueryKeys.styleReferenceWorks(projectId), queryFn: () => fetchReferenceWorks(projectId), retry: false });
@@ -451,6 +720,7 @@ function CorporaPage({ projectId, compare }: { projectId: string; compare: boole
   const addMutation = useMutation({ mutationFn: () => addCorpusWork(projectId, selectedCorpusId as number, Number(workId)), onSuccess: () => { void client.invalidateQueries({ queryKey: projectQueryKeys.styleCorpus(projectId, selectedCorpusId as number) }); void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `corpus-aggregates-${selectedCorpusId ?? 0}`) }); } });
   const aggregateMutation = useMutation({ mutationFn: async () => { if (selectedCorpusId === null) throw new Error("Corpusを選択してください。"); if (!aggregateMetricNames.length) throw new Error("Metricを1つ以上選択してください。"); const job = await recomputeAggregates(projectId, "corpus", selectedCorpusId, { measurement_target_type: aggregateTarget, filter: parseObjectJson(aggregateFilter, "Aggregate filter JSON"), metric_names: aggregateMetricNames }); setAggregateJobId(job.job_id); return job; }, });
   const aggregateJobQuery = useStyleJobPolling(projectId, aggregateJobId);
+  const aggregateMetricOptions = useMemo(() => metricNamesForScope(aggregateTarget), [aggregateTarget]);
   useEffect(() => {
     if (aggregateJobQuery.data && isTerminalStyleJob(aggregateJobQuery.data.status)) {
       void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, `corpus-aggregates-${selectedCorpusId ?? 0}`) });
@@ -462,7 +732,7 @@ function CorporaPage({ projectId, compare }: { projectId: string; compare: boole
     <>
       <PageHeader title={compare ? "Corpus compare" : "Corpora / Aggregate"} description="CorpusのmembershipとAggregateのfreshnessを明示します。Archivedはデフォルト一覧から除外されます。" />
       <Card><h2>Create corpus</h2><form className="style-analysis-form" onSubmit={create}><div className="field-group"><FieldLabel htmlFor="style-corpus-name">Name</FieldLabel><TextInput id="style-corpus-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="field-group"><FieldLabel htmlFor="style-corpus-description">Description</FieldLabel><TextArea id="style-corpus-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><Button type="submit" disabled={createMutation.isPending}>Save corpus</Button></form>{createMutation.error ? <p role="alert">Corpus作成エラー: {displayError(createMutation.error)}</p> : null}</Card>
-       <div className="style-analysis-grid"><Card><h2>Corpora</h2><QueryState loading={corpora.isPending} error={corpora.error}>{corpora.data?.length ? <div className="record-list">{corpora.data.map((corpus) => <button className="record-list-item" type="button" key={corpus.id} onClick={() => setSelectedCorpusId(corpus.id)}><span><strong>{corpus.name}</strong><small>{corpus.description || "説明なし"}</small></span><StatusBadge value={selectedCorpusId === corpus.id ? "selected" : "saved"} /></button>)}</div> : <p>Corpusがありません。</p>}</QueryState></Card><Card><h2>Selected corpus</h2>{selectedCorpusId === null ? <p>左からCorpusを選択してください。</p> : <><QueryState loading={detail.isPending} error={detail.error}>{detail.data ? <pre className="json-block">{formatJson(detail.data)}</pre> : null}</QueryState><div className="style-analysis-form"><div className="field-group"><FieldLabel htmlFor="style-corpus-work">Add reference work</FieldLabel><select id="style-corpus-work" className="field-control" value={workId} onChange={(event) => setWorkId(event.target.value)}><option value="">選択してください</option>{works.data?.map((work) => <option key={work.reference_work_id} value={work.reference_work_id}>{work.title}</option>)}</select></div><Button onClick={() => addMutation.mutate()} disabled={!positiveId(workId) || addMutation.isPending}>Add work</Button></div><div className="style-analysis-form"><div className="field-group"><FieldLabel htmlFor="style-aggregate-target">Aggregate target</FieldLabel><select id="style-aggregate-target" className="field-control" value={aggregateTarget} onChange={(event) => setAggregateTarget(event.target.value as typeof aggregateTarget)}><option value="document">document</option><option value="scene">scene</option></select></div><div className="field-group"><FieldLabel htmlFor="style-aggregate-filter">Aggregate filter JSON</FieldLabel><TextArea id="style-aggregate-filter" value={aggregateFilter} onChange={(event) => setAggregateFilter(event.target.value)} /></div><fieldset><legend>Metrics</legend>{BASIC_STYLE_METRICS.map((metric) => <label key={metric}><input type="checkbox" checked={aggregateMetricNames.includes(metric)} onChange={(event) => setAggregateMetricNames((current) => event.target.checked ? [...new Set([...current, metric])] : current.filter((item) => item !== metric))} /> Metric {metric}</label>)}</fieldset><Button variant="secondary" onClick={() => aggregateMutation.mutate()} disabled={aggregateMutation.isPending || !aggregateMetricNames.length}>Recompute aggregates</Button></div>{aggregateMutation.error ? <p role="alert">Aggregate再計算エラー: {displayError(aggregateMutation.error)}</p> : null}<JobProgress projectId={projectId} jobId={aggregateJobId} /><QueryState loading={aggregates.isPending} error={aggregates.error}>{aggregates.data ? <div className="record-list">{aggregates.data.map((aggregate) => <AggregateRow key={aggregate.id} aggregate={aggregate} />)}</div> : null}</QueryState></>}</Card></div>
+       <div className="style-analysis-grid"><Card><h2>Corpora</h2><QueryState loading={corpora.isPending} error={corpora.error}>{corpora.data?.length ? <div className="record-list">{corpora.data.map((corpus) => <button className="record-list-item" type="button" key={corpus.id} onClick={() => setSelectedCorpusId(corpus.id)}><span><strong>{corpus.name}</strong><small>{corpus.description || "説明なし"}</small></span><StatusBadge value={selectedCorpusId === corpus.id ? "selected" : "saved"} /></button>)}</div> : <p>Corpusがありません。</p>}</QueryState></Card><Card><h2>Selected corpus</h2>{selectedCorpusId === null ? <p>左からCorpusを選択してください。</p> : <><QueryState loading={detail.isPending} error={detail.error}>{detail.data ? <pre className="json-block">{formatJson(detail.data)}</pre> : null}</QueryState><div className="style-analysis-form"><div className="field-group"><FieldLabel htmlFor="style-corpus-work">Add reference work</FieldLabel><select id="style-corpus-work" className="field-control" value={workId} onChange={(event) => setWorkId(event.target.value)}><option value="">選択してください</option>{works.data?.map((work) => <option key={work.reference_work_id} value={work.reference_work_id}>{work.title}</option>)}</select></div><Button onClick={() => addMutation.mutate()} disabled={!positiveId(workId) || addMutation.isPending}>Add work</Button></div><div className="style-analysis-form"><div className="field-group"><FieldLabel htmlFor="style-aggregate-target">Aggregate target</FieldLabel><select id="style-aggregate-target" className="field-control" value={aggregateTarget} onChange={(event) => setAggregateTarget(event.target.value as typeof aggregateTarget)}><option value="document">document</option><option value="scene">scene</option></select></div><div className="field-group"><FieldLabel htmlFor="style-aggregate-filter">Aggregate filter JSON</FieldLabel><TextArea id="style-aggregate-filter" value={aggregateFilter} onChange={(event) => setAggregateFilter(event.target.value)} /></div><fieldset><legend>Metrics</legend>{aggregateMetricOptions.map((metric) => <label key={metric}><input type="checkbox" checked={aggregateMetricNames.includes(metric)} onChange={(event) => setAggregateMetricNames((current) => event.target.checked ? [...new Set([...current, metric])] : current.filter((item) => item !== metric))} /> Metric {metric}</label>)}</fieldset><Button variant="secondary" onClick={() => aggregateMutation.mutate()} disabled={aggregateMutation.isPending || !aggregateMetricNames.length}>Recompute aggregates</Button></div>{aggregateMutation.error ? <p role="alert">Aggregate再計算エラー: {displayError(aggregateMutation.error)}</p> : null}<JobProgress projectId={projectId} jobId={aggregateJobId} /><QueryState loading={aggregates.isPending} error={aggregates.error}>{aggregates.data ? <div className="record-list">{aggregates.data.map((aggregate) => <AggregateRow key={aggregate.id} aggregate={aggregate} />)}</div> : null}</QueryState></>}</Card></div>
       {(compare || selectedCorpusId !== null) ? <Card><h2>Compare corpora</h2><p className="helper-text">2〜5個のCorpus IDをカンマ区切りで指定します。</p><div className="inline-field"><FieldLabel htmlFor="style-compare-ids">Corpus IDs</FieldLabel><TextInput id="style-compare-ids" value={compareIds} onChange={(event) => setCompareIds(event.target.value)} placeholder="1,2" /><Button onClick={() => compareMutation.mutate()} disabled={compareIds.split(",").filter((item) => positiveId(item.trim())).length < 2 || compareMutation.isPending}>Compare</Button></div>{compareMutation.error ? <p role="alert">Compareエラー: {displayError(compareMutation.error)}</p> : null}{comparison ? <pre className="json-block">{formatJson(comparison)}</pre> : null}</Card> : null}
     </>
   );
@@ -477,7 +747,7 @@ function ProfilesPage({ projectId, profileId }: { projectId: string; profileId: 
   const [name, setName] = useState("");
   const [corpusName, setCorpusName] = useState("");
   const [description, setDescription] = useState("");
-  const [manualRule, setManualRule] = useState<ManualRuleEditorState>({ targetScope: "document", selector: {}, metricName: BASIC_STYLE_METRICS[0], metricVersion: 1, preferredValue: "0", minValue: "0", maxValue: "0", weight: "1", enabled: true });
+  const [manualRule, setManualRule] = useState<ManualRuleEditorState>({ targetScope: "document", selector: {}, metricName: DEFAULT_AGGREGATE_METRICS[0], metricVersion: 1, preferredValue: "0", minValue: "0", maxValue: "0", weight: "1", enabled: true });
   const [manualSelectorText, setManualSelectorText] = useState("{}");
   const [manualCharacterId, setManualCharacterId] = useState("");
   const [corpusId, setCorpusId] = useState("");
@@ -488,7 +758,13 @@ function ProfilesPage({ projectId, profileId }: { projectId: string; profileId: 
   const aggregateGroups = useMemo(() => buildAggregateGroups(aggregates.data ?? []), [aggregates.data]);
   const [aggregateGroupKey, setAggregateGroupKey] = useState("");
   const selectedAggregateGroup = aggregateGroups.find((group) => group.key === aggregateGroupKey);
+  const manualMetricOptions = useMemo(() => metricNamesForScope(manualRule.targetScope), [manualRule.targetScope]);
   const detail = useQuery({ queryKey: projectQueryKeys.styleProfile(projectId, profileId ?? 0), queryFn: () => fetchProfile(projectId, profileId as number), enabled: profileId !== null, retry: false });
+  useEffect(() => {
+    if (!manualMetricOptions.includes(manualRule.metricName)) {
+      setManualRule((current) => ({ ...current, metricName: manualMetricOptions[0] }));
+    }
+  }, [manualMetricOptions, manualRule.metricName]);
   const manualMutation = useMutation({ mutationFn: () => {
     const selector = manualRule.targetScope === "document" ? {} : manualRule.targetScope === "character" ? { project_character_id: positiveId(manualCharacterId) as number } : parseObjectJson(manualSelectorText, "Scope selector JSON");
     return createManualProfile(projectId, { name, description, rules: [buildManualRule({ ...manualRule, selector })] });
@@ -513,7 +789,7 @@ function ProfilesPage({ projectId, profileId }: { projectId: string; profileId: 
   return (
     <>
       <PageHeader title="Profiles" description="Profileは保存したVersionを確認してからActivateします。Archived profileはLint候補にしません。" />
-      <Card><h2>Manual profile</h2><form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); if (name.trim() && (!manualRule.enabled || (manualRule.minValue.trim() && manualRule.maxValue.trim()))) manualMutation.mutate(); }}><div className="field-group"><FieldLabel htmlFor="style-profile-name">Name</FieldLabel><TextInput id="style-profile-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="field-group"><FieldLabel htmlFor="style-profile-description">Description</FieldLabel><TextArea id="style-profile-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-target-scope">Target scope</FieldLabel><select id="style-profile-target-scope" className="field-control" value={manualRule.targetScope} onChange={(event) => setManualRule((current) => ({ ...current, targetScope: event.target.value as ManualRuleEditorState["targetScope"] }))}><option value="document">document</option><option value="scene">scene</option><option value="character">character</option></select></div>{manualRule.targetScope === "scene" ? <div className="field-group"><FieldLabel htmlFor="style-profile-selector">Scope selector JSON</FieldLabel><TextArea id="style-profile-selector" value={manualSelectorText} onChange={(event) => setManualSelectorText(event.target.value)} /></div> : null}{manualRule.targetScope === "character" ? <div className="field-group"><FieldLabel htmlFor="style-profile-character-id">Project character ID</FieldLabel><TextInput id="style-profile-character-id" inputMode="numeric" value={manualCharacterId} onChange={(event) => setManualCharacterId(event.target.value)} /></div> : null}<div className="field-group"><FieldLabel htmlFor="style-profile-metric">Metric</FieldLabel><select id="style-profile-metric" className="field-control" value={manualRule.metricName} onChange={(event) => setManualRule((current) => ({ ...current, metricName: event.target.value }))}>{BASIC_STYLE_METRICS.map((metric) => <option key={metric} value={metric}>{metric}</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-preferred">Preferred value</FieldLabel><TextInput id="style-profile-preferred" inputMode="decimal" value={manualRule.preferredValue} onChange={(event) => setManualRule((current) => ({ ...current, preferredValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-minimum">Minimum</FieldLabel><TextInput id="style-profile-minimum" inputMode="decimal" value={manualRule.minValue} onChange={(event) => setManualRule((current) => ({ ...current, minValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-maximum">Maximum</FieldLabel><TextInput id="style-profile-maximum" inputMode="decimal" value={manualRule.maxValue} onChange={(event) => setManualRule((current) => ({ ...current, maxValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-weight">Weight</FieldLabel><TextInput id="style-profile-weight" inputMode="decimal" value={manualRule.weight} onChange={(event) => setManualRule((current) => ({ ...current, weight: event.target.value }))} /></div><label><input id="style-profile-enabled" type="checkbox" checked={manualRule.enabled} onChange={(event) => setManualRule((current) => ({ ...current, enabled: event.target.checked }))} /> Enabled</label><Button type="submit" disabled={manualMutation.isPending || !name.trim() || (manualRule.enabled && (!manualRule.minValue.trim() || !manualRule.maxValue.trim()))}>Save draft profile</Button></form>{manualMutation.error ? <p role="alert">Profile作成エラー: {displayError(manualMutation.error)}</p> : null}</Card>
+      <Card><h2>Manual profile</h2><form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); if (name.trim() && (!manualRule.enabled || (manualRule.minValue.trim() && manualRule.maxValue.trim()))) manualMutation.mutate(); }}><div className="field-group"><FieldLabel htmlFor="style-profile-name">Name</FieldLabel><TextInput id="style-profile-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="field-group"><FieldLabel htmlFor="style-profile-description">Description</FieldLabel><TextArea id="style-profile-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-target-scope">Target scope</FieldLabel><select id="style-profile-target-scope" className="field-control" value={manualRule.targetScope} onChange={(event) => setManualRule((current) => ({ ...current, targetScope: event.target.value as ManualRuleEditorState["targetScope"] }))}><option value="document">document</option><option value="scene">scene</option><option value="character">character</option></select></div>{manualRule.targetScope === "scene" ? <div className="field-group"><FieldLabel htmlFor="style-profile-selector">Scope selector JSON</FieldLabel><TextArea id="style-profile-selector" value={manualSelectorText} onChange={(event) => setManualSelectorText(event.target.value)} /></div> : null}{manualRule.targetScope === "character" ? <div className="field-group"><FieldLabel htmlFor="style-profile-character-id">Project character ID</FieldLabel><TextInput id="style-profile-character-id" inputMode="numeric" value={manualCharacterId} onChange={(event) => setManualCharacterId(event.target.value)} /></div> : null}<div className="field-group"><FieldLabel htmlFor="style-profile-metric">Metric</FieldLabel><select id="style-profile-metric" className="field-control" value={manualRule.metricName} onChange={(event) => setManualRule((current) => ({ ...current, metricName: event.target.value }))}>{manualMetricOptions.map((metric) => <option key={metric} value={metric}>{metric}</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-preferred">Preferred value</FieldLabel><TextInput id="style-profile-preferred" inputMode="decimal" value={manualRule.preferredValue} onChange={(event) => setManualRule((current) => ({ ...current, preferredValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-minimum">Minimum</FieldLabel><TextInput id="style-profile-minimum" inputMode="decimal" value={manualRule.minValue} onChange={(event) => setManualRule((current) => ({ ...current, minValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-maximum">Maximum</FieldLabel><TextInput id="style-profile-maximum" inputMode="decimal" value={manualRule.maxValue} onChange={(event) => setManualRule((current) => ({ ...current, maxValue: event.target.value }))} /></div><div className="field-group"><FieldLabel htmlFor="style-profile-weight">Weight</FieldLabel><TextInput id="style-profile-weight" inputMode="decimal" value={manualRule.weight} onChange={(event) => setManualRule((current) => ({ ...current, weight: event.target.value }))} /></div><label><input id="style-profile-enabled" type="checkbox" checked={manualRule.enabled} onChange={(event) => setManualRule((current) => ({ ...current, enabled: event.target.checked }))} /> Enabled</label><Button type="submit" disabled={manualMutation.isPending || !name.trim() || (manualRule.enabled && (!manualRule.minValue.trim() || !manualRule.maxValue.trim()))}>Save draft profile</Button></form>{manualMutation.error ? <p role="alert">Profile作成エラー: {displayError(manualMutation.error)}</p> : null}</Card>
       <Card><h2>From corpus</h2><form className="style-analysis-form" onSubmit={(event) => { event.preventDefault(); if (positiveId(corpusId) && selectedAggregateGroup?.statistics.median && selectedAggregateGroup.statistics.p25 && selectedAggregateGroup.statistics.p75 && corpusName.trim()) corpusMutation.mutate(); }}><div className="field-group"><FieldLabel htmlFor="style-profile-corpus-name">Name</FieldLabel><TextInput id="style-profile-corpus-name" value={corpusName} onChange={(event) => setCorpusName(event.target.value)} required /></div><div className="field-group"><FieldLabel htmlFor="style-profile-corpus">Corpus</FieldLabel><select id="style-profile-corpus" className="field-control" value={corpusId} onChange={(event) => { setCorpusId(event.target.value); setAggregateGroupKey(""); }}><option value="">選択してください</option>{corpora.data?.map((corpus) => <option key={corpus.id} value={corpus.id}>{corpus.name} (#{corpus.id})</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-aggregate-group">Aggregate group</FieldLabel><select id="style-profile-aggregate-group" className="field-control" value={aggregateGroupKey} onChange={(event) => setAggregateGroupKey(event.target.value)} disabled={aggregates.isPending || !aggregateGroups.length}><option value="">選択してください</option>{aggregateGroups.map((group) => <option key={group.key} value={group.key}>{group.metricName} v{group.metricVersion} · {group.measurementTargetType} · policy v{group.aggregatePolicyVersion}{group.stale ? " · stale" : ""}</option>)}</select></div><div className="field-group"><FieldLabel htmlFor="style-profile-aggregates">preferred,min,max aggregate IDs</FieldLabel><TextInput id="style-profile-aggregates" value={aggregateIds} readOnly placeholder="Aggregate groupを選択してください" /></div>{selectedAggregateGroup?.warningJson.length ? <p role="alert">Aggregate warnings: {selectedAggregateGroup.warningJson.join(", ")}</p> : null}{selectedAggregateGroup?.stale ? <p role="alert">選択したAggregate groupはstaleです。</p> : null}{aggregates.error ? <p role="alert">Aggregate取得エラー: {displayError(aggregates.error)}</p> : null}<Button type="submit" disabled={corpusMutation.isPending || !positiveId(corpusId) || !selectedAggregateGroup?.statistics.median || !selectedAggregateGroup.statistics.p25 || !selectedAggregateGroup.statistics.p75 || !corpusName.trim()}>Build from exact aggregates</Button></form>{corpusMutation.error ? <p role="alert">Corpus profileエラー: {displayError(corpusMutation.error)}</p> : null}</Card>
       <div className="style-analysis-grid"><Card><h2>Profile list</h2><QueryState loading={profiles.isPending} error={profiles.error}>{profiles.data?.length ? <div className="record-list">{profiles.data.map((profile) => <Link className="record-list-item" key={profile.id} to={`/projects/${encodeURIComponent(projectId)}/style-analysis/profiles/${profile.id}`}><span><strong>{profile.name}</strong><small>{profile.description || "説明なし"}</small></span><StatusBadge value={profile.status} /></Link>)}</div> : <p>Profileがありません。</p>}</QueryState></Card><Card><h2>Profile detail</h2>{profileId === null ? <p>Profileを選択してください。</p> : <QueryState loading={detail.isPending} error={detail.error}>{detail.data ? <ProfileDetailView detail={detail.data} onActivate={(versionNo) => activateMutation.mutate(versionNo)} onArchive={() => { if (window.confirm("このProfileをArchiveしますか？")) archiveMutation.mutate(); }} /> : null}</QueryState>}</Card></div>
     </>
@@ -550,8 +826,9 @@ function LintPage({ projectId }: { projectId: string }) {
   const [selectedTextRevisionId, setSelectedTextRevisionId] = useState("");
   const [selectedStructureRevisionId, setSelectedStructureRevisionId] = useState("");
   const episodes = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, "lint-episodes"), queryFn: () => loadReferenceEpisodes(projectId), retry: false });
+  const documents = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, "documents"), queryFn: () => fetchStyleDocuments(projectId), retry: false });
   const projectDrafts = useQuery({ queryKey: projectQueryKeys.styleAnalysis(projectId, "project-draft-candidates"), queryFn: () => loadProjectDraftCandidates(projectId), retry: false });
-  const documentEntries = useMemo(() => mergeStyleDocumentEntries(episodes.data ?? [], capturedDocuments), [capturedDocuments, episodes.data]);
+  const documentEntries = useMemo(() => mergeStyleDocumentEntries(episodes.data ?? [], capturedDocuments, documents.data ?? []), [capturedDocuments, documents.data, episodes.data]);
   const profiles = useQuery({ queryKey: projectQueryKeys.styleProfiles(projectId), queryFn: () => fetchProfiles(projectId), retry: false });
   const selectedEpisode = documentEntries.find((item) => String(item.documentId) === documentId);
   const selectedProfile = profiles.data?.find((item) => String(item.id) === profileId);
@@ -586,6 +863,7 @@ function LintPage({ projectId }: { projectId: string }) {
         currentStructureKind: result.current_structure_kind,
       };
       setCapturedDocuments(rememberCapturedStyleDocument(projectId, captured));
+      void client.invalidateQueries({ queryKey: projectQueryKeys.styleAnalysis(projectId, "documents") });
       setDocumentId(String(result.document_id));
     },
   });
@@ -646,7 +924,7 @@ function LintSummary({ run, job }: { run: LintRun | null; job: StyleJob | undefi
 }
 
 function FindingCard({ finding, onReview }: { finding: LintFinding; onReview: (status: "acknowledged" | "ignored") => void }) {
-  return <article className="style-finding-card"><div className="section-heading"><h3>{finding.metric_name}: {finding.observed_value}</h3><StatusBadge value={finding.review_status ?? finding.severity} /></div><p>{finding.explanation_code} · expected {finding.expected_min}〜{finding.expected_max} · deviation {finding.deviation}</p><details><summary>Evidence</summary><pre className="json-block">{formatJson(finding.evidence)}</pre></details><div className="form-actions"><Button variant="secondary" onClick={() => onReview("acknowledged")}>Acknowledge</Button><Button variant="ghost" onClick={() => onReview("ignored")}>Ignore</Button></div></article>;
+  return <article className="style-finding-card"><div className="section-heading"><h3>{finding.metric_name}: {finding.observed_value}</h3><StatusBadge value={finding.review_status ?? finding.severity} /></div><p>{finding.explanation_code} · expected {finding.expected_min}〜{finding.expected_max} · deviation {finding.deviation}</p><p className="helper-text">Rule #{finding.rule_id} · scope={finding.target_type} #{finding.target_id}</p><details><summary>Evidence</summary><pre className="json-block">{formatJson(finding.evidence)}</pre></details><div className="form-actions"><Button variant="secondary" onClick={() => onReview("acknowledged")}>Acknowledge</Button><Button variant="ghost" onClick={() => onReview("ignored")}>Ignore</Button></div></article>;
 }
 
 export function StyleAnalysisPage() {

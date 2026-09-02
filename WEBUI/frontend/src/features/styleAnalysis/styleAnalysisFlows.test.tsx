@@ -106,12 +106,19 @@ describe("style analysis WebUI flows", () => {
 
   it("submits selected text and structure revisions and can request a rebuild", async () => {
     let analyzeBody: unknown = null;
+    let overrideBody: unknown = null;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/reference-works")) return new Response(envelope([{ reference_work_id: 7, source_id: 8, source_type: "text", title: "Sample", author_name: null, episode_count: 1, created_at: "now" }]), { status: 200 });
       if (url.endsWith("/reference-works/7/episodes")) return new Response(envelope([{ reference_episode_id: 9, reference_work_id: 7, title: "Episode", order_index: 1, style_document_id: 10, current_text_revision_id: 2, current_structure_revision_id: 3, current_structure_kind: "paragraph", analysis_status: { basic: { state: "not_analyzed" }, semantic: { state: "not_analyzed" } } }]), { status: 200 });
+      if (url.endsWith("/documents/10/revisions")) return new Response(envelope([{ id: 5, document_id: 10, revision_no: 1 }]), { status: 200 });
+      if (url.endsWith("/documents/10/structures")) return new Response(envelope([{ id: 6, document_id: 10, text_revision_id: 5, revision_no: 1, source_kind: "automatic" }]), { status: 200 });
       if (url.endsWith("/documents/10/runs")) return new Response(envelope([{ id: 20, analyzer_id: "basic", analyzer_version: 1, text_revision_id: 5, structure_revision_id: 6, status: "succeeded", started_at: "now", finished_at: "now" }]), { status: 200 });
-      if (url.includes("/documents/10/semantics?structure_revision_id=3")) return new Response(envelope({ structure_revision_id: 3, analysis_status: {}, effective: {}, outputs: [] }), { status: 200 });
+      if (url.includes("/documents/10/semantics?structure_revision_id=6")) return new Response(envelope({ structure_revision_id: 6, analysis_status: {}, effective: {}, outputs: [{ id: 41, annotation_type: "speaker", subject_type: "block", subject_id: 42, value: { speaker_entity_id: 8 }, confidence: 0.9, analysis_run_id: 50, start_cp: 0, end_cp: 3, created_at: "now" }] }), { status: 200 });
+      if (url.endsWith("/overrides") && init?.method === "POST") {
+        overrideBody = JSON.parse(String(init.body));
+        return new Response(envelope({ id: 60 }), { status: 201 });
+      }
       if (url.endsWith("/documents/10/analyze") && init?.method === "POST") {
         analyzeBody = JSON.parse(String(init.body));
         return new Response(envelope({ job_id: 30, job_type: "analyze_document", status: "queued", progress: { current: 0, total: 1 }, result: {}, warnings: [], error_code: null, error_message: null }), { status: 202 });
@@ -133,6 +140,9 @@ describe("style analysis WebUI flows", () => {
     expect(screen.getByRole("tab", { name: "Structure" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Semantics" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Metrics" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Semantics" }));
+    await user.click(await screen.findByRole("button", { name: "Override speaker" }));
+    await waitFor(() => expect(overrideBody).toEqual({ document_id: 10, subject_type: "block", subject_id: 42, field_path: "block.speaker_entity_id", operation: "set", value: 8, base_analysis_run_id: 50, structure_revision_id: 6, note: "SA-H WebUI" }));
   });
 
   it("submits the selected review priority", async () => {
@@ -175,10 +185,10 @@ describe("style analysis WebUI flows", () => {
     await user.click(await screen.findByRole("button", { name: /Reference corpus/ }));
     await user.selectOptions(await screen.findByLabelText("Aggregate target"), "scene");
     await user.clear(screen.getByLabelText("Aggregate filter JSON"));
-    fireEvent.change(screen.getByLabelText("Aggregate filter JSON"), { target: { value: '{"function":["exposition"]}' } });
+    fireEvent.change(screen.getByLabelText("Aggregate filter JSON"), { target: { value: '{"scene":{"function":["daily"]}}' } });
     await user.click(screen.getByLabelText("Metric sentence.len.p90"));
     await user.click(screen.getByRole("button", { name: "Recompute aggregates" }));
-    await waitFor(() => expect(aggregateBody).toEqual({ measurement_target_type: "scene", filter: { function: ["exposition"] }, metric_names: ["sentence.len.p50", "paragraph.len.p50", "paragraph.len.p90"] }));
+    await waitFor(() => expect(aggregateBody).toEqual({ measurement_target_type: "scene", filter: { scene: { function: ["daily"] } }, metric_names: ["sentence.len.p50", "paragraph.len.p50", "paragraph.len.p90"] }));
   });
 
   it("submits a fully specified manual profile rule", async () => {
@@ -206,5 +216,54 @@ describe("style analysis WebUI flows", () => {
     await user.type(screen.getByLabelText("Maximum"), "8.5");
     await user.click(screen.getByRole("button", { name: "Save draft profile" }));
     await waitFor(() => expect(profileBody).toEqual({ name: "Scene profile", description: "", rules: [{ target_scope: "scene", scope_selector: { function: ["exposition"] }, metric_name: "sentence.len.p50", metric_version: 1, preferred_value: 0, min_value: 4.5, max_value: 8.5, weight: 1, enabled: true, severity_policy: "standard" }] }));
+  });
+
+  it("submits semantic entity, term, alias, character-link, and override corrections", async () => {
+    const requests: Array<{ url: string; body: unknown }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/reference-works")) return new Response(envelope([]), { status: 200 });
+      if (url.endsWith("/documents")) return new Response(envelope([{ document_id: 10, kind: "project_episode_draft", current_text_revision_id: 5, current_structure_revision_id: 6, current_structure_kind: "automatic", analysis_status: { basic: { state: "succeeded" }, semantic: { state: "succeeded" } } }]), { status: 200 });
+      if (url.endsWith("/documents/10/revisions")) return new Response(envelope([{ id: 5, document_id: 10, revision_no: 1 }]), { status: 200 });
+      if (url.endsWith("/documents/10/structures")) return new Response(envelope([{ id: 6, document_id: 10, text_revision_id: 5, revision_no: 1, source_kind: "automatic" }]), { status: 200 });
+      if (url.includes("/documents/10/semantics?structure_revision_id=6")) return new Response(envelope({ structure_revision_id: 6, analysis_status: {}, effective: {}, outputs: [] }), { status: 200 });
+      if (["/entities", "/terms", "/overrides"].some((suffix) => url.endsWith(suffix)) || url.includes("/aliases") || url.includes("/character-links/")) {
+        requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+        return new Response(envelope({ id: 101 }), { status: 201 });
+      }
+      return new Response(envelope([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderRoute("/projects/demo/style-analysis/documents/10");
+
+    await user.click(await screen.findByRole("tab", { name: "Semantics" }));
+    expect(await screen.findByRole("heading", { name: "Manual Entity" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Canonical name"), "Alice");
+    await user.click(screen.getByRole("button", { name: "Create Entity" }));
+    await user.type(screen.getByLabelText("Entity ID"), "101");
+    await user.type(screen.getByLabelText("Entity alias"), "A");
+    await user.click(screen.getByRole("button", { name: "Create Entity Alias" }));
+    await user.type(screen.getByLabelText("Canonical label"), "Skyline");
+    await user.click(screen.getByRole("button", { name: "Create Term" }));
+    await user.type(screen.getByLabelText("Term ID"), "202");
+    await user.type(screen.getByLabelText("Term alias"), "SL");
+    await user.click(screen.getByRole("button", { name: "Create Term Alias" }));
+    await user.type(screen.getByLabelText("Project character ID"), "303");
+    await user.type(screen.getByLabelText("Linked Entity ID"), "101");
+    await user.click(screen.getByRole("button", { name: "Link Character" }));
+    await user.type(screen.getByLabelText("Override subject ID"), "404");
+    await user.clear(screen.getByLabelText("Override value JSON"));
+    await user.type(screen.getByLabelText("Override value JSON"), "5");
+    await user.click(screen.getByRole("button", { name: "Save Semantic Override" }));
+
+    await waitFor(() => expect(requests).toEqual([
+      { url: expect.stringContaining("/entities"), body: { document_id: 10, entity_type: "person", canonical_name: "Alice" } },
+      { url: expect.stringContaining("/entities/101/aliases"), body: { alias: "A", alias_kind: "name" } },
+      { url: expect.stringContaining("/terms"), body: { document_id: 10, canonical_label: "Skyline", term_type: "world_term" } },
+      { url: expect.stringContaining("/terms/202/aliases"), body: { alias: "SL" } },
+      { url: expect.stringContaining("/character-links/303"), body: { style_entity_id: 101 } },
+      { url: expect.stringContaining("/overrides"), body: { subject_type: "block", subject_id: 404, field_path: "block.speaker_entity_id", operation: "set", value: 5, document_id: 10, structure_revision_id: 6, note: "SA-H WebUI" } },
+    ]));
   });
 });
