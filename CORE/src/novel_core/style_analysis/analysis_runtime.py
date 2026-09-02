@@ -312,9 +312,11 @@ class AnalysisRuntime:
             )
             if modes[dependency_id] == "subject_partial_allowed":
                 succeeded = tuple(run for run in current if run.status == "succeeded")
-                current = succeeded or tuple(
+                preferred = succeeded or tuple(
                     run for run in current if run.status == "partial"
                 )
+                requested = tuple(run for run in current if run.id == dependency_run_id)
+                current = requested or preferred
             if not current or current[0].id != dependency_run_id:
                 return False
         return True

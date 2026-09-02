@@ -349,6 +349,7 @@ class CurrentRunResolver:
         elif analyzer_id == "block-semantic-classifier":
             config = {"block_semantic_taxonomy_version": 1}
         elif analyzer_id == "pov-classifier":
+            config = {"pov_taxonomy_version": 1}
             entity = self._dependency(dependencies, "entity-resolver")
             state = {
                 "mention_resolution": self.state._mention_resolution_state(

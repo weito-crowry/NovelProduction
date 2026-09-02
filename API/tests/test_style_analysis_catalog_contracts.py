@@ -5,6 +5,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from novel_core.style_analysis import (
+    current_run_resolver as current_run_resolver_module,
+)
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.runtime_models import JobRecord
@@ -97,6 +100,95 @@ def test_partial_terminal_status_is_limited_to_analysis_jobs(
         job_type="analyze_document",
     )
     assert service.set_status("demo", document_id, "partial").status == "partial"
+
+
+def test_current_semantic_metric_is_resolved_for_metrics_api(
+    data_root: Path,
+) -> None:
+    connection, document_id, text_revision_id, result = _create_reference_analysis(
+        data_root
+    )
+    try:
+        assert result.structure_revision_id is not None
+        catalog = StyleAnalysisCatalogService(connection)
+        selected = catalog._select_runs(
+            document_id,
+            text_revision_id,
+            result.structure_revision_id,
+            ("style-metrics-semantic",),
+        )
+        assert tuple(run.analyzer_id for run in selected) == ("style-metrics-semantic",)
+
+        metric_run_id = connection.execute(
+            "SELECT id FROM style_analysis_runs WHERE document_id = ? "
+            "AND analyzer_id = 'style-metrics-semantic'",
+            (document_id,),
+        ).fetchone()[0]
+        metrics = catalog.list_metrics(document_id, result.structure_revision_id)
+        assert metric_run_id in metrics["analysis_run_ids"]
+        assert any(
+            item["analysis_run_id"] == metric_run_id for item in metrics["measurements"]
+        )
+    finally:
+        connection.close()
+
+
+def test_semantic_status_requires_style_metric_current(data_root: Path) -> None:
+    connection, document_id, text_revision_id, result = _create_reference_analysis(
+        data_root
+    )
+    try:
+        connection.execute(
+            "DELETE FROM style_analysis_runs WHERE document_id = ? "
+            "AND analyzer_id = 'style-metrics-semantic'",
+            (document_id,),
+        )
+        connection.commit()
+
+        status = StyleAnalysisCatalogService(connection).analysis_status(
+            document_id, text_revision_id, result.structure_revision_id
+        )
+        assert status["semantic"]["state"] == "partial"
+    finally:
+        connection.close()
+
+
+def test_semantic_status_reports_partial_style_metric(data_root: Path) -> None:
+    connection, document_id, text_revision_id, result = _create_reference_analysis(
+        data_root
+    )
+    try:
+        connection.execute(
+            "UPDATE style_analysis_runs SET status = 'partial' "
+            "WHERE document_id = ? AND analyzer_id = 'style-metrics-semantic'",
+            (document_id,),
+        )
+        connection.commit()
+
+        status = StyleAnalysisCatalogService(connection).analysis_status(
+            document_id, text_revision_id, result.structure_revision_id
+        )
+        assert status["semantic"] == {
+            "state": "partial",
+            "reasons": ["SEMANTIC_BRANCH_PARTIAL"],
+        }
+    finally:
+        connection.close()
+
+
+def test_semantic_status_is_current_when_all_required_runs_succeed(
+    data_root: Path,
+) -> None:
+    connection, document_id, text_revision_id, result = _create_reference_analysis(
+        data_root
+    )
+    try:
+        status = StyleAnalysisCatalogService(connection).analysis_status(
+            document_id, text_revision_id, result.structure_revision_id
+        )
+        assert status["semantic"] == {"state": "current", "reasons": []}
+    finally:
+        connection.close()
 
 
 def test_semantics_selects_current_partial_run_over_historical_success(
@@ -590,6 +682,16 @@ def test_analyzer_version_change_marks_semantic_stale(
         definition = ANALYZERS_BY_ID["scene-semantic-classifier"]
         monkeypatch.setattr(
             catalog_current_module,
+            "ANALYZERS_BY_ID",
+            {
+                **ANALYZERS_BY_ID,
+                "scene-semantic-classifier": replace(
+                    definition, version=definition.version + 1
+                ),
+            },
+        )
+        monkeypatch.setattr(
+            current_run_resolver_module,
             "ANALYZERS_BY_ID",
             {
                 **ANALYZERS_BY_ID,

@@ -8,6 +8,9 @@ from novel_core.style_analysis.analysis_runtime import (
     AnalysisRuntime,
     execution_fingerprint,
 )
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
+from novel_core.style_analysis.fingerprints import fingerprint_json
+from novel_core.style_analysis.model_prompts import get_prompt
 from novel_core.style_analysis.runtime_models import (
     AnalyzerDefinition,
     DependencyRunExpectation,
@@ -15,6 +18,73 @@ from novel_core.style_analysis.runtime_models import (
 from novel_core.style_analysis.runtime_registry import ANALYZERS_BY_ID
 
 pytest_plugins = ("test_style_analysis_runtime",)
+
+
+def test_current_run_resolver_matches_pov_execution_config(
+    runtime_context: tuple[
+        sqlite3.Connection, AnalysisRunRepository, AnalysisRuntime, int, int, int
+    ],
+) -> None:
+    connection, repository, _runtime, document_id, text_id, structure_id = (
+        runtime_context
+    )
+    mention_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_id,
+        structure_revision_id=structure_id,
+        analyzer_id="entity-mention-extractor",
+        config_json="{}",
+        prompt_id="style.entity_mentions",
+        prompt_version=get_prompt("style.entity_mentions").version,
+    )
+    resolver = CurrentRunResolver(connection)
+    mention_run = repository.get_run(mention_id)
+    assert mention_run is not None
+    _config, entity_state, entity_policy = resolver._inputs(
+        document_id,
+        text_id,
+        structure_id,
+        "entity-resolver",
+        (mention_run,),
+    )
+    entity_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_id,
+        structure_revision_id=structure_id,
+        analyzer_id="entity-resolver",
+        config_json="{}",
+        state_fingerprint=entity_state,
+        policy_input_fingerprint=entity_policy,
+        dependency_runs=(("entity-mention-extractor", mention_id),),
+        prompt_id="style.entity_resolution",
+        prompt_version=get_prompt("style.entity_resolution").version,
+    )
+    pov_state = fingerprint_json(
+        {
+            "mention_resolution": resolver.state._mention_resolution_state(
+                document_id, structure_id, entity_id
+            )
+        }
+    )
+    pov_id = insert_run(
+        repository,
+        document_id=document_id,
+        text_revision_id=text_id,
+        structure_revision_id=structure_id,
+        analyzer_id="pov-classifier",
+        config_json='{"pov_taxonomy_version":1}',
+        state_fingerprint=pov_state,
+        dependency_runs=(("entity-resolver", entity_id),),
+        prompt_id="style.pov",
+        prompt_version=get_prompt("style.pov").version,
+    )
+
+    selected = resolver.resolve(document_id, text_id, structure_id, "pov-classifier")
+
+    assert selected is not None
+    assert selected.id == pov_id
 
 
 @pytest.mark.parametrize(

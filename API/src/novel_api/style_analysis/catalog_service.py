@@ -6,10 +6,8 @@ from typing import Any, cast
 
 from novel_core.style_analysis.aggregate_repository import MeasurementRepository
 from novel_core.style_analysis.aggregate_service import AggregateService
-from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.analysis_repository import AnalysisRunRepository
 from novel_core.style_analysis.entity_service import EntityService
-from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
 from novel_core.style_analysis.metrics import BASIC_METRIC_DEFINITIONS
 from novel_core.style_analysis.profile_service import ProfileService
 from novel_core.style_analysis.review_service import ReviewService
@@ -48,6 +46,7 @@ _SA_D_ANALYZERS = (
     "scene-semantic-classifier",
     "block-semantic-classifier",
     "pov-classifier",
+    "style-metrics-semantic",
 )
 
 
@@ -445,6 +444,7 @@ class StyleAnalysisCatalogService(
             "scene-semantic-classifier",
             "block-semantic-classifier",
             "pov-classifier",
+            "style-metrics-semantic",
         }
         semantic_history = tuple(run for run in runs if run.analyzer_id in semantic_ids)
         current_semantic = (
@@ -459,7 +459,10 @@ class StyleAnalysisCatalogService(
         )
         current_by_analyzer = {run.analyzer_id: run for run in current_semantic}
         state_current = self._semantic_runs_have_current_inputs(
-            document_id, structure_revision_id, current_by_analyzer
+            document_id,
+            text_revision_id,
+            structure_revision_id,
+            current_by_analyzer,
         )
         lineage_changed = resolution_state_changed(
             self,
@@ -510,58 +513,28 @@ class StyleAnalysisCatalogService(
     def _semantic_runs_have_current_inputs(
         self,
         document_id: int,
+        text_revision_id: int | None,
         structure_revision_id: int | None,
         runs: dict[str, AnalysisRunRecord],
     ) -> bool:
-        if structure_revision_id is None:
+        if text_revision_id is None or structure_revision_id is None:
             return False
-        orchestrator = DocumentAnalysisOrchestrator(
-            cast(Any, self._connection),
-            model_client=None,
-            model_provider=None,
-            model_id=None,
+        from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
+
+        resolver = CurrentRunResolver(cast(Any, self._connection))
+        return all(
+            (
+                resolved := resolver.resolve(
+                    document_id,
+                    text_revision_id,
+                    structure_revision_id,
+                    run.analyzer_id,
+                )
+            )
+            is not None
+            and resolved.id == run.id
+            for run in runs.values()
         )
-        entity_run = runs.get("entity-resolver")
-        for run in runs.values():
-            expected_config: object = {}
-            if run.analyzer_id == "scene-semantic-classifier":
-                expected_config = {"scene_taxonomy_version": 1}
-            elif run.analyzer_id == "block-semantic-classifier":
-                expected_config = {"block_semantic_taxonomy_version": 1}
-            elif run.analyzer_id == "pov-classifier":
-                expected_config = {"pov_taxonomy_version": 1}
-            if run.config_json != _canonical_json(expected_config):
-                return False
-            if run.analyzer_id == "entity-resolver":
-                expected_state = {
-                    "scope": orchestrator.entities._scope(document_id),
-                    "entity_registry_state": orchestrator._entity_registry_state(
-                        document_id
-                    ),
-                }
-            elif run.analyzer_id == "term-resolver":
-                expected_state = {
-                    "scope": orchestrator.terms._scope(document_id),
-                    "term_registry_state": orchestrator._term_registry_state(
-                        document_id
-                    ),
-                }
-            elif run.analyzer_id in {"speaker-attribution", "pov-classifier"}:
-                if entity_run is None:
-                    return False
-                expected_state = {
-                    "mention_resolution": orchestrator._mention_resolution_state(
-                        document_id, structure_revision_id, entity_run.id
-                    )
-                }
-            else:
-                expected_state = None
-            if expected_state is not None:
-                if run.state_fingerprint != fingerprint_json(
-                    cast(JsonValue, expected_state)
-                ):
-                    return False
-        return True
 
     @staticmethod
     def _run_has_current_inputs(run: AnalysisRunRecord, document_id: int) -> bool:

@@ -4,12 +4,11 @@ import json
 from typing import Any, cast
 
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
-from novel_core.style_analysis.analysis_runtime import AnalysisRuntime
+from novel_core.style_analysis.current_run_resolver import CurrentRunResolver
 from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
 from novel_core.style_analysis.model_prompts import get_prompt
 from novel_core.style_analysis.runtime_models import (
     AnalysisRunRecord,
-    DependencyRunExpectation,
 )
 from novel_core.style_analysis.runtime_registry import ANALYZERS_BY_ID
 
@@ -52,6 +51,15 @@ def config_for_analyzer(analyzer_id: str) -> JsonValue:
         return {"block_semantic_taxonomy_version": 1}
     if analyzer_id == "pov-classifier":
         return {"pov_taxonomy_version": 1}
+    if analyzer_id == "style-metrics-semantic":
+        from novel_core.style_analysis.metrics import SEMANTIC_METRIC_DEFINITIONS
+
+        return {
+            "metric_versions": {
+                name: definition.version
+                for name, definition in sorted(SEMANTIC_METRIC_DEFINITIONS.items())
+            }
+        }
     return {}
 
 
@@ -92,6 +100,23 @@ def state_for_analyzer(
                 )
             },
         )
+    if analyzer_id == "style-metrics-semantic":
+        term_run = current.get("term-resolver")
+        resolver = CurrentRunResolver(orchestrator.connection, orchestrator.policy)
+        return cast(
+            JsonValue,
+            {
+                "metric_effective_state": orchestrator._metric_effective_state(
+                    document_id, structure_revision_id
+                ),
+                "term_first_appearance": resolver.term_prefix_state(
+                    document_id,
+                    _text_revision_id(orchestrator, document_id, structure_revision_id),
+                    structure_revision_id,
+                    term_run.id if term_run is not None else None,
+                ),
+            },
+        )
     return None
 
 
@@ -102,83 +127,31 @@ def select_current_runs(
     structure_revision_id: int,
     analyzer_ids: tuple[str, ...],
 ) -> tuple[AnalysisRunRecord, ...]:
-    orchestrator = DocumentAnalysisOrchestrator(
-        catalog._connection,
-        model_client=None,
-        model_provider=None,
-        model_id=None,
-    )
-    runtime = AnalysisRuntime(catalog._runs)
-    current: dict[str, AnalysisRunRecord] = {}
-    for analyzer_id in analyzer_ids:
-        definition = ANALYZERS_BY_ID.get(analyzer_id)
-        if definition is None:
-            continue
-        dependencies: list[tuple[str, int]] = []
-        expectations: list[DependencyRunExpectation] = []
-        dependencies_ready = True
-        for dependency in definition.dependencies:
-            selected_dependency = current.get(dependency.analyzer_id)
-            if selected_dependency is None or (
-                dependency.mode == "complete"
-                and selected_dependency.status != "succeeded"
-            ):
-                dependencies_ready = False
-                break
-            dependencies.append((dependency.analyzer_id, selected_dependency.id))
-            expectations.append(
-                DependencyRunExpectation(
-                    analyzer_id=dependency.analyzer_id,
-                    run_id=selected_dependency.id,
-                    config_json=selected_dependency.config_json,
-                    state_fingerprint=selected_dependency.state_fingerprint,
-                    policy_input_fingerprint=selected_dependency.policy_input_fingerprint,
-                    prompt_id=selected_dependency.prompt_id,
-                    prompt_version=selected_dependency.prompt_version,
-                )
-            )
-        if not dependencies_ready:
-            continue
-        config_json = _canonical_json(config_for_analyzer(analyzer_id))
-        state = state_for_analyzer(
-            orchestrator,
-            analyzer_id,
-            document_id,
-            structure_revision_id,
-            current,
-        )
-        state_fingerprint = None if state is None else fingerprint_json(state)
-        policy_input_fingerprint = (
-            fingerprint_json(
-                cast(
-                    JsonValue,
-                    orchestrator.policy.input_values(definition.policy_inputs),
-                )
-            )
-            if definition.policy_inputs
-            else None
-        )
-        prompt_id = PROMPT_IDS.get(analyzer_id)
-        prompt_version = None if prompt_id is None else get_prompt(prompt_id).version
-        selected = runtime.resolve_current_run(
-            document_id=document_id,
-            analyzer_id=analyzer_id,
-            text_revision_id=text_revision_id,
-            structure_revision_id=structure_revision_id,
-            analyzer_version=definition.version,
-            config_json=config_json,
-            state_fingerprint=state_fingerprint,
-            policy_input_fingerprint=policy_input_fingerprint,
-            dependency_runs=tuple(dependencies),
-            dependency_expectations=tuple(expectations),
-            prompt_id=prompt_id,
-            prompt_version=prompt_version,
-        )
-        if selected is not None:
-            current[analyzer_id] = selected
+    resolver = CurrentRunResolver(catalog._connection)
     return tuple(
-        current[analyzer_id] for analyzer_id in analyzer_ids if analyzer_id in current
+        run
+        for analyzer_id in analyzer_ids
+        if (
+            run := resolver.resolve(
+                document_id, text_revision_id, structure_revision_id, analyzer_id
+            )
+        )
+        is not None
     )
+
+
+def _text_revision_id(
+    orchestrator: DocumentAnalysisOrchestrator,
+    document_id: int,
+    structure_revision_id: int,
+) -> int:
+    row = orchestrator.connection.execute(
+        "SELECT text_revision_id FROM style_structure_revisions WHERE id = ?",
+        (structure_revision_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("STRUCTURE_NOT_FOUND")
+    return int(row[0])
 
 
 def resolution_state_changed(

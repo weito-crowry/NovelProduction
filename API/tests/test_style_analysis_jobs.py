@@ -237,7 +237,7 @@ def test_fresh_reference_work_full_analysis_does_not_nest_transactions(
             "analysis_status",
             "inference_targets",
         } <= semantics.keys()
-        assert len(semantics["analysis_run_ids"]) == 9
+        assert len(semantics["analysis_run_ids"]) == 10
         assert all(
             output["analysis_run_id"] in semantics["analysis_run_ids"]
             for output in semantics["raw"]
