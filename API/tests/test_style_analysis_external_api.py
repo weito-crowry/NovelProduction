@@ -6,8 +6,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from novel_core.errors import AnalysisExecutionConflictError
 from novel_core.style_analysis.analysis_orchestrator import DocumentAnalysisOrchestrator
 from novel_core.style_analysis.structure_service import StyleStructureService
+
+from novel_api.style_analysis.job_service import StyleJobService
 
 
 def _response_for_contract(contract_id: str) -> dict[str, object]:
@@ -332,3 +335,74 @@ def test_external_task_loop_reopens_and_reads_terminal_results(
     )
     assert semantics.status_code == 200
     assert metrics.status_code == 200
+
+
+def test_external_submit_fails_closed_on_runtime_contract_drift(
+    client: TestClient, data_root: Path
+) -> None:
+    document_id, text_revision_id = _document(client, data_root)
+    base = "/api/v1/projects/external/style-analysis"
+    started = client.post(
+        f"{base}/external-sessions",
+        json={
+            "target": {
+                "kind": "document",
+                "document_id": document_id,
+                "text_revision_id": text_revision_id,
+            },
+            "executor_model_id": "gpt-test",
+        },
+    )
+    assert started.status_code == 201
+    snapshot = started.json()["data"]
+    task = snapshot["task"]
+    connection = sqlite3.connect(data_root / "external" / "story.db")
+    try:
+        connection.execute(
+            "UPDATE style_external_analysis_sessions SET "
+            "runtime_contract_fingerprint = ? WHERE id = ?",
+            ("b" * 64, snapshot["session_id"]),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    submitted = client.post(
+        f"{base}/external-sessions/{snapshot['session_id']}/tasks/"
+        f"{task['task_id']}/submit",
+        json={
+            "expected_task_version": task["task_version"],
+            "executor_model_id": "gpt-test",
+            "response": {"mentions": []},
+        },
+    )
+    assert submitted.status_code == 200
+    assert submitted.json()["data"]["status"] == "failed"
+    assert submitted.json()["data"]["error_code"] == (
+        "EXTERNAL_ANALYSIS_CONTRACT_CHANGED"
+    )
+
+
+def test_external_document_session_conflicts_with_internal_job_enqueue(
+    client: TestClient, data_root: Path
+) -> None:
+    document_id, text_revision_id = _document(client, data_root)
+    base = "/api/v1/projects/external/style-analysis"
+    started = client.post(
+        f"{base}/external-sessions",
+        json={
+            "target": {
+                "kind": "document",
+                "document_id": document_id,
+                "text_revision_id": text_revision_id,
+            },
+            "executor_model_id": "gpt-test",
+        },
+    )
+    assert started.status_code == 201
+    with pytest.raises(AnalysisExecutionConflictError):
+        StyleJobService(data_root=data_root).enqueue(
+            "external",
+            "analyze_document",
+            {"document_id": document_id, "text_revision_id": text_revision_id},
+        )
