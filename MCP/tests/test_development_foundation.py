@@ -24,6 +24,7 @@ def test_development_foundation_files_and_constraints_exist() -> None:
         "006_style_analysis_foundation.sql",
         "007_style_analysis_semantics.sql",
         "008_style_analysis_corpus_profile.sql",
+        "009_style_analysis_external_agent.sql",
     ]
     assert not (mcp_root / "migrations").exists()
 

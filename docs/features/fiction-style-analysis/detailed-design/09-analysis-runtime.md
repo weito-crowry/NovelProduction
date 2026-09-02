@@ -318,6 +318,24 @@ Scene Semantic失敗はMetric直接非依存でもFull Jobはpartial。
 
 Deterministic DocumentはSemantic BranchをScheduleしない。Structure + Basic成功なら`succeeded`、それ以前のFailureは`failed`。
 
+## 15. v1.1 SA-I Resumable / External Execution
+
+v1.0 の Orchestrator は内部で `ResumableDocumentAnalysisEngine` を loop する。
+Engine は `PreparedModelCall` を一件だけ返し、provider を呼ばず、transaction の
+commit/rollback を所有しない。Internal driver は既存 ModelClient と safe point、
+External driver は API outer transaction と persistent Task を注入する。同一の
+Analyzer primitive、validator、reducer、apply を両方の実行経路で使用する。
+
+Full stage order は `structure_prepare` から `finalize` まで15段階、cursor は
+schema_version 1 の JSON である。Pending request は Task row、accepted response
+は immutable history として扱い、restart 後は sequence/call_key 順に読み戻して
+既存 reduction を継続する。`run_observer(created|reused)` は AnalysisRun と
+External Session link を同じ outer transaction で作る。
+
+SA-I runtime contract/policy/state drift、External Session/Task lifecycle、worker
+recovery exclusion、conflict checker の詳細は [16](16-external-agent-mcp.md) を
+参照する。
+
 ## 15. Reference Work Job
 
 `analyze_reference_work` はJob開始時にReferenceEpisode order、StyleDocument ID、Current TextRevision IDをSnapshotする。

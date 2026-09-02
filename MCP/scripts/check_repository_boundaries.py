@@ -4,7 +4,7 @@ import ast
 from collections.abc import Collection
 from pathlib import Path
 
-EXPECTED_MCP_TOOL_COUNT = 59
+EXPECTED_MCP_TOOL_COUNT = 65
 API_FORBIDDEN_IMPORT_ROOTS = frozenset({"mcp", "novel_mcp"})
 CORE_FORBIDDEN_IMPORT_ROOTS = frozenset(
     {"api", "fastapi", "mcp", "novel_api", "novel_mcp"}
@@ -151,6 +151,10 @@ def _static_mcp_inventory(
         "phase1": ("tool_descriptions.py", "TOOL_DESCRIPTIONS"),
         "phase2": ("phase2_tool_descriptions.py", "PHASE2_TOOL_DESCRIPTIONS"),
         "phase3": ("phase3_tool_descriptions.py", "PHASE3_TOOL_DESCRIPTIONS"),
+        "style_analysis": (
+            "style_analysis_tool_descriptions.py",
+            "STYLE_ANALYSIS_TOOL_DESCRIPTIONS",
+        ),
     }
     description_root = mcp_root / "src" / "novel_mcp"
     inventories = {
@@ -162,6 +166,7 @@ def _static_mcp_inventory(
         "phase1": "phase1_tools.py",
         "phase2": "phase2_tools.py",
         "phase3": "phase3_tools.py",
+        "style_analysis": "style_analysis_tools.py",
     }
     for group_name, filename in tool_roots.items():
         tree = ast.parse((description_root / filename).read_text(encoding="utf-8"))
@@ -248,6 +253,7 @@ def main() -> int:
             PHASE2_TOOL_NAMES,
             PHASE3_TOOL_NAMES,
             PROJECT_TOOL_NAMES,
+            STYLE_ANALYSIS_TOOL_NAMES,
             create_server,
         )
     except ModuleNotFoundError as exc:
@@ -277,6 +283,7 @@ def main() -> int:
             "phase1": PHASE1_TOOL_NAMES,
             "phase2": PHASE2_TOOL_NAMES,
             "phase3": PHASE3_TOOL_NAMES,
+            "style_analysis": STYLE_ANALYSIS_TOOL_NAMES,
         }
     expected_required_project_id_tools = set(all_tool_names) - {
         "project_list",
@@ -295,6 +302,7 @@ def main() -> int:
         "phase1": (group_names["phase1"], 23),
         "phase2": (group_names["phase2"], 27),
         "phase3": (group_names["phase3"], 5),
+        "style_analysis": (group_names["style_analysis"], 6),
     }
     for group_name, (names, expected_count) in expected_group_counts.items():
         if len(names) != expected_count:
@@ -312,7 +320,7 @@ def main() -> int:
         for failure in failures:
             print(failure)
         return 1
-    print("repository boundary checks passed; MCP tool count: 59")
+    print("repository boundary checks passed; MCP tool count: 65")
     return 0
 
 

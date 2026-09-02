@@ -18,6 +18,10 @@ from novel_mcp.phase3_tool_descriptions import PHASE3_TOOL_DESCRIPTIONS
 from novel_mcp.phase3_tools import register_phase3_tools
 from novel_mcp.project_tool_descriptions import PROJECT_TOOL_DESCRIPTIONS
 from novel_mcp.project_tools import register_project_tools
+from novel_mcp.style_analysis_tool_descriptions import (
+    STYLE_ANALYSIS_TOOL_DESCRIPTIONS,
+)
+from novel_mcp.style_analysis_tools import register_style_analysis_tools
 from novel_mcp.tool_descriptions import TOOL_DESCRIPTIONS
 from novel_mcp.tool_support import Handler
 
@@ -25,8 +29,13 @@ PROJECT_TOOL_NAMES = frozenset(PROJECT_TOOL_DESCRIPTIONS)
 PHASE1_TOOL_NAMES = frozenset(TOOL_DESCRIPTIONS)
 PHASE2_TOOL_NAMES = frozenset(PHASE2_TOOL_DESCRIPTIONS)
 PHASE3_TOOL_NAMES = frozenset(PHASE3_TOOL_DESCRIPTIONS)
+STYLE_ANALYSIS_TOOL_NAMES = frozenset(STYLE_ANALYSIS_TOOL_DESCRIPTIONS)
 ALL_TOOL_NAMES = (
-    PROJECT_TOOL_NAMES | PHASE1_TOOL_NAMES | PHASE2_TOOL_NAMES | PHASE3_TOOL_NAMES
+    PROJECT_TOOL_NAMES
+    | PHASE1_TOOL_NAMES
+    | PHASE2_TOOL_NAMES
+    | PHASE3_TOOL_NAMES
+    | STYLE_ANALYSIS_TOOL_NAMES
 )
 
 
@@ -60,6 +69,7 @@ def create_server(
         **TOOL_DESCRIPTIONS,
         **PHASE2_TOOL_DESCRIPTIONS,
         **PHASE3_TOOL_DESCRIPTIONS,
+        **STYLE_ANALYSIS_TOOL_DESCRIPTIONS,
     }
 
     def register(
@@ -82,6 +92,7 @@ def create_server(
         register_phase1_tools(client, register)
         register_phase2_tools(client, register)
         register_phase3_tools(client, register)
+        register_style_analysis_tools(client, register)
     except Exception:
         asyncio.run(server.aclose())
         raise

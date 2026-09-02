@@ -14,6 +14,7 @@ from novel_mcp.mcp_server import (
     PHASE2_TOOL_NAMES,
     PHASE3_TOOL_NAMES,
     PROJECT_TOOL_NAMES,
+    STYLE_ANALYSIS_TOOL_NAMES,
     create_server,
     parser,
 )
@@ -23,7 +24,7 @@ def _run(coroutine: Any) -> Any:
     return asyncio.run(coroutine)
 
 
-def test_http_server_owns_no_database_and_registers_59_tools() -> None:
+def test_http_server_owns_no_database_and_registers_65_tools() -> None:
     async def transport(_: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"project_id": "p", "data": {}})
 
@@ -32,11 +33,12 @@ def test_http_server_owns_no_database_and_registers_59_tools() -> None:
         transport=httpx.MockTransport(transport),
     )
     try:
-        assert len(ALL_TOOL_NAMES) == 59
+        assert len(ALL_TOOL_NAMES) == 65
         assert len(PROJECT_TOOL_NAMES) == 4
         assert len(PHASE1_TOOL_NAMES) == 23
         assert len(PHASE2_TOOL_NAMES) == 27
         assert len(PHASE3_TOOL_NAMES) == 5
+        assert len(STYLE_ANALYSIS_TOOL_NAMES) == 6
         assert "project_select" not in server.tool_names()
         tools = {tool.name: tool for tool in _run(server.list_tools())}
         assert set(tools) == ALL_TOOL_NAMES
