@@ -458,6 +458,14 @@ class StyleAnalysisCatalogService(
             else ()
         )
         current_by_analyzer = {run.analyzer_id: run for run in current_semantic}
+        historical_revision_changed = any(
+            run.status in {"succeeded", "partial"}
+            and (
+                run.text_revision_id != text_revision_id
+                or run.structure_revision_id != structure_revision_id
+            )
+            for run in semantic_history
+        )
         state_current = self._semantic_runs_have_current_inputs(
             document_id,
             text_revision_id,
@@ -478,6 +486,8 @@ class StyleAnalysisCatalogService(
             and state_current
         ):
             semantic = {"state": "current", "reasons": []}
+        elif historical_revision_changed:
+            semantic = {"state": "stale", "reasons": ["CURRENT_REVISION_CHANGED"]}
         elif current_by_analyzer and (not state_current or lineage_changed):
             semantic = {"state": "stale", "reasons": ["CURRENT_RESOLUTION_CHANGED"]}
         elif any(
