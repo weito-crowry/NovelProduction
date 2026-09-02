@@ -5,7 +5,9 @@ from typing import Any, cast
 from novel_core.style_analysis.analyzers.block_semantics import classify_narration_block
 from novel_core.style_analysis.analyzers.entity_mentions import extract_entity_mentions
 from novel_core.style_analysis.analyzers.entity_resolution import resolve_entity_mention
-from novel_core.style_analysis.analyzers.pov_classifier import classify_pov
+from novel_core.style_analysis.analyzers.pov_classifier import (
+    validate_pov_response,
+)
 from novel_core.style_analysis.analyzers.scene_boundary import detect_scene_boundaries
 from novel_core.style_analysis.analyzers.scene_classifier import _reduce_labels
 from novel_core.style_analysis.analyzers.speaker_attribution import attribute_speaker
@@ -86,7 +88,7 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
             self._apply_entity_resolution(state, response)
         elif stage == "speaker_attribution":
             self._apply_speaker(state, response)
-        elif stage == "pov":
+        elif stage == "pov" and state.get("stage_substage") == "reduce":
             self._apply_pov(state, response)
         elif stage == "term_resolver":
             self._apply_term_resolution(state, response)
@@ -207,6 +209,8 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
                         ),
                         "term_type_candidate": term_item.term_type_candidate,
                         "novelty_candidate": term_item.novelty_candidate,
+                        "start_in_block": term_item.start_in_block,
+                        "end_in_block": term_item.end_in_block,
                     },
                     confidence=term_item.confidence,
                     analysis_run_id=run_id,
@@ -329,7 +333,8 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
             )
         else:
             contract_id = self._contract_for_completion(stage, state)
-            ResponseContractRegistry.get(contract_id).validator(completed.response)
+            payload = cast(JsonObject, state.get("current_payload", {}))
+            ResponseContractRegistry.validate(contract_id, completed.response, payload)
             try:
                 self._apply_model_response(state, completed.response)
             except Exception as exc:
@@ -385,7 +390,12 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
             state["subject_index"] = int(state.get("subject_index", 0)) + 1
             state["stage_substage"] = "primary"
             return
-        if stage in {"entity_mentions", "term_candidates", "scene_semantics"}:
+        if stage in {
+            "entity_mentions",
+            "term_candidates",
+            "scene_semantics",
+            "pov",
+        }:
             self._advance_scene_chunks(state, response, boundary=False)
             return
         state["subject_index"] = int(state.get("subject_index", 0)) + 1
@@ -395,13 +405,16 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
         self, state: dict[str, Any], response: JsonObject | None, *, boundary: bool
     ) -> None:
         if response is not None and not (
-            state.get("stage") == "scene_semantics"
+            state.get("stage") in {"scene_semantics", "pov"}
             and state.get("stage_substage") == "reduce"
         ):
             values = cast(list[JsonValue], state.setdefault("stage_responses", []))
             values.append(cast(JsonValue, response))
         stage = cast(str, state["stage"])
-        if stage == "scene_semantics" and state.get("stage_substage") == "reduce":
+        if (
+            stage in {"scene_semantics", "pov"}
+            and state.get("stage_substage") == "reduce"
+        ):
             state["stage_substage"] = "classify"
 
             state["stage_responses"] = []
@@ -415,7 +428,7 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
             preset=str(state.get("preset", "full")),
         )
         spec = self._current_spec(stage, request, state)
-        if spec is None and stage == "scene_semantics":
+        if spec is None and stage in {"scene_semantics", "pov"}:
             responses = state.get("stage_responses", [])
             if len(cast(list[object], responses)) > 1:
                 state["stage_substage"] = "reduce"
@@ -426,28 +439,34 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
                 self._apply_scene_chunk_results(state)
             state["subject_index"] = int(state.get("subject_index", 0)) + 1
             state["chunk_index"] = 0
-            if stage == "scene_semantics":
+            if stage in {"scene_semantics", "pov"}:
                 responses = cast(list[JsonValue], state.get("stage_responses", []))
                 if responses:
-                    self._apply_scene_semantics(state, cast(JsonObject, responses[-1]))
+                    if stage == "scene_semantics":
+                        self._apply_scene_semantics(
+                            state, cast(JsonObject, responses[-1])
+                        )
+                    else:
+                        self._apply_pov(state, cast(JsonObject, responses[-1]))
             state["stage_responses"] = []
             state["stage_substage"] = "classify"
 
     def _apply_pov(self, state: dict[str, Any], response: JsonObject) -> None:
         payload = cast(JsonObject, state.get("current_payload", {}))
-        value = classify_pov(
-            scene_id=_int_value(payload["scene_id"]),
-            blocks=cast(list[JsonObject], payload.get("blocks", [])),
-            people=cast(list[JsonObject], payload.get("people", [])),
-            client=_FixedResponseClient(response),
-        )
+        people = payload.get("people")
+        if not isinstance(people, list):
+            raise ValueError("POV_PEOPLE_REQUIRED")
+        value = validate_pov_response(response, cast(list[JsonObject], people))
         run_id = self._stage_run(state, "pov")
         if run_id is None:
             raise ValueError("POV_RUN_NOT_FOUND")
+        scene_id = state.get("stage_scene_id")
+        if not isinstance(scene_id, int):
+            raise ValueError("POV_STAGE_ID_NOT_FOUND")
         self.semantic.insert_raw(
             annotation_type="scene.pov",
             subject_type="scene",
-            subject_id=_int_value(payload["scene_id"]),
+            subject_id=scene_id,
             value=value,
             confidence=validate_confidence(value["confidence"]),
             analysis_run_id=run_id,
@@ -456,8 +475,9 @@ class ResumableSemanticStagesMixin(ResumableStageHost):
     def _apply_scene_semantics(
         self, state: dict[str, Any], response: JsonObject
     ) -> None:
-        payload = cast(JsonObject, state.get("current_payload", {}))
-        scene_id = _int_value(payload.get("scene_id", 0))
+        scene_id = state.get("stage_scene_id")
+        if not isinstance(scene_id, int):
+            raise ValueError("SCENE_STAGE_ID_NOT_FOUND")
         run_id = self._stage_run(state, "scene_semantics")
         if run_id is None:
             raise ValueError("SCENE_SEMANTIC_RUN_NOT_FOUND")

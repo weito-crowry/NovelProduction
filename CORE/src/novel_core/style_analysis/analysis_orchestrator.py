@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from typing import cast
 
 from novel_core.errors import AnalysisCancelledError
@@ -226,9 +227,14 @@ class DocumentAnalysisOrchestrator(
                 user_payload=call.user_payload,
             )
             try:
+                validator = partial(
+                    ResponseContractRegistry.validate,
+                    call.response_contract_id,
+                    user_payload=call.user_payload,
+                )
                 response = self._analysis_client.complete_json_validated(
                     model_request,
-                    ResponseContractRegistry.get(call.response_contract_id).validator,
+                    validator,
                 )
                 completed = CompletedModelCall(
                     call_key=call.call_key, response=response

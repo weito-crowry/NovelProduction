@@ -22,6 +22,10 @@ def test_internal_metrics_preset_recomputes_semantic_metrics_without_full_analys
             preset="metrics",
         )
         assert result.status in {"succeeded", "partial"}
+        metric_names = [item["metric_name"] for item in result.metrics]
+        assert all(
+            name.startswith(("semantic.", "speaker.", "term.")) for name in metric_names
+        )
         assert result.run_ids
         assert connection.execute(
             "SELECT analyzer_id FROM style_analysis_runs WHERE id=?",
@@ -34,6 +38,30 @@ def test_internal_metrics_preset_recomputes_semantic_metrics_without_full_analys
             in {"entity-resolver", "speaker-attribution"}
             for run_id in result.run_ids
         )
+    finally:
+        connection.close()
+
+
+def test_internal_deterministic_result_contains_basic_metrics_only(
+    tmp_path: Path,
+) -> None:
+    connection, document_id, _, _ = _fixture(tmp_path)
+    try:
+        result = DocumentAnalysisOrchestrator(
+            connection, model_client=None
+        ).analyze_document(
+            document_id=document_id,
+            text_revision_id=1,
+            structure_revision_id=1,
+            preset="deterministic",
+        )
+        metric_names = [item["metric_name"] for item in result.metrics]
+        assert metric_names
+        assert all(
+            not name.startswith(("semantic.", "speaker.", "term."))
+            for name in metric_names
+        )
+        assert "text.char_count" in metric_names
     finally:
         connection.close()
 

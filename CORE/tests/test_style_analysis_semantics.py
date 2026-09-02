@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 from test_style_analysis_migration import open_test_database
@@ -15,6 +17,7 @@ from novel_core.style_analysis.analyzers.term_explanation import (
     detect_term_explanations,
 )
 from novel_core.style_analysis.entity_service import EntityService
+from novel_core.style_analysis.fingerprints import JsonValue, fingerprint_json
 from novel_core.style_analysis.model_contracts import (
     ModelRequest,
     validate_model_object,
@@ -583,7 +586,46 @@ def test_document_orchestrator_persists_sa_d_runs_and_annotations(
             structure_revision_id=structure_id,
         )
         assert result.status == "succeeded"
+        metric_names = [item["metric_name"] for item in result.metrics]
+        assert "semantic.action.char_ratio" in metric_names
+        assert "text.char_count" in metric_names
+        assert metric_names.index("semantic.action.char_ratio") < metric_names.index(
+            "text.char_count"
+        )
         assert len(result.run_ids) == 11
+        resolver_fingerprints = dict(
+            connection.execute(
+                "SELECT analyzer_id, registry_input_fingerprint "
+                "FROM style_analysis_runs WHERE analyzer_id IN "
+                "('entity-resolver', 'term-resolver')"
+            ).fetchall()
+        )
+        assert set(resolver_fingerprints) == {"entity-resolver", "term-resolver"}
+        assert all(
+            isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in resolver_fingerprints.values()
+        )
+        assert resolver_fingerprints["entity-resolver"] == fingerprint_json(
+            cast(
+                JsonValue,
+                EntityService(connection).candidate_rows(
+                    document_id=document_id,
+                    entity_type="other",
+                    surface="",
+                    same_scene_ids=set(),
+                ),
+            )
+        )
+        assert resolver_fingerprints["term-resolver"] == fingerprint_json(
+            cast(
+                JsonValue,
+                TermService(connection).candidate_rows(
+                    document_id=document_id,
+                    term_type="other",
+                    same_scene_ids=set(),
+                ),
+            )
+        )
         assert connection.execute(
             "SELECT COUNT(*) FROM style_analysis_runs WHERE document_id = ?",
             (document_id,),
@@ -602,6 +644,32 @@ def test_document_orchestrator_persists_sa_d_runs_and_annotations(
                 (semantic_metric_run[0],),
             ).fetchone()[0]
             == 12
+        )
+
+        metrics_result = DocumentAnalysisOrchestrator(
+            connection, model_client=None
+        ).analyze_document(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_id,
+            preset="metrics",
+        )
+        assert metrics_result.metrics
+        assert all(
+            str(item["metric_name"]).startswith(("semantic.", "speaker.", "term."))
+            for item in metrics_result.metrics
+        )
+        deterministic_result = DocumentAnalysisOrchestrator(
+            connection, model_client=None
+        ).analyze_document(
+            document_id=document_id,
+            text_revision_id=text_revision_id,
+            structure_revision_id=structure_id,
+            preset="deterministic",
+        )
+        assert all(
+            not str(item["metric_name"]).startswith(("semantic.", "speaker.", "term."))
+            for item in deterministic_result.metrics
         )
 
         cancelled_orchestrator = DocumentAnalysisOrchestrator(

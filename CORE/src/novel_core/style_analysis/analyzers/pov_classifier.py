@@ -72,7 +72,7 @@ def classify_pov(
     return _validate(response, people)
 
 
-def _validate(value: object, people: Sequence[JsonObject]) -> JsonObject:
+def validate_pov_response(value: object, people: Sequence[JsonObject]) -> JsonObject:
     obj = validate_model_object(
         value,
         required=("pov_mode", "pov_entity_id", "confidence"),
@@ -90,3 +90,7 @@ def _validate(value: object, people: Sequence[JsonObject]) -> JsonObject:
         raise ValueError("MODEL_ITEM_ID_INVALID")
     validate_confidence(obj["confidence"])
     return obj
+
+
+def _validate(value: object, people: Sequence[JsonObject]) -> JsonObject:
+    return validate_pov_response(value, people)

@@ -19,6 +19,7 @@ from novel_core.style_analysis.fingerprints import (
 from novel_core.style_analysis.fingerprints import (
     JsonValue,
     canonical_json_bytes,
+    fingerprint_json,
 )
 from novel_core.style_analysis.metrics import (
     BASIC_METRIC_DEFINITIONS,
@@ -339,6 +340,9 @@ class ResumableDocumentAnalysisEngine(
         )
         model_provider = self.model_provider if prompt is not None else None
         model_id = self.model_id if prompt is not None else None
+        registry_input_fingerprint = self._registry_input_fingerprint(
+            analyzer_id, int(state["document_id"])
+        )
         if definition.cacheable and len(dependencies) == len(definition.dependencies):
             existing_run = self.runtime.resolve_cache_hit(
                 document_id=int(state["document_id"]),
@@ -391,6 +395,7 @@ class ResumableDocumentAnalysisEngine(
             analysis_policy_version=self.policy.version,
             policy_input_fingerprint=policy_fingerprint,
             state_fingerprint=state_fingerprint,
+            registry_input_fingerprint=registry_input_fingerprint,
             model_provider=model_provider,
             model_id=model_id,
             prompt_id=None if prompt is None else prompt.prompt_id,
@@ -404,6 +409,26 @@ class ResumableDocumentAnalysisEngine(
         cast(list[object], state.setdefault("run_ids", [])).append(run_id)
         self.run_observer(run_id, "created")
         return run_id
+
+    def _registry_input_fingerprint(
+        self, analyzer_id: str, document_id: int
+    ) -> str | None:
+        if analyzer_id == "entity-resolver":
+            registry = self.entities.candidate_rows(
+                document_id=document_id,
+                entity_type="other",
+                surface="",
+                same_scene_ids=set(),
+            )
+        elif analyzer_id == "term-resolver":
+            registry = self.terms.candidate_rows(
+                document_id=document_id,
+                term_type="other",
+                same_scene_ids=set(),
+            )
+        else:
+            return None
+        return fingerprint_json(cast(JsonValue, registry))
 
     @staticmethod
     def _run_config(analyzer_id: str) -> JsonObject:

@@ -142,6 +142,18 @@ def test_external_session_start_submit_idempotency_and_cancel(
     assert submitted.status_code == 200
     submitted_snapshot = submitted.json()["data"]
     assert submitted_snapshot["version"] == snapshot["version"] + 1
+    connection = sqlite3.connect(data_root / "external" / "story.db")
+    try:
+        before_retry = connection.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM style_external_analysis_tasks "
+            "WHERE session_id = ?), "
+            "(SELECT COUNT(*) FROM style_annotations), "
+            "(SELECT COUNT(*) FROM style_analysis_runs WHERE document_id = ?)",
+            (snapshot["session_id"], document_id),
+        ).fetchone()
+    finally:
+        connection.close()
 
     retry = client.post(
         f"{base}/external-sessions/{snapshot['session_id']}/tasks/{task['task_id']}/submit",
@@ -153,6 +165,19 @@ def test_external_session_start_submit_idempotency_and_cancel(
     )
     assert retry.status_code == 200
     assert retry.json()["data"]["version"] == submitted_snapshot["version"]
+    connection = sqlite3.connect(data_root / "external" / "story.db")
+    try:
+        after_retry = connection.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM style_external_analysis_tasks "
+            "WHERE session_id = ?), "
+            "(SELECT COUNT(*) FROM style_annotations), "
+            "(SELECT COUNT(*) FROM style_analysis_runs WHERE document_id = ?)",
+            (snapshot["session_id"], document_id),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert after_retry == before_retry
 
     cancelled = client.post(
         f"{base}/external-sessions/{snapshot['session_id']}/cancel",
@@ -212,6 +237,85 @@ def test_external_session_repair_creates_one_retry_task(
     )
     assert completed.status_code == 200
     assert completed.json()["data"]["task"]["attempt_no"] == 1
+
+
+def test_external_pov_foreign_entity_uses_single_repair_attempt(
+    client: TestClient, data_root: Path
+) -> None:
+    document_id, text_revision_id = _document(client, data_root)
+    base = "/api/v1/projects/external/style-analysis"
+    started = client.post(
+        f"{base}/external-sessions",
+        json={
+            "target": {
+                "kind": "document",
+                "document_id": document_id,
+                "text_revision_id": text_revision_id,
+            },
+            "executor_model_id": "gpt-test",
+        },
+    )
+    assert started.status_code == 201
+    snapshot = started.json()["data"]
+    while snapshot["task"]["analyzer_id"] != "pov-classifier":
+        task = snapshot["task"]
+        submitted = client.post(
+            f"{base}/external-sessions/{snapshot['session_id']}/tasks/"
+            f"{task['task_id']}/submit",
+            json={
+                "expected_task_version": task["task_version"],
+                "executor_model_id": "gpt-test",
+                "response": _response_for_contract(task["response_contract_id"]),
+            },
+        )
+        assert submitted.status_code == 200
+        snapshot = submitted.json()["data"]
+
+    initial = snapshot["task"]
+    invalid_response = {
+        "pov_mode": "third_limited",
+        "pov_entity_id": 999,
+        "confidence": 0.9,
+    }
+    repair = client.post(
+        f"{base}/external-sessions/{snapshot['session_id']}/tasks/"
+        f"{initial['task_id']}/submit",
+        json={
+            "expected_task_version": initial["task_version"],
+            "executor_model_id": "gpt-test",
+            "response": invalid_response,
+        },
+    )
+    assert repair.status_code == 200
+    repair_task = repair.json()["data"]["task"]
+    assert repair_task["attempt_no"] == 2
+    assert "MODEL_ITEM_ID_INVALID" in repair_task["validation_errors"]
+
+    rejected = client.post(
+        f"{base}/external-sessions/{snapshot['session_id']}/tasks/"
+        f"{repair_task['task_id']}/submit",
+        json={
+            "expected_task_version": repair_task["task_version"],
+            "executor_model_id": "gpt-test",
+            "response": invalid_response,
+        },
+    )
+    assert rejected.status_code == 200
+    connection = sqlite3.connect(data_root / "external" / "story.db")
+    try:
+        rows = connection.execute(
+            "SELECT attempt_no, status FROM style_external_analysis_tasks "
+            "WHERE session_id = ? AND call_key = ? ORDER BY attempt_no",
+            (snapshot["session_id"], initial["call_key"]),
+        ).fetchall()
+        assert rows == [(1, "repair_required"), (2, "rejected")]
+        assert connection.execute(
+            "SELECT COUNT(*) FROM style_external_analysis_tasks "
+            "WHERE session_id = ? AND attempt_no = 3",
+            (snapshot["session_id"],),
+        ).fetchone() == (0,)
+    finally:
+        connection.close()
 
 
 def test_external_start_persists_and_honors_rebuild_structure(

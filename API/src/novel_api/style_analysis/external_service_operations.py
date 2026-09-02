@@ -336,10 +336,14 @@ class ExternalAnalysisOperationsMixin(ExternalAnalysisServiceHost):
                     "entity_mentions",
                     "term_candidates",
                     "scene_semantics",
+                    "pov",
                 }:
                     if payload.get("scene_id") != scene_id:
                         continue
-                    if stage == "scene_semantics" and payload.get("mode") == "reduce":
+                    if (
+                        stage in {"scene_semantics", "pov"}
+                        and payload.get("mode") == "reduce"
+                    ):
                         continue
                 responses.append(cast(JsonValue, _object(task.response_json)))
         value["stage_responses"] = responses
@@ -441,9 +445,13 @@ class ExternalAnalysisOperationsMixin(ExternalAnalysisServiceHost):
     def _repairable_errors(
         self, prepared: PreparedModelCall, response: JsonObject
     ) -> list[str]:
+        validation_payload = prepared.user_payload
+        original_request = prepared.user_payload.get("original_request")
+        if isinstance(original_request, dict):
+            validation_payload = cast(JsonObject, original_request)
         try:
-            ResponseContractRegistry.get(prepared.response_contract_id).validator(
-                response
+            ResponseContractRegistry.validate(
+                prepared.response_contract_id, response, validation_payload
             )
         except ValueError as exc:
             return [str(exc)]

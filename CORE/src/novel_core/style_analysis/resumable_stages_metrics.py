@@ -12,20 +12,25 @@ from novel_core.style_analysis.semantic_metrics import calculate_semantic_metric
 
 
 class ResumableMetricsStagesMixin(ResumableStageHost):
+    @staticmethod
+    def _measurement_values(measurements: Any) -> list[dict[str, object]]:
+        return [
+            {
+                "target_type": item.target_type,
+                "target_id": item.target_id,
+                "metric_name": item.metric_name,
+                "metric_version": item.metric_version,
+                "value": item.value,
+                "sample_count": item.sample_count,
+            }
+            for item in measurements
+        ]
+
     def _finish_noop_stage(self, state: dict[str, Any], analyzer_id: str) -> None:
         run_id = self._ensure_run(state, analyzer_id, None)
         if state.pop("stage_reused", False):
-            state["metrics"] = [
-                {
-                    "target_type": item.target_type,
-                    "target_id": item.target_id,
-                    "metric_name": item.metric_name,
-                    "metric_version": item.metric_version,
-                    "value": item.value,
-                    "sample_count": item.sample_count,
-                }
-                for item in self.measurements.list_for_run(run_id)
-            ]
+            casted = self._measurement_values(self.measurements.list_for_run(run_id))
+            state.setdefault("metrics", []).extend(casted)
             self._next_stage(state)
             return
         if self._dependency_failed(state, analyzer_id):
@@ -51,17 +56,9 @@ class ResumableMetricsStagesMixin(ResumableStageHost):
                 blocks=blocks,
                 sentences=tuple(self.structure.list_sentences(structure_id)),
             )
-            state["metrics"] = [
-                {
-                    "target_type": item.target_type,
-                    "target_id": item.target_id,
-                    "metric_name": item.metric_name,
-                    "metric_version": item.metric_version,
-                    "value": item.value,
-                    "sample_count": item.sample_count,
-                }
-                for item in measurements
-            ]
+            state.setdefault("metrics", []).extend(
+                self._measurement_values(measurements)
+            )
             for item in measurements:
                 definition = BASIC_METRIC_DEFINITIONS[item.metric_name]
                 self.measurements.insert(
@@ -101,17 +98,9 @@ class ResumableMetricsStagesMixin(ResumableStageHost):
                 block_threshold=self.policy.block_semantic_effective,
                 term_explanation_threshold=self.policy.term_explanation_effective,
             )
-            state["metrics"] = [
-                {
-                    "target_type": item.target_type,
-                    "target_id": item.target_id,
-                    "metric_name": item.metric_name,
-                    "metric_version": item.metric_version,
-                    "value": item.value,
-                    "sample_count": item.sample_count,
-                }
-                for item in result.measurements
-            ]
+            state.setdefault("metrics", []).extend(
+                self._measurement_values(result.measurements)
+            )
             for item in result.measurements:
                 definition = METRIC_DEFINITIONS[item.metric_name]
                 self.measurements.insert(

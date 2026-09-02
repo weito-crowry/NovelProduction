@@ -105,6 +105,44 @@ def test_response_contract_registry_has_exact_eleven_ids() -> None:
     )
 
 
+def test_response_contract_schemas_describe_required_properties_and_nested_items() -> (
+    None
+):
+    for contract_id in RESPONSE_CONTRACT_IDS:
+        schema = ResponseContractRegistry.get(contract_id).schema
+        assert schema["type"] == "object"
+        assert isinstance(schema.get("properties"), dict)
+        assert schema["additionalProperties"] is False
+        properties = schema["properties"]
+        assert all(key in properties for key in schema["required"])
+
+        def assert_nested(value: object) -> None:
+            if not isinstance(value, dict):
+                return
+            if value.get("type") == "object":
+                assert isinstance(value.get("properties"), dict)
+                assert value.get("additionalProperties") is False
+                assert all(key in value["properties"] for key in value["required"])
+                for child in value["properties"].values():
+                    assert_nested(child)
+            if value.get("type") == "array":
+                assert "items" in value
+                assert_nested(value["items"])
+            for child in value.get("oneOf", ()):
+                assert_nested(child)
+
+        assert_nested(schema)
+
+
+def test_pov_contract_uses_request_people_for_repairable_id_validation() -> None:
+    with pytest.raises(ValueError, match="MODEL_ITEM_ID_INVALID"):
+        ResponseContractRegistry.validate(
+            "style.pov.v1",
+            {"pov_mode": "third_limited", "pov_entity_id": 99, "confidence": 0.9},
+            {"people": [{"entity_id": 5}]},
+        )
+
+
 def test_task_request_fingerprint_uses_only_canonical_prepared_call_fields() -> None:
     call = _prepared()
     expected = fingerprint_json(

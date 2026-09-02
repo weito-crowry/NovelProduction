@@ -299,24 +299,50 @@ class ResumableStructureStagesMixin(ResumableStageHost):
             if subject_index >= len(scenes):
                 return None
             scene = scenes[subject_index]
+            state["stage_scene_id"] = scene.id
+            scene_blocks = [
+                item for item in block_json if item.get("scene_id") == scene.id
+            ]
+            chunks = split_blocks(scene_blocks)
             people = self._people_for_scene(
                 request.document_id,
                 self._dependency_run_id(state, "entity-resolver"),
                 scene.id,
             )
+            substage = str(state.get("stage_substage", "classify"))
+            chunk_index = int(state.get("chunk_index", 0))
+            if substage == "reduce":
+                classify_responses = [
+                    cast(JsonObject, value)
+                    for value in cast(list[JsonValue], state.get("stage_responses", []))
+                ]
+                return (
+                    f"pov-classifier:scene:{scene.id}:reduce",
+                    {
+                        "mode": "reduce",
+                        "people": cast(JsonValue, people),
+                        "chunks": [
+                            {
+                                "char_count": sum(
+                                    len(str(block.get("text", ""))) for block in chunk
+                                ),
+                                **response,
+                            }
+                            for chunk, response in zip(
+                                chunks, classify_responses, strict=False
+                            )
+                        ],
+                    },
+                    None,
+                )
+            if chunk_index >= len(chunks):
+                return None
             return (
-                f"pov-classifier:scene:{scene.id}",
+                f"pov-classifier:scene:{scene.id}:chunk:{chunk_index}",
                 {
                     "mode": "classify",
                     "scene_id": scene.id,
-                    "blocks": cast(
-                        JsonValue,
-                        [
-                            item
-                            for item in block_json
-                            if item.get("scene_id") == scene.id
-                        ],
-                    ),
+                    "blocks": cast(JsonValue, chunks[chunk_index]),
                     "people": cast(JsonValue, people),
                 },
                 None,
