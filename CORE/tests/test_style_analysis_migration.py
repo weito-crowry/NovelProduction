@@ -14,6 +14,7 @@ EXPECTED_LEGACY_MIGRATIONS = tuple(
 FOUNDATION_MIGRATION = "006_style_analysis_foundation.sql"
 SEMANTICS_MIGRATION = "007_style_analysis_semantics.sql"
 CORPUS_PROFILE_MIGRATION = "008_style_analysis_corpus_profile.sql"
+EXTERNAL_MIGRATION = "009_style_analysis_external_agent.sql"
 FOUNDATION_TABLES = (
     "style_jobs",
     "style_sources",
@@ -54,6 +55,9 @@ FOUNDATION_TABLES = (
     "style_lint_runs",
     "style_findings",
     "style_finding_reviews",
+    "style_external_analysis_sessions",
+    "style_external_analysis_tasks",
+    "style_external_analysis_session_runs",
 )
 
 
@@ -95,6 +99,7 @@ def test_legacy_migration_bytes_remain_unchanged(tmp_path: Path) -> None:
                     FOUNDATION_MIGRATION,
                     SEMANTICS_MIGRATION,
                     CORPUS_PROFILE_MIGRATION,
+                    EXTERNAL_MIGRATION,
                 )
             )
         )
@@ -128,6 +133,7 @@ def test_foundation_schema_supports_fresh_and_existing_databases(
             FOUNDATION_MIGRATION,
             SEMANTICS_MIGRATION,
             CORPUS_PROFILE_MIGRATION,
+            EXTERNAL_MIGRATION,
         ),
     )
     upgraded = open_database(

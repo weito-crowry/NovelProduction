@@ -104,7 +104,13 @@ class StyleAnalysisWorker:
                         "finished_at = CURRENT_TIMESTAMP, "
                         "error_code = 'WORKER_INTERRUPTED', "
                         "error_message = 'worker interrupted before completion' "
-                        "WHERE status = 'running'"
+                        "WHERE status = 'running' AND NOT EXISTS ("
+                        "SELECT 1 FROM style_external_analysis_session_runs sr "
+                        "JOIN style_external_analysis_sessions s "
+                        "ON s.id = sr.session_id "
+                        "WHERE sr.run_id = style_analysis_runs.id "
+                        "AND sr.run_role = 'created' AND s.status = 'active'"
+                        ")"
                     )
                     connection.commit()
                     queued = connection.execute(

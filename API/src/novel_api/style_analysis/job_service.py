@@ -12,6 +12,9 @@ from novel_core.database import (
     open_database,
     open_database_readonly,
 )
+from novel_core.style_analysis.analysis_execution_conflicts import (
+    AnalysisExecutionConflictChecker,
+)
 from novel_core.style_analysis.fingerprints import JsonObject
 from novel_core.style_analysis.runtime_models import JobRecord, JobStatus, JobType
 
@@ -47,6 +50,9 @@ class DatabaseCursor(Protocol):
 
 
 class DatabaseConnection(Protocol):
+    @property
+    def in_transaction(self) -> bool: ...
+
     def execute(
         self, statement: str, parameters: tuple[object, ...] = ()
     ) -> DatabaseCursor: ...
@@ -86,14 +92,21 @@ class StyleJobService:
             raise ValueError("JOB_PAYLOAD_INVALID") from exc
 
         with self._open_connection(project_id) as connection:
-            cursor = connection.execute(
-                "INSERT INTO style_jobs (job_type, payload_json, status) "
-                "VALUES (?, ?, 'queued')",
-                (job_type, payload_json),
-            )
-            if cursor.lastrowid is None:
-                raise RuntimeError("job insert did not return an id")
-            connection.commit()
+            try:
+                if job_type in _ANALYSIS_JOB_TYPES:
+                    connection.execute("BEGIN IMMEDIATE")
+                    _assert_job_scope_available(connection, job_type, payload)
+                cursor = connection.execute(
+                    "INSERT INTO style_jobs (job_type, payload_json, status) "
+                    "VALUES (?, ?, 'queued')",
+                    (job_type, payload_json),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("job insert did not return an id")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
             job = self._get_from_connection(connection, cursor.lastrowid)
             if job is None:
                 raise RuntimeError("job retrieval failed")
@@ -132,34 +145,41 @@ class StyleJobService:
 
     def retry(self, project_id: str, job_id: int) -> JobRecord:
         with self._open_connection(project_id) as connection:
-            original = self._require_from_connection(connection, job_id)
-            if original.status not in _TERMINAL_STATUSES:
-                raise ValueError("JOB_NOT_TERMINAL")
             try:
-                payload = json.loads(original.payload_json)
-            except json.JSONDecodeError as exc:
-                raise ValueError("JOB_PAYLOAD_INVALID") from exc
-            if not isinstance(payload, dict):
-                raise ValueError("JOB_PAYLOAD_INVALID")
-            payload["retry_of_job_id"] = original.id
-            payload_json = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            cursor = connection.execute(
-                "INSERT INTO style_jobs (job_type, payload_json, status) "
-                "VALUES (?, ?, 'queued')",
-                (original.job_type, payload_json),
-            )
-            if cursor.lastrowid is None:
-                raise RuntimeError("retry job insert did not return an id")
-            connection.commit()
-            retried = self._get_from_connection(connection, cursor.lastrowid)
-            if retried is None:
-                raise RuntimeError("retry job retrieval failed")
+                connection.execute("BEGIN IMMEDIATE")
+                original = self._require_from_connection(connection, job_id)
+                if original.status not in _TERMINAL_STATUSES:
+                    raise ValueError("JOB_NOT_TERMINAL")
+                try:
+                    payload = json.loads(original.payload_json)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("JOB_PAYLOAD_INVALID") from exc
+                if not isinstance(payload, dict):
+                    raise ValueError("JOB_PAYLOAD_INVALID")
+                payload["retry_of_job_id"] = original.id
+                if original.job_type in _ANALYSIS_JOB_TYPES:
+                    _assert_job_scope_available(connection, original.job_type, payload)
+                payload_json = json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                cursor = connection.execute(
+                    "INSERT INTO style_jobs (job_type, payload_json, status) "
+                    "VALUES (?, ?, 'queued')",
+                    (original.job_type, payload_json),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("retry job insert did not return an id")
+                connection.commit()
+                retried = self._get_from_connection(connection, cursor.lastrowid)
+                if retried is None:
+                    raise RuntimeError("retry job retrieval failed")
+            except Exception:
+                connection.rollback()
+                raise
         if self._notify is not None:
             self._notify(project_id)
         return retried
@@ -274,3 +294,17 @@ class StyleJobService:
             error_message=cast(str | None, row[13]),
             version=cast(int, row[14]),
         )
+
+
+def _assert_job_scope_available(
+    connection: DatabaseConnection, job_type: JobType, payload: JsonObject
+) -> None:
+    checker = AnalysisExecutionConflictChecker(cast(Any, connection))
+    if job_type == "analyze_document":
+        value = payload.get("document_id")
+        if isinstance(value, int) and not isinstance(value, bool):
+            checker.assert_document_available(value)
+    elif job_type == "analyze_reference_work":
+        value = payload.get("reference_work_id")
+        if isinstance(value, int) and not isinstance(value, bool):
+            checker.assert_reference_work_available(value)

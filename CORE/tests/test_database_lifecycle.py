@@ -121,6 +121,7 @@ def test_open_database_applies_connection_defaults_and_migrations(
             "006_style_analysis_foundation.sql",
             "007_style_analysis_semantics.sql",
             "008_style_analysis_corpus_profile.sql",
+            "009_style_analysis_external_agent.sql",
         )
     finally:
         connection.close()

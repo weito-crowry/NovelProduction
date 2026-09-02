@@ -30,6 +30,7 @@ from novel_core.services.work_service import WorkService
 from novel_core.services.world_fact_service import WorldFactService
 
 from novel_api.style_analysis.catalog_service import StyleAnalysisCatalogService
+from novel_api.style_analysis.external_service import ExternalAnalysisService
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,9 +64,11 @@ class ServiceContainer:
     outline: OutlineService
     context: ContextService
     style_analysis: StyleAnalysisCatalogService
+    external_analysis: ExternalAnalysisService
 
 
 def _build_service_container(connection: sqlite3.Connection) -> ServiceContainer:
+    style_analysis = StyleAnalysisCatalogService(connection)
     return ServiceContainer(
         work=WorkService(connection),
         world_fact=WorldFactService(connection),
@@ -83,7 +86,10 @@ def _build_service_container(connection: sqlite3.Connection) -> ServiceContainer
         draft=DraftService(connection),
         outline=OutlineService(connection),
         context=ContextService(connection),
-        style_analysis=StyleAnalysisCatalogService(connection),
+        style_analysis=style_analysis,
+        external_analysis=ExternalAnalysisService(
+            connection, capture_project_draft=style_analysis.capture_project_draft
+        ),
     )
 
 

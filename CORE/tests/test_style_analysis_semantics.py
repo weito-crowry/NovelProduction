@@ -36,7 +36,7 @@ def test_semantics_migration_creates_all_sa_d_tables(tmp_path: Path) -> None:
                 "AND name LIKE 'style_%' ORDER BY rowid"
             )
         )
-        assert tables[-24:-13] == (
+        semantic_tables = (
             "style_entities",
             "style_mentions",
             "style_entity_aliases",
@@ -49,6 +49,7 @@ def test_semantics_migration_creates_all_sa_d_tables(tmp_path: Path) -> None:
             "style_inference_reviews",
             "style_manual_overrides",
         )
+        assert all(name in tables for name in semantic_tables)
         assert "entity_id" not in {
             row[1] for row in connection.execute("PRAGMA table_info(style_mentions)")
         }
